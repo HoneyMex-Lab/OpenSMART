@@ -7,7 +7,7 @@ import type { Settings, User } from './types';
 
 const defaultSettings: Settings = {
   platform_title: 'OpenSMART',
-  platform_version: 'v0.2 beta',
+  platform_version: 'v0.3 beta',
   platform_build: 'unknown',
   platform_language: 'en',
   logo_url: '',

@@ -8,10 +8,13 @@ Example values are in `backend/.env.example`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENSMART_DB_PATH` | `backend/opensmart.db` | SQLite database path. |
+| `OPENSMART_DB_PATH` | `backend/opensmart.db` | Main SQLite database path for users, sessions, settings, audit events, catalogs, and resource snapshots. |
+| `OPENSMART_TELEMETRY_DB_PATH` | `backend/opensmart_telemetry.db` | Legacy compatibility telemetry SQLite database path. |
+| `OPENSMART_NETWORK_IDS_DB_PATH` | `backend/opensmart_network_ids.db` | Network IDS telemetry SQLite database path. |
+| `OPENSMART_NETWORK_TRAFFIC_DB_PATH` | `backend/opensmart_network_traffic.db` | Network Traffic telemetry SQLite database path. |
 | `OPENSMART_FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed CORS origin for the frontend. |
 | `OPENSMART_SESSION_TTL_HOURS` | `12` | Session lifetime in hours. |
-| `OPENSMART_VERSION` | `v0.2` | Platform version used for seeded settings. |
+| `OPENSMART_VERSION` | `v0.3 beta` | Platform version used for seeded settings. |
 
 The app reads these values directly from the environment. `.env` files are ignored by git.
 
@@ -22,8 +25,12 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | Key | Default | Purpose |
 |---|---|---|
 | `platform_title` | `OpenSMART` | Sidebar and branding title. |
-| `platform_version` | `v0.2` | Version shown in the sidebar and About page. |
+| `platform_version` | `v0.3 beta` | Version shown in the sidebar and About page. |
+| `platform_build` | current git commit or `unknown` | Build identifier shown in app metadata. |
+| `sensor_name` | host name or `OpenSMART Sensor` | Sensor name shown in telemetry and notifications. |
+| `platform_language` | `en` | UI language. Supported values are `en` and `es-MX`. |
 | `logo_url` | empty | Login and sidebar logo, managed through logo upload UI. |
+| `favicon_url` | `/assets/branding/favicon.svg` | Browser favicon URL. |
 | `footer_logo_primary` | empty | First sidebar footer logo, managed through logo upload UI. |
 | `footer_logo_secondary` | empty | Second sidebar footer logo, managed through logo upload UI. |
 | `developed_by` | `Developed by` | Sidebar footer text. |
@@ -36,12 +43,16 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | `tool_url_proxmox` | empty | Internal iframe URL for Proxmox. |
 | `tool_url_wazuh` | empty | Internal iframe URL for Wazuh. |
 | `tool_url_graylog` | empty | Internal iframe URL for Graylog. |
+| `log_file_path` | `logs/opensmart.log` | Backend log file path. Relative paths resolve from the project root. |
+| `worker_threads` | `8` | Backend worker thread limit for blocking work. |
+| `dashboard_use_demo_for_disabled` | `false` | Shows demo dashboard values for disabled modules/tools when enabled. |
+| `dashboard_feed_json` | `[]` | JSON feed for the home dashboard internal feed panel. |
 
 Logo uploads are read by the browser and saved as data URLs in SQLite settings. Tool URLs are edited from `Configuration > Tools Config` and loaded only when a user clicks a tool sidebar item or card.
 
 ## Tools Config
 
-`Configuration > Tools Config` manages internal tools:
+`Settings > Tools` manages internal tools:
 
 - enable/disable state
 - internal iframe URL
@@ -51,12 +62,27 @@ A tool status is derived automatically. Disabled tools show instructions instead
 
 ## OpenSMART Config
 
-`Configuration > OpenSMART Config` manages OpenSMART modules:
+`Settings > OpenSMART Modules` manages OpenSMART modules:
 
 - enable/disable state
 - JSON configuration text
 
-Disabled modules show enable/configuration instructions. Enabled modules currently show placeholder content.
+Disabled modules show enable/configuration instructions. Network IDS and Network Traffic Monitoring render live ingestion/analysis pages when enabled and configured. Other enabled modules currently show placeholder content.
+
+Network IDS configuration includes the local Suricata `eve.json` path, initial ingestion size, summary refresh interval, analysis/detail page sizes, critical alert tracking, retention options, and optional GeoIP MMDB path for the attack map.
+
+Network Traffic Monitoring configuration includes source selection, shared Suricata `eve.json` support, future Zeek JSON path configuration, protocol indexing toggles, excluded event types, and retention options.
+
+## Notifications
+
+`Settings > Notifications` manages outbound webhook URLs and event toggles.
+
+Active emitters in this release:
+
+- IDS critical alerts
+- IDS system events
+
+Network and platform notification groups are present as configuration placeholders for future event emitters.
 
 ## Internal Tools
 

@@ -14,7 +14,7 @@ FRONTEND_ORIGIN = os.getenv("OPENSMART_FRONTEND_ORIGIN", "http://localhost:5173"
 SESSION_COOKIE = "opensmart_session"
 CSRF_COOKIE = "opensmart_csrf"
 SESSION_TTL_HOURS = int(os.getenv("OPENSMART_SESSION_TTL_HOURS", "12"))
-APP_VERSION = os.getenv("OPENSMART_VERSION", "v0.2 beta")
+APP_VERSION = os.getenv("OPENSMART_VERSION", "v0.3 beta")
 
 
 def read_git_build() -> str:

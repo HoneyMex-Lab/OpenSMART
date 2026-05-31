@@ -32,7 +32,7 @@ Response:
 {
   "settings": {
     "platform_title": "OpenSMART",
-    "platform_version": "v0.2",
+    "platform_version": "v0.3 beta",
     "logo_url": "",
     "footer_logo_primary": "",
     "footer_logo_secondary": "",
@@ -222,6 +222,56 @@ Response:
   ]
 }
 ```
+
+### `GET /api/status/resources`
+
+Requires authentication.
+
+Returns current host CPU, memory, disk, and uptime values.
+
+### `GET /api/status/resources/history`
+
+Requires authentication.
+
+Returns sampled resource history for the requested timeframe.
+
+### `GET /api/status/schema-check`
+
+Requires authentication.
+
+Checks the main application SQLite schema for expected tables and reports missing or unexpected tables.
+
+### `GET /api/status/data-info`
+
+Requires authentication.
+
+Returns Network IDS and Network Traffic retention settings, earliest event timestamps, and event totals.
+
+## Network IDS Endpoints
+
+Network IDS endpoints require authentication and use the configured local Suricata `eve.json` source.
+
+- `GET /api/network-ids/config`: configuration and ingestion state.
+- `GET /api/network-ids/status`: cheap ingestion-progress polling endpoint.
+- `GET /api/network-ids/summary`: summary counters and analysis tables, optionally refreshing ingestion.
+- `POST /api/network-ids/summary/cancel`: cancel a running summary query.
+- `GET /api/network-ids/alerts`: alert rows with filtering, sorting, pagination, and full-text search.
+- `POST /api/network-ids/alerts/cancel`: cancel a running alert query.
+- `GET /api/network-ids/details`: detail tables for IDS analysis.
+- `POST /api/network-ids/details/cancel`: cancel a running details query.
+- `GET /api/network-ids/attack-map`: GeoIP-backed attack map data.
+- `POST /api/network-ids/tracking/ack`: acknowledge one alert.
+- `POST /api/network-ids/tracking/ack-critical`: acknowledge critical alerts matching filters.
+
+## Network Traffic Endpoints
+
+Network Traffic endpoints require authentication and use the configured module source.
+
+- `GET /api/network-traffic/config`: configuration and ingestion state.
+- `GET /api/network-traffic/summary`: event/protocol summary tables, optionally refreshing ingestion.
+- `POST /api/network-traffic/summary/cancel`: cancel a running summary query.
+- `GET /api/network-traffic/details`: detail rows for selected traffic tables.
+- `POST /api/network-traffic/details/cancel`: cancel a running details query.
 
 ## User Endpoints
 
