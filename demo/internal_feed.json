@@ -1,0 +1,20 @@
+[
+  {
+    "title": "Daily threat review complete",
+    "category": "Operations",
+    "body": "High-severity IDS events were reviewed and assigned for follow-up.",
+    "time": "Today 08:30"
+  },
+  {
+    "title": "Firewall blocklist refreshed",
+    "category": "Network Defense",
+    "body": "Perimeter controls received the latest denylist update from internal enrichment.",
+    "time": "Today 07:45"
+  },
+  {
+    "title": "Endpoint coverage check",
+    "category": "Endpoint",
+    "body": "Endpoint inventory is ready for validation against managed assets.",
+    "time": "Yesterday 18:10"
+  }
+]

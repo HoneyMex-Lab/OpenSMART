@@ -1,0 +1,13 @@
+services:
+  zeek:
+    image: opensmart/zeek
+    container_name: opensmart-zeek
+    hostname: zeek
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./volumes/data:/data
+    working_dir: /data
+    restart: unless-stopped

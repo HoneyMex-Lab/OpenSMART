@@ -1,0 +1,15 @@
+{
+  "dashboard_ids_alerts_critical": "3",
+  "dashboard_ids_alerts_high": "11",
+  "dashboard_ids_alerts_medium": "24",
+  "dashboard_ids_alerts_low": "38",
+  "dashboard_fw_blocked_packets_24h": "12847",
+  "dashboard_fw_blocked_ips_24h": "214",
+  "dashboard_endpoints_total": "86",
+  "dashboard_vulnerabilities_critical": "5",
+  "dashboard_vulnerabilities_high": "17",
+  "dashboard_vulnerabilities_medium": "42",
+  "dashboard_vulnerabilities_open": "64",
+  "dashboard_vpn_users": "18",
+  "dashboard_lxc_assets": "12"
+}

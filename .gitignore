@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+backend/.venv/
+
+# Backend runtime data
+backend/*.db
+backend/*.db-*
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Frontend dependencies and build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs and temporary files
+*.log
+logs/*.log
+!logs/.gitkeep
+tmp/
+temp/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Agent sessions
+docs/agent-handoff/
+
+# Local-only coding-agent runtime config
+.opencode/
+.agents/
+opencode.json
+opencode.jsonc
+design notes
+
+# OpenSMART builder generated runtime artifacts
+opensmart-builder/**/volumes/data/**
+!opensmart-builder/**/volumes/data/.gitkeep
+opensmart-builder/**/*.ovpn
+opensmart-builder/**/*.key
+opensmart-builder/**/*.crt
+opensmart-builder/**/*.pem
+opensmart-builder/**/*.log
+opensmart-builder/**/*.pcap
+opensmart-builder/**/*.db
+opensmart-builder/**/*.sqlite*

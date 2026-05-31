@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "project": {
+    "name": "OpenSMART Framework",
+    "slug": "opensmart-framework",
+    "version": "1.0.0",
+    "description": "Container-based network security monitoring (NSM) stack for Debian 13 + Docker. Bundles passive sensors (Zeek, Suricata, Arkime), a search/analytics backend (OpenSearch), VPN access (OpenVPN, WireGuard), and a reverse-proxy/landing service (nginx). Delivered as a build tree (Dockerfiles) plus a deployment tree (docker compose stacks).",
+    "purpose": "Initial template for an OpenSMART deployment, validated end-to-end on an LXC reference host.",
+    "generated": "2026-05-31",
+    "spec_source": "internal build specification"
+  },
+  "target_environment": {
+    "host": "<server-ip>",
+    "access": "configure SSH access according to the target environment",
+    "os": "Debian 13 (trixie)",
+    "virtualization": "LXC container (unprivileged-style limits)",
+    "arch": "x86_64",
+    "cpu_vcpu": 6,
+    "ram_gb": 8,
+    "disk_gb": 23,
+    "docker": "29.4.0",
+    "compose": "v5.1.2",
+    "primary_interface": "eth0",
+    "constraints": {
+      "dev_net_tun": false,
+      "memlock_ulimit_bytes": 8192,
+      "swap": "none",
+      "notes": [
+        "No /dev/net/tun -> OpenVPN server cannot run (PKI/config still generated).",
+        "memlock is capped at 8192 bytes by the LXC -> AF_PACKET tpacketv3 ring mmap fails; Arkime uses libpcap and OpenSearch runs with bootstrap.memory_lock=false.",
+        "These are host/LXC-level limits, not RAM limits."
+      ]
+    }
+  },
+  "layout": {
+    "build_tree": "opensmart-framework-build/docker-images/<image>/",
+    "deploy_tree": "opensmart-framework/containers/<service>/",
+    "per_service_volume": "./volumes/data -> /data",
+    "deploy_entrypoint": "opensmart-framework/deploy.sh"
+  },
+  "networks": [
+    {
+      "name": "host",
+      "type": "host",
+      "members": ["zeek", "suricata", "arkime-capture"],
+      "reason": "Sensors must sniff the host's eth0 directly."
+    },
+    {
+      "name": "opensmart",
+      "type": "bridge",
+      "external": true,
+      "subnet": "172.250.250.0/24",
+      "members": ["opensearch", "arkime-viewer", "wireguard", "nginx", "openvpn(defined)"],
+      "create": "docker network create --driver bridge --subnet 172.250.250.0/24 opensmart"
+    }
+  ],
+  "images": [
+    {
+      "name": "opensmart/base",
+      "base": "debian:13",
+      "build_context": "opensmart-framework-build/docker-images/base",
+      "entrypoint": "bash",
+      "purpose": "Common Debian 13 base (ca-certificates, curl, iproute2, tini, etc.) for all custom images.",
+      "source": "debian official"
+    },
+    {
+      "name": "opensmart/zeek",
+      "base": "opensmart/base",
+      "build_context": "opensmart-framework-build/docker-images/zeek",
+      "installed_version": "zeek 8.2.0",
+      "purpose": "Zeek NSM. Tool only, no config per spec; container stays idle (sleep infinity).",
+      "source": "OpenSUSE OBS security:zeek Debian_13 repo"
+    },
+    {
+      "name": "opensmart/suricata",
+      "base": "opensmart/base",
+      "build_context": "opensmart-framework-build/docker-images/suricata",
+      "installed_version": "suricata 7.0.10",
+      "purpose": "Suricata IDS. ET Open ruleset pulled at build; runs live on eth0, logs to /data/log.",
+      "source": "Debian 13 repo (suricata, suricata-update) + ET Open rules"
+    },
+    {
+      "name": "opensmart/openvpn",
+      "base": "opensmart/base",
+      "build_context": "opensmart-framework-build/docker-images/openvpn",
+      "installed_version": "openvpn 2.6.14, easy-rsa 3.2.2",
+      "purpose": "Hardened OpenVPN server + PKI tooling. Generates CA/server cert/tls-crypt/CRL and a client template. Server NOT auto-started (no tun).",
+      "source": "Debian 13 repo"
+    },
+    {
+      "name": "opensmart/wireguard",
+      "base": "opensmart/base",
+      "build_context": "opensmart-framework-build/docker-images/wireguard",
+      "installed_version": "wireguard-tools v1.0.20210914",
+      "purpose": "WireGuard server. Generates server keypair + wg0.conf + client template, brings up wg0 (kernel module on host).",
+      "source": "Debian 13 repo"
+    },
+    {
+      "name": "opensearchproject/opensearch:2.18.0",
+      "base": "official",
+      "purpose": "Search/analytics backend for Arkime. Single-node, security plugin disabled.",
+      "source": "Docker Hub (official). Pinned to 2.18.0 to avoid a 2.19.0 zstd/curl hang on Debian 13."
+    },
+    {
+      "name": "ghcr.io/arkime/arkime/arkime:v6-latest",
+      "base": "official",
+      "purpose": "Arkime 6 full packet capture + viewer UI. capture (host net) and viewer (opensmart net).",
+      "source": "GitHub Container Registry (official Arkime image, docker.sh wrapper)"
+    },
+    {
+      "name": "nginx:1.27",
+      "base": "official",
+      "purpose": "Reverse-proxy / landing page placeholder.",
+      "source": "Docker Hub (official)"
+    }
+  ],
+  "services": [
+    {
+      "name": "opensearch",
+      "container_name": "opensmart-opensearch",
+      "image": "opensearchproject/opensearch:2.18.0",
+      "network": "opensmart",
+      "ports": ["9200:9200"],
+      "volumes": ["./volumes/data:/data"],
+      "key_env": {
+        "discovery.type": "single-node",
+        "DISABLE_SECURITY_PLUGIN": "true",
+        "bootstrap.memory_lock": "false",
+        "OPENSEARCH_JAVA_OPTS": "-Xms2g -Xmx2g",
+        "path.data": "/data",
+        "http.compression": "false"
+      },
+      "ulimits": {"nofile": "65536"},
+      "notes": "Security disabled: HTTP API on :9200 has NO authentication. memory_lock off due to LXC memlock cap."
+    },
+    {
+      "name": "arkime-capture",
+      "container_name": "opensmart-arkime-capture",
+      "image": "ghcr.io/arkime/arkime/arkime:v6-latest",
+      "network": "host",
+      "cap_add": ["NET_ADMIN", "NET_RAW", "IPC_LOCK", "SYS_RESOURCE"],
+      "command": "/opt/arkime/bin/docker.sh capture --wait-for-db http://localhost:9200 --db 'http://localhost:9200 init --ifneeded' -- -n opensmart",
+      "volumes": ["./etc/config.ini:/opt/arkime/etc/config.ini", "./volumes/data:/data"],
+      "notes": "Runs db.pl init --ifneeded via docker.sh. Sniffs eth0 with libpcap; pcaps in /data/raw."
+    },
+    {
+      "name": "arkime-viewer",
+      "container_name": "opensmart-arkime-viewer",
+      "image": "ghcr.io/arkime/arkime/arkime:v6-latest",
+      "network": "opensmart",
+      "ports": ["8005:8005"],
+      "command": "/opt/arkime/bin/docker.sh viewer --wait-for-db http://opensearch:9200 -- -n opensmart",
+      "key_env": {"ARKIME__elasticsearch": "http://opensearch:9200"},
+      "volumes": ["./etc/config.ini:/opt/arkime/etc/config.ini", "./volumes/data:/data"],
+      "auth_mode": "digest",
+      "notes": "Web UI at http://<host>:8005. Shares node name 'opensmart' and /data/raw with capture."
+    },
+    {
+      "name": "suricata",
+      "container_name": "opensmart-suricata",
+      "image": "opensmart/suricata",
+      "network": "host",
+      "cap_add": ["NET_ADMIN", "NET_RAW", "SYS_NICE"],
+      "volumes": ["./volumes/data:/data"],
+      "notes": "suricata -i eth0 -l /data/log. ET Open rules baked in at build."
+    },
+    {
+      "name": "zeek",
+      "container_name": "opensmart-zeek",
+      "image": "opensmart/zeek",
+      "network": "host",
+      "cap_add": ["NET_ADMIN", "NET_RAW"],
+      "volumes": ["./volumes/data:/data"],
+      "notes": "Tool-only per spec: container idle (no live capture configured)."
+    },
+    {
+      "name": "wireguard",
+      "container_name": "opensmart-wireguard",
+      "image": "opensmart/wireguard",
+      "network": "opensmart",
+      "ports": ["51820:51820/udp"],
+      "cap_add": ["NET_ADMIN"],
+      "sysctls": ["net.ipv4.ip_forward=1", "net.ipv4.conf.all.src_valid_mark=1"],
+      "key_env": {"SERVER_IP": "${SERVER_IP}"},
+      "volumes": ["./volumes/data:/data"],
+      "vpn_subnet": "10.30.0.0/24",
+      "notes": "Server keypair + wg0.conf + client template generated into /data on first start. wg0 up."
+    },
+    {
+      "name": "nginx",
+      "container_name": "opensmart-nginx",
+      "image": "nginx:1.27",
+      "network": "opensmart",
+      "ports": ["8080:80"],
+      "volumes": ["./volumes/data:/data"],
+      "notes": "Default nginx landing page; placeholder for future reverse proxy."
+    },
+    {
+      "name": "openvpn",
+      "container_name": "opensmart-openvpn",
+      "image": "opensmart/openvpn",
+      "network": "opensmart",
+      "ports": ["1194:1194/udp"],
+      "cap_add": ["NET_ADMIN"],
+      "compose_profile": "manual",
+      "volumes": ["./volumes/data:/data"],
+      "vpn_subnet": "10.20.0.0/24",
+      "state": "DEFINED_NOT_STARTED",
+      "notes": "Excluded from `docker compose up` via profile 'manual' (no /dev/net/tun). PKI generated via `docker compose run --rm openvpn /opt/opensmart/gen-pki.sh`."
+    }
+  ],
+  "credentials": {
+    "warning": "These are INSECURE defaults for a test/template deployment. Rotate before any real use.",
+    "arkime_viewer": {
+      "url": "http://<server-ip>:8005",
+      "username": "admin",
+      "password": "changeme",
+      "role": "admin",
+      "auth_mode": "digest",
+      "created_by": "deploy.sh -> arkime_add_user.sh admin \"Admin User\" changeme --admin",
+      "rotate": "docker exec opensmart-arkime-viewer /opt/arkime/bin/arkime_add_user.sh admin \"Admin User\" <NEWPASS> --admin"
+    },
+    "opensearch": {
+      "url": "http://<server-ip>:9200",
+      "auth": "NONE - security plugin disabled (DISABLE_SECURITY_PLUGIN=true)",
+      "note": "Anyone with network access to :9200 has full read/write. Restrict via firewall or enable the security plugin for production."
+    },
+    "openvpn": {
+      "auth": "certificate + tls-crypt key (no password)",
+      "ca_expire_days": 3650,
+      "cert_expire_days": 3650,
+      "algo": "EC secp384r1 / SHA512",
+      "client_key_passphrase": "none (build-client-full ... nopass)"
+    },
+    "wireguard": {
+      "auth": "public/private key pair (no password)",
+      "server_public_key_location": "containers/wireguard/volumes/data/server_public.key"
+    },
+    "drop_privileges": {
+      "arkime_capture": "dropUser=nobody, dropGroup=daemon",
+      "openvpn_runtime": "user nobody / group nogroup"
+    }
+  },
+  "tuning": {
+    "history": "Originally tuned for a 4GB host; raised after the reference host was upgraded to 8GB / 6 vCPU.",
+    "opensearch_heap": "-Xms2g -Xmx2g",
+    "arkime_packetThreads": 2,
+    "arkime_pcapBufferSize_bytes": 33554432,
+    "arkime_pcapReadMethod": "libpcap",
+    "arkime_snapLen": 32768,
+    "kept_due_to_lxc_limits": [
+      "pcapReadMethod=libpcap (afpacketv3 ring blocked by memlock=8192, not RAM)",
+      "opensearch bootstrap.memory_lock=false"
+    ]
+  },
+  "ports_published": [
+    {"port": 9200, "proto": "tcp", "service": "opensearch", "auth": "none"},
+    {"port": 8005, "proto": "tcp", "service": "arkime-viewer", "auth": "digest admin/changeme"},
+    {"port": 8080, "proto": "tcp", "service": "nginx", "auth": "none"},
+    {"port": 51820, "proto": "udp", "service": "wireguard", "auth": "wg keys"},
+    {"port": 1194, "proto": "udp", "service": "openvpn", "auth": "cert", "state": "only when manually enabled"}
+  ],
+  "build_procedure": [
+    "cd opensmart-framework-build/docker-images",
+    "docker build -t opensmart/base ./base",
+    "docker build -t opensmart/zeek ./zeek",
+    "docker build -t opensmart/suricata ./suricata",
+    "docker build -t opensmart/openvpn ./openvpn",
+    "docker build -t opensmart/wireguard ./wireguard"
+  ],
+  "deploy_procedure": [
+    "Build the opensmart/* images (see build_procedure).",
+    "cd opensmart-framework",
+    "SERVER_IP=<server-ip> ./deploy.sh",
+    "deploy.sh: creates the opensmart network, fixes volume perms (opensearch 1000:1000), starts OpenSearch, brings up Arkime (capture runs db.pl init --ifneeded), waits for arkime_users index, adds admin/changeme, then Suricata/Zeek/WireGuard/nginx, and finally generates the OpenVPN PKI (server stays down)."
+  ],
+  "test_deployment": {
+    "template_dir": "<install-dir>/opensmart-framework (kept pristine, runtime data cleared)",
+    "running_instance": "<install-dir>/opensmart-instance (deployed via deploy.sh)",
+    "note": "Template and instance share container names, host ports and the opensmart network, so only one runs at a time."
+  },
+  "verification": {
+    "opensearch": "curl -fs http://localhost:9200/_cluster/health  -> status green",
+    "arkime_viewer": "curl -fs --digest -u admin:changeme http://localhost:8005/eshealth.json -> 200",
+    "nginx": "curl -fs http://localhost:8080/ -> 200",
+    "suricata": "docker logs opensmart-suricata | grep 'Engine started'",
+    "wireguard": "docker exec opensmart-wireguard wg show",
+    "openvpn_pki": "ls containers/openvpn/volumes/data/pki/issued/server.crt"
+  },
+  "known_issues_and_fixes": [
+    {"symptom": "OpenSearch container fails: 'error setting rlimit type 8'", "cause": "LXC forbids unlimited memlock rlimit", "fix": "removed memlock ulimit; bootstrap.memory_lock=false"},
+    {"symptom": "Arkime capture: 'Unknown option --wait-for-db'", "cause": "docker.sh options placed after node flag", "fix": "put service flags after '--'; init via --db '... init --ifneeded'"},
+    {"symptom": "Arkime capture: tpacketv3 mmap failure (128MB)", "cause": "AF_PACKET ring blocked by memlock=8192", "fix": "pcapReadMethod=libpcap, pcapBufferSize set"},
+    {"symptom": "Arkime capture FATAL: missing oui.txt", "cause": "enrichment files not bundled in image", "fix": "removed ouiFile/rirFile settings (optional enrichment)"},
+    {"symptom": "Arkime: parsers fail to load ('./parsers' not found)", "cause": "relative parsersDir vs docker.sh cwd", "fix": "absolute parsersDir/pluginsDir in config.ini"}
+  ],
+  "security_notes": [
+    "Change the Arkime admin password (default admin/changeme) immediately.",
+    "OpenSearch :9200 has NO authentication - firewall it or enable the security plugin.",
+    "Generated PKI/keys live under each service's volumes/data and are NOT included in this bundle - they are created at deploy time.",
+    "OpenVPN/WireGuard client keys are passwordless; protect the generated .ovpn/.conf files."
+  ]
+}
