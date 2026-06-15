@@ -275,6 +275,21 @@ def init_network_ids_db() -> None:
                 db.execute(f"ALTER TABLE network_ids_alert_tracking ADD COLUMN {column} {definition}")
             except sqlite3.OperationalError:
                 pass
+        for column, definition in {
+            "file_inode": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            try:
+                db.execute(f"ALTER TABLE network_ids_ingest_state ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                pass
+        try:
+            db.execute("ALTER TABLE network_ids_alerts ADD COLUMN event_hash TEXT")
+        except sqlite3.OperationalError:
+            pass
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_network_ids_alerts_event_hash "
+            "ON network_ids_alerts (eve_json_path, event_hash) WHERE event_hash IS NOT NULL"
+        )
         db.commit()
 
 
@@ -347,6 +362,18 @@ def init_network_traffic_db() -> None:
             """
         )
         db.execute("PRAGMA journal_mode = WAL")
+        try:
+            db.execute("ALTER TABLE network_traffic_ingest_state ADD COLUMN file_inode INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE eve_network_events ADD COLUMN event_hash TEXT")
+        except sqlite3.OperationalError:
+            pass
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_eve_network_events_event_hash "
+            "ON eve_network_events (eve_json_path, event_hash) WHERE event_hash IS NOT NULL"
+        )
         db.commit()
 
 
