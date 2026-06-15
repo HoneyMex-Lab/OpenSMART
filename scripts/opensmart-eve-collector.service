@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenSMART EVE JSON Collector
+After=network.target suricata.service
+Wants=suricata.service
+
+[Service]
+Type=simple
+User=opensmart
+WorkingDirectory=/opt/opensmart
+Environment=EVE_PATH=/var/log/suricata/eve.json
+Environment=EVE_POLL_INTERVAL=0.5
+Environment=EVE_BATCH_SIZE=500
+ExecStart=uv run --project backend --python 3.13 python -m backend.app.eve_collector
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

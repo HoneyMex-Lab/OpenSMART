@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import re
@@ -56,6 +57,11 @@ NETWORK_CONFIG_TO_EVENT_TYPES = {
     "index_smb": {"smb"},
     "index_other_app_layer": NETWORK_EVENT_TYPES - {"dns", "http", "http2", "tls", "flow", "netflow", "fileinfo", "smb"},
 }
+
+
+def compute_event_hash(serialized_event: str) -> str:
+    """SHA-256 of the deterministic JSON serialization of an EVE event."""
+    return hashlib.sha256(serialized_event.encode("utf-8", errors="replace")).hexdigest()
 
 
 def module_config(name: str) -> tuple[bool, dict[str, Any]]:
@@ -485,12 +491,16 @@ def flush_batches(path: str, alert_batch: list[dict[str, Any]], network_batch: l
 
 
 def write_network_events(path: str, rows: list[dict[str, Any]]) -> None:
-    columns = ["eve_json_path", "timestamp", "event_type", "src_ip", "src_port", "dest_ip", "dest_port", "proto", "app_proto", "flow_id", "in_iface", "community_id", "host", "tx_id", "domain", "url", "method", "status", "user_agent", "tls_sni", "file_name", "file_hash", "bytes_toserver", "bytes_toclient", "pkts_toserver", "pkts_toclient", "flow_state", "summary", "event_json", "ingested_at"]
+    columns = ["eve_json_path", "timestamp", "event_type", "src_ip", "src_port", "dest_ip", "dest_port", "proto", "app_proto", "flow_id", "in_iface", "community_id", "host", "tx_id", "domain", "url", "method", "status", "user_agent", "tls_sni", "file_name", "file_hash", "bytes_toserver", "bytes_toclient", "pkts_toserver", "pkts_toclient", "flow_state", "summary", "event_json", "ingested_at", "event_hash"]
     placeholders = ",".join("?" for _ in columns)
     with get_network_traffic_db() as db:
         db.executemany(
-            f"INSERT INTO eve_network_events ({','.join(columns)}) VALUES ({placeholders})",
-            [(path, *(str(row.get(field, "")) for field in columns[1:-1]), now_iso()) for row in rows],
+            f"INSERT OR IGNORE INTO eve_network_events ({','.join(columns)}) VALUES ({placeholders})",
+            [
+                (path, *(str(row.get(field, "")) for field in columns[1:-2]), now_iso(),
+                 compute_event_hash(str(row.get("event_json", ""))))
+                for row in rows
+            ],
         )
         db.commit()
 

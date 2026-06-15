@@ -14,6 +14,7 @@ from typing import Any
 
 from . import eve_ingest
 from .database import get_db, get_network_ids_db, now_iso
+from .eve_ingest import compute_event_hash
 
 logger = logging.getLogger(__name__)
 
@@ -265,18 +266,29 @@ def ingest_eve_json(path_value: str) -> None:
         INGEST_LOCK.release()
 
 
+def _alert_event_hash(row: dict[str, Any]) -> str:
+    key = "|".join(
+        str(row.get(f, ""))
+        for f in ("timestamp", "flow_id", "signature_id", "src_ip", "dest_ip", "src_port", "dest_port")
+    )
+    return compute_event_hash(key)
+
+
 def write_alerts(path: str, rows: list[dict[str, Any]]) -> None:
-    placeholders = ",".join("?" for _ in [*ALERT_FIELDS, "eve_json_path", "ingested_at"])
-    columns = ",".join(["eve_json_path", *ALERT_FIELDS, "ingested_at"])
+    columns = ",".join(["eve_json_path", *ALERT_FIELDS, "ingested_at", "event_hash"])
+    placeholders = ",".join("?" for _ in ["eve_json_path", *ALERT_FIELDS, "ingested_at", "event_hash"])
     buf = PAYLOAD_BUFFER.setdefault(path, {})
     buf_full = len(buf) >= PAYLOAD_BUFFER_MAX
     has_critical_alerts = False
     with get_network_ids_db() as db:
         for row in rows:
             cursor = db.execute(
-                f"INSERT INTO network_ids_alerts ({columns}) VALUES ({placeholders})",
-                (path, *(str(row.get(field, "")) for field in ALERT_FIELDS), now_iso()),
+                f"INSERT OR IGNORE INTO network_ids_alerts ({columns}) VALUES ({placeholders})",
+                (path, *(str(row.get(field, "")) for field in ALERT_FIELDS), now_iso(), _alert_event_hash(row)),
             )
+            if cursor.rowcount == 0:
+                # Duplicate event — FTS and artifacts already written on original insert.
+                continue
             alert_id = int(cursor.lastrowid)
             if str(row.get("severity", "")).lower() in ("1", "critical"):
                 has_critical_alerts = True
