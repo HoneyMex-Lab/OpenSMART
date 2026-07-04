@@ -1,0 +1,28 @@
+services:
+  # NOTE: OpenVPN is DEFINED but NOT started by default in this environment
+  # because the LXC host has no /dev/net/tun. The 'manual' profile keeps it out
+  # of `docker compose up`. PKI/cert/config are generated into ./volumes/data via:
+  #   docker compose run --rm openvpn /opt/opensmart/gen-pki.sh
+  # To actually RUN the server, enable /dev/net/tun on the Proxmox host, then add:
+  #   devices: [ "/dev/net/tun:/dev/net/tun" ]
+  # and start with:  docker compose --profile manual up -d
+  openvpn:
+    image: opensmart/openvpn
+    container_name: opensmart-openvpn
+    hostname: openvpn
+    profiles:
+      - manual
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./volumes/data:/data
+    ports:
+      - "1194:1194/udp"
+    networks:
+      - opensmart
+    restart: unless-stopped
+
+networks:
+  opensmart:
+    external: true
+    name: opensmart

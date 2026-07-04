@@ -1,0 +1,17 @@
+services:
+  nginx:
+    image: nginx:1.27
+    container_name: opensmart-nginx
+    hostname: nginx
+    volumes:
+      - ./volumes/data:/data
+    ports:
+      - "8080:80"
+    networks:
+      - opensmart
+    restart: unless-stopped
+
+networks:
+  opensmart:
+    external: true
+    name: opensmart

@@ -1,0 +1,38 @@
+# OpenSMART OpenVPN - hardened server configuration
+port 1194
+proto udp
+dev tun
+
+ca   __PKI__/ca.crt
+cert __PKI__/issued/server.crt
+key  __PKI__/private/server.key
+dh   none
+tls-crypt __PKI__/ta.key
+crl-verify __PKI__/crl.pem
+
+topology subnet
+server 10.20.0.0 255.255.255.0
+ifconfig-pool-persist /data/log/ipp.txt
+
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 1.1.1.1"
+push "block-outside-dns"
+keepalive 10 120
+
+# --- Hardened crypto ---
+data-ciphers AES-256-GCM:CHACHA20-POLY1305
+data-ciphers-fallback AES-256-GCM
+cipher AES-256-GCM
+auth SHA256
+tls-server
+tls-version-min 1.2
+remote-cert-tls client
+
+user nobody
+group nogroup
+persist-key
+persist-tun
+
+status /data/log/openvpn-status.log
+verb 3
+explicit-exit-notify 1

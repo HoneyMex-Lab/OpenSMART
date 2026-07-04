@@ -69,3 +69,15 @@ Containers/OpenSMART-Standalone/**/*.log
 Containers/OpenSMART-Standalone/**/*.pcap
 Containers/OpenSMART-Standalone/**/*.db
 Containers/OpenSMART-Standalone/**/*.sqlite*
+
+# Containers/run generated runtime artifacts (same convention as OpenSMART-Standalone)
+Containers/run/**/volumes/data/**
+!Containers/run/**/volumes/data/.gitkeep
+Containers/run/**/*.ovpn
+Containers/run/**/*.key
+Containers/run/**/*.crt
+Containers/run/**/*.pem
+Containers/run/**/*.log
+Containers/run/**/*.pcap
+Containers/run/**/*.db
+Containers/run/**/*.sqlite*

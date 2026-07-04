@@ -63,7 +63,14 @@ The current tool integrations are placeholders. `GET /api/status` calls `OpenSMA
 `Containers/OpenSMART-Standalone/` is the existing reference Docker Compose
 bundle for the network-sensor stack (Suricata, Zeek, Arkime, OpenSearch,
 WireGuard, OpenVPN, nginx) — a standalone tool users can run and customize
-separately. A future `Containers/build/` (per-tool Dockerfiles copied from
-`OpenSMART-Standalone`) and `Containers/run/` (per-tool directories with their
-own `docker-compose.yaml` and bind-mounted volume directories — never named
-Docker volumes) are planned but not yet created.
+separately, left untouched.
+
+`Containers/build/` and `Containers/run/` now exist, copied from
+`OpenSMART-Standalone`: `build/` holds Dockerfiles for the custom images
+(`base`, `suricata`, `zeek`, `wireguard`, `openvpn` — official upstream images
+like OpenSearch/Arkime/nginx have none), and `run/` holds one directory per
+tool with its own `docker-compose.yaml` and a bind-mounted `volumes/data/`
+directory (never a named Docker volume), including an empty `opensmart/`
+placeholder for the future main-app container. Nothing wires `build/` and
+`run/` together yet — that is `opensmart.sh --install`, still **not
+implemented**.
