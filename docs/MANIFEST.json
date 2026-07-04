@@ -66,10 +66,26 @@
     "script": "opensmart.sh",
     "commands": {
       "start": {
-        "usage": "./opensmart.sh start --bind ADDRESS:PORT [--prod]",
-        "wraps": "opensmart/scripts/run_app.sh --host ADDRESS --port PORT [--prod]",
+        "usage": "./opensmart.sh start [--bind ADDRESS:PORT] [--prod]",
+        "container_exists_behavior": "--bind/--prod are ignored (printed note explains why). Starts the container if not already running (docker compose start), then runs the shared integrity check (see integrity_check below).",
+        "no_container_behavior": "Runs opensmart/scripts/run_app.sh --host ADDRESS --port PORT [--prod] directly on the host. --bind defaults to 0.0.0.0:8000 when omitted.",
         "dev_mode": "Runs uvicorn (--reload) on the given bind address/port plus the Vite dev server on :5173. Blocks on Enter to reveal the first-run admin password.",
         "prod_mode": "Builds the frontend once (npm run build) instead of starting the Vite dev server, serves it from FastAPI via a StaticFiles mount, and skips the interactive password-reveal prompt (prints it non-interactively). This is the mode the container entrypoint uses."
+      },
+      "restart": {
+        "usage": "./opensmart.sh --restart",
+        "action": "docker compose restart in containers/run/opensmart/, then the shared integrity check. Errors clearly if no container exists yet."
+      },
+      "recreate": {
+        "usage": "./opensmart.sh --recreate",
+        "action": "Prompts for confirmation (must type RECREATE) if a container already exists, then docker compose rm -f -s (container only, not the image/network/bind-mounted app data) followed by docker compose up -d, then the shared integrity check. Skips the confirmation if no container exists yet."
+      },
+      "integrity_check": {
+        "description": "Shared by start's container path, --restart, and --recreate.",
+        "steps": [
+          "Wait for the container to reach a stable running state (same crash-loop-tolerant stability check --install uses)",
+          "Poll /api/health on the container's published port (resolved via docker port, not assumed) for up to 5 minutes — a cold start needs to uv sync/npm install/npm run build inside the container first"
+        ]
       },
       "install": {
         "usage": "sudo ./opensmart.sh --install",
@@ -85,7 +101,7 @@
         ],
         "verification_status": "Verified against a real Docker Engine on a Debian 13 reference host on 2026-07-04. Two bugs found and fixed during that verification: bind-mount ownership (crash loop) and an install-time password-reveal timeout too short for a cold install.",
         "output": {
-          "terminal": "One line per main step (9 total: root check, distro detection, Docker Engine install, network creation, image build, ownership fix, container start, stability check, readiness/password wait), preceded by a banner (ASCII honeycomb logo, HoneyMex Lab & Mizton Labs attribution). Raw command output (apt-get, docker build, docker compose) is not printed to the terminal.",
+          "terminal": "One line per main step (9 total: root check, distro detection, Docker Engine install, network creation, image build, ownership fix, container start, stability check, readiness/password wait), preceded by a banner (ASCII honeycomb logo, Mizton Labs & Honeynet Mexico Team attribution). Raw command output (apt-get, docker build, docker compose) is not printed to the terminal.",
           "log_file": "logs/install.log — created fresh on every run, holds full timestamped step markers plus all redirected command output. On failure, the terminal step line is closed with 'failed' and points at this log."
         }
       },

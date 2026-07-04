@@ -76,7 +76,7 @@ print_banner() {
   printf '  ╚%s╝\n' "$(printf '%0.s═' $(seq 1 $w))"
   printf '\n'
   printf '  Dev Team:\n'
-  printf '  HoneyMex Lab & Mizton Labs\n'
+  printf '  Mizton Labs & Honeynet Mexico Team\n'
   printf '  Javier Santillan (core dev)\n'
   printf '  2026\n'
   printf '\n'

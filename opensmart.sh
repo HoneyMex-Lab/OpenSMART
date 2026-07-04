@@ -17,13 +17,21 @@ usage() {
 Usage: ./opensmart.sh <command> [options]
 
 Commands:
-  start --bind ADDRESS:PORT [--prod]   Start the OpenSMART app bound to ADDRESS:PORT.
-                                        --prod builds the frontend once and serves it
-                                        from the backend on a single port instead of
-                                        running the Vite dev server.
+  start [--bind ADDRESS:PORT] [--prod] If an "opensmart" container already exists,
+                                        starts it (if not already running) and checks
+                                        its integrity — --bind/--prod are ignored in
+                                        that case, since the container's bind address
+                                        is fixed by its docker-compose.yml. Otherwise
+                                        runs the app directly on the host, defaulting
+                                        to --bind 0.0.0.0:8000 when --bind is omitted.
   stop                                 Stop the OpenSMART container (docker compose stop).
   status                               Show the OpenSMART container state and whether the
                                         application inside it is responding.
+  --restart                            Restart the existing OpenSMART container and
+                                        check its integrity afterward.
+  --recreate                           Delete the existing OpenSMART container and
+                                        create a new one from the current image, then
+                                        check its integrity. Asks for confirmation.
   --install                            Install Docker Engine (Debian/Ubuntu only),
                                         build the opensmart/web image, and run
                                         OpenSMART as a container. Requires root.
@@ -42,7 +50,7 @@ print_banner() {
   printf '  %s\n' "$blank"
   printf '  ╚%s╝\n' "$(printf '%0.s═' $(seq 1 $w))"
   printf '\n'
-  printf '  HoneyMex Lab & Mizton Labs\n'
+  printf '  Mizton Labs & Honeynet Mexico Team\n'
   printf '\n'
   printf '      _   _   _   _\n'
   printf '     / \_/ \_/ \_/ \\\n'
@@ -77,10 +85,22 @@ cmd_start() {
     esac
   done
 
+  # If the "opensmart" container already exists, this is a container-managed
+  # deployment: (re)start the existing container and verify it rather than
+  # running the app directly on the host. --bind/--prod don't apply here —
+  # the container's bind address is fixed by its docker-compose.yml.
+  if command -v docker >/dev/null 2>&1 && _container_exists; then
+    if [[ -n "$bind" || "$prod" -eq 1 ]]; then
+      printf 'Note: an "%s" container already exists; --bind/--prod are ignored (the\n' "$CONTAINER_NAME"
+      printf 'container always runs in --prod mode on the port published by its\n'
+      printf 'docker-compose.yml). Use ./opensmart.sh --recreate to replace it.\n\n'
+    fi
+    _start_existing_container
+    return
+  fi
+
   if [[ -z "$bind" ]]; then
-    printf 'start requires --bind ADDRESS:PORT\n' >&2
-    usage >&2
-    exit 1
+    bind="0.0.0.0:8000"
   fi
 
   local host="${bind%:*}"
@@ -123,6 +143,83 @@ _app_health() {
   else
     printf 'unreachable'
   fi
+}
+
+# ── shared integrity check (start/--restart/--recreate/--install) ────────────
+#
+# _wait_stable / _wait_healthy are silent (return 0/1 only) so every caller
+# can present the result in whatever format fits it (numbered install steps
+# vs. plain lines for start/--restart/--recreate).
+
+_wait_stable() {
+  # Returns 0 once the container is running and stays running with an
+  # unchanged restart count for 5s; 1 if it never reaches running or is
+  # stuck in a restart loop (a crash-looping container with restart:always
+  # can appear "running" for a brief window between crashes).
+  local attempt restarts_before restarts_after
+  for attempt in $(seq 1 30); do
+    if [[ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" ]]; then
+      restarts_before="$(docker container inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
+      sleep 5
+      restarts_after="$(docker container inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
+      [[ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" && "$restarts_after" == "$restarts_before" ]]
+      return $?
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+_wait_healthy() {
+  # Returns 0 once /api/health responds ok, polling for up to 5 minutes — a
+  # cold start (no cached backend/.venv or frontend/node_modules) has to
+  # uv-sync and npm-build inside the container first, which can take a while.
+  local attempt port
+  for attempt in $(seq 1 150); do
+    port="$(_container_host_port)"
+    if [[ -n "$port" ]] && curl -sf --max-time 3 "http://localhost:${port}/api/health" 2>/dev/null | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+_check_integrity() {
+  printf 'Checking container stability... '
+  if _wait_stable; then
+    printf 'stable\n'
+  else
+    printf 'failed\n'
+    printf '✘ Container "%s" is not stable (crash-looping, or never reached a running state). Check logs with: docker logs %s\n' "$CONTAINER_NAME" "$CONTAINER_NAME" >&2
+    return 1
+  fi
+
+  printf 'Checking application health (a cold start can take a few minutes)... '
+  if _wait_healthy; then
+    printf 'healthy\n'
+  else
+    printf 'unreachable\n'
+    printf '✘ Application did not respond within 5 minutes. Check logs with: docker logs %s\n' "$CONTAINER_NAME" >&2
+    return 1
+  fi
+  return 0
+}
+
+_start_existing_container() {
+  local state
+  state="$(docker container inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
+  if [[ "$state" == "running" ]]; then
+    printf 'OpenSMART container is already running.\n'
+  else
+    printf 'Starting the OpenSMART container...\n'
+    if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose start); then
+      printf '✘ Failed to start the OpenSMART container.\n' >&2
+      exit 1
+    fi
+  fi
+  _check_integrity || exit 1
+  printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
 }
 
 cmd_status() {
@@ -189,6 +286,61 @@ cmd_stop() {
     printf '✘ Failed to stop the OpenSMART container.\n' >&2
     exit 1
   fi
+}
+
+cmd_restart() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker is not installed.\n' >&2
+    exit 1
+  fi
+
+  if ! _container_exists; then
+    printf 'No "%s" container found. Run: sudo ./opensmart.sh --install\n' "$CONTAINER_NAME" >&2
+    exit 1
+  fi
+
+  printf 'Restarting the OpenSMART container...\n'
+  if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose restart); then
+    printf '✘ Failed to restart the OpenSMART container.\n' >&2
+    exit 1
+  fi
+  _check_integrity || exit 1
+  printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
+}
+
+cmd_recreate() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker is not installed.\n' >&2
+    exit 1
+  fi
+
+  if _container_exists; then
+    printf 'This will stop and remove the existing "%s" container, then create a new\n' "$CONTAINER_NAME"
+    printf 'one from the current %s image. The app'"'"'s own data (SQLite DBs, logs,\n' "$IMAGE_NAME"
+    printf 'venvs, node_modules) lives in the bind-mounted app directory and is not\n'
+    printf 'affected — only the container itself is discarded and recreated.\n\n'
+    read -r -p 'Type RECREATE to continue: ' confirmation
+    if [[ "$confirmation" != "RECREATE" ]]; then
+      printf 'Recreate cancelled.\n'
+      exit 0
+    fi
+
+    printf 'Removing existing container...\n'
+    if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose rm -f -s); then
+      printf '✘ Failed to remove the existing container.\n' >&2
+      exit 1
+    fi
+  else
+    printf 'No existing "%s" container found; creating a new one.\n' "$CONTAINER_NAME"
+  fi
+
+  printf 'Creating the OpenSMART container...\n'
+  if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose up -d); then
+    printf '✘ Failed to create the OpenSMART container.\n' >&2
+    exit 1
+  fi
+  _check_integrity || exit 1
+  printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
 }
 
 # ── --install helpers ─────────────────────────────────────────────────────────
@@ -312,24 +464,11 @@ _install_run_container() {
 
 _install_wait_running() {
   _step "Waiting for the container to stabilize"
-  local attempt restarts_before restarts_after
-  for attempt in $(seq 1 30); do
-    if [[ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" ]]; then
-      # A crash-looping container (restart: always) can appear "running" for
-      # a brief window between crashes. Confirm it stays up and its restart
-      # count doesn't tick over before declaring success.
-      restarts_before="$(docker container inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
-      sleep 5
-      restarts_after="$(docker container inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
-      if [[ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" && "$restarts_after" == "$restarts_before" ]]; then
-        printf 'stable\n'
-        return 0
-      fi
-      _step_fail "Container \"$CONTAINER_NAME\" is stuck in a restart loop. Check logs with: docker logs $CONTAINER_NAME"
-    fi
-    sleep 1
-  done
-  _step_fail "Container \"$CONTAINER_NAME\" did not reach a running state. Check logs with: docker logs $CONTAINER_NAME"
+  if _wait_stable; then
+    printf 'stable\n'
+  else
+    _step_fail "Container \"$CONTAINER_NAME\" did not reach a stable running state (crash-looping, or never started). Check logs with: docker logs $CONTAINER_NAME"
+  fi
 }
 
 _install_show_password() {
@@ -393,6 +532,12 @@ case "${1:-}" in
     ;;
   status)
     cmd_status
+    ;;
+  --restart)
+    cmd_restart
+    ;;
+  --recreate)
+    cmd_recreate
     ;;
   --install)
     cmd_install
