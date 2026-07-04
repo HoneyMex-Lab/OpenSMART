@@ -62,7 +62,7 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
     already running, starts it (`docker compose start`); either way, then
     runs the same integrity check `restart`/`recreate` use (see below).
   - **No container:** runs directly on the host via
-    `opensmart/scripts/run_app.sh --host ADDRESS --port PORT [--prod]`,
+    `opensmart/scripts/run_app.sh start --host ADDRESS --port PORT [--prod]`,
     defaulting to `--bind 0.0.0.0:8000` when `--bind` is omitted. Without
     `--prod`, this starts the backend (`uvicorn`) on that address/port and
     the frontend dev server on `5173`. With `--prod`, it builds the frontend
@@ -122,6 +122,24 @@ fresh on every run. On failure, the current step line is closed with
   port, resolved via `docker port` rather than assumed). A running container
   with an unreachable app (still starting, or crashed) is reported
   distinctly from a genuinely healthy one.
+
+**App-level CLI (`opensmart/scripts/run_app.sh`):** `opensmart.sh`'s
+container/host branching for `start` sits on top of `run_app.sh`, which has
+its own consistent subcommand set — `start`, `stop`, `status`, `restart`,
+`reset-admin-password`, `reset-data-all`, `reset-data-ids`,
+`reset-data-network`, `reset-all`, `health` — mirroring `opensmart.sh`'s
+naming (no more `--flag` forms, and no implicit default command; a bare
+invocation now errors with usage, same as `opensmart.sh`). `start`/`restart`
+write `opensmart/logs/run_app.state` (PID, bind host/port, prod mode) once
+the backend is confirmed alive, so a separate later invocation of
+`status`/`stop`/`restart` — including `docker exec <container>
+./opensmart/scripts/run_app.sh status` — can find and act on the running
+instance; `restart` reuses the previous bind/mode from that file unless
+explicitly overridden. `opensmart.sh reset-admin-password` /
+`reset-data-all` / `reset-data-ids` / `reset-data-network` / `reset-all` /
+`health` forward to the same-named `run_app.sh` subcommand — inside the
+container (`docker exec -i`) if one exists, or directly on the host
+otherwise — so these no longer require knowing about `run_app.sh` at all.
 
 **Single-port production serving:** `opensmart/backend/app/main.py` mounts
 `opensmart/frontend/dist` as static files (via `fastapi.staticfiles.StaticFiles`,

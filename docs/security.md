@@ -18,7 +18,7 @@ When no admin exists, backend startup creates username `admin` with a generated 
 Run:
 
 ```bash
-./opensmart/scripts/run_app.sh --reset-admin-password
+./opensmart/scripts/run_app.sh reset-admin-password
 ```
 
 The script requires typing `RESET`. A successful reset:

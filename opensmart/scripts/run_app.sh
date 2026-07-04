@@ -5,17 +5,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_STATUS="not checked"
 FRONTEND_STATUS="not checked"
 BACKEND_PID=""
-RESET_ADMIN_PASSWORD=0
-RESET_DATA_ALL=0
-RESET_DATA_IDS=0
-RESET_DATA_NETWORK=0
-FULL_RESET=0
-RUN_HEALTH=0
+COMMAND=""
+HOST_EXPLICIT=0
+PORT_EXPLICIT=0
+PROD_EXPLICIT=0
 BACKEND_LOG=""
 BACKEND_PYTHON="3.13"
 BIND_HOST="0.0.0.0"
 BIND_PORT="8000"
 PROD_MODE=0
+STATE_FILE="${ROOT_DIR}/logs/run_app.state"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 APP_VERSION="${OPENSMART_VERSION:-v0.3 beta}"
 DB_PATH="${ROOT_DIR}/backend/opensmart.db"
@@ -39,21 +38,29 @@ EXPECTED_TABLES=(
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/run_app.sh [option]
+Usage: ./scripts/run_app.sh <command> [options]
 
-Options:
+Commands:
+  start                   Start OpenSMART.
+  stop                    Stop a running instance started by this script.
+  status                  Show whether OpenSMART is running and healthy.
+  restart                 Stop (if running) and start again, reusing the previous
+                          --host/--port/--prod unless overridden.
+  reset-admin-password    Reset the admin password and print it. Does not start the app.
+  reset-data-all          Delete all IDS and network traffic data; keep config and users. Does not start the app.
+  reset-data-ids          Delete only IDS alert data; preserve network traffic data. Does not start the app.
+  reset-data-network      Delete only network traffic data; preserve IDS alert data. Does not start the app.
+  reset-all               Full reset: delete the entire database and reinitialize. Does not start the app.
+  health                  Run health checks and print a pass/fail summary. Does not start the app.
+
+Options (start/restart only):
   --host HOST             Address for the backend to bind to (default: 0.0.0.0).
   --port PORT             Port for the backend to bind to (default: 8000).
   --prod                  Production mode: build the frontend once and serve it from the
                           backend on a single port instead of running the Vite dev server,
                           and skip the interactive first-run password prompt.
-  --reset-admin-password  Reset the admin password and print it. Does not start the app.
-  --reset-data-all        Delete all IDS and network traffic data; keep config and users. Does not start the app.
-  --reset-data-ids        Delete only IDS alert data; preserve network traffic data. Does not start the app.
-  --reset-data-network    Delete only network traffic data; preserve IDS alert data. Does not start the app.
-  --reset-all             Full reset: delete the entire database and reinitialize. Does not start the app.
-  --health                Run health checks and print a pass/fail summary. Does not start the app.
-  --help                  Show this help message.
+
+  --help, -h              Show this help message.
 EOF
 }
 
@@ -122,9 +129,82 @@ print_summary() {
 }
 
 cleanup() {
-  if [[ -n "$BACKEND_PID" ]] && kill -0 "$BACKEND_PID" 2>/dev/null; then
-    kill "$BACKEND_PID" 2>/dev/null || true
-    wait "$BACKEND_PID" 2>/dev/null || true
+  # Only touch the state file if THIS invocation actually started a backend
+  # (BACKEND_PID is set once `start` confirms it's alive). Every invocation
+  # of this script — including read-only `status`/`stop`/`health` calls —
+  # goes through this same EXIT trap, so an unconditional rm here would wipe
+  # out a *different*, still-running instance's state file.
+  if [[ -n "$BACKEND_PID" ]]; then
+    if kill -0 "$BACKEND_PID" 2>/dev/null; then
+      kill "$BACKEND_PID" 2>/dev/null || true
+      wait "$BACKEND_PID" 2>/dev/null || true
+    fi
+    rm -f "$STATE_FILE"
+  fi
+}
+
+# ── start/stop/status state file ──────────────────────────────────────────────
+#
+# Tracks the backend PID plus the bind host/port/mode of the running instance,
+# so a later, separate invocation of `stop`/`status`/`restart` can find and
+# act on it (e.g. `docker exec <container> ./scripts/run_app.sh status`).
+
+_state_get() {
+  local key="$1"
+  # Always exits 0: "no state file" / "key not found" are expected, not
+  # errors — an unprotected non-zero here would trip `set -e` in the caller.
+  [[ -f "$STATE_FILE" ]] || return 0
+  grep "^${key}=" "$STATE_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- || true
+}
+
+_state_write() {
+  mkdir -p "$(dirname "$STATE_FILE")"
+  {
+    printf 'PID=%s\n' "$BACKEND_PID"
+    printf 'HOST=%s\n' "$BIND_HOST"
+    printf 'PORT=%s\n' "$BIND_PORT"
+    printf 'PROD=%s\n' "$PROD_MODE"
+  } > "$STATE_FILE"
+}
+
+cmd_stop() {
+  local pid
+  pid="$(_state_get PID)"
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    printf 'OpenSMART is not running.\n'
+    rm -f "$STATE_FILE"
+    return 0
+  fi
+  printf 'Stopping OpenSMART (pid %s)...\n' "$pid"
+  kill -TERM "$pid" 2>/dev/null || true
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null && (( waited < 15 )); do
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    printf 'Did not stop within 15s; sending SIGKILL.\n' >&2
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$STATE_FILE"
+  printf 'Stopped.\n'
+}
+
+cmd_status() {
+  local pid host port
+  pid="$(_state_get PID)"
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    printf 'Status : not running\n'
+    return 0
+  fi
+  host="$(_state_get HOST)"
+  port="$(_state_get PORT)"
+  printf 'Status : running (pid %s)\n' "$pid"
+  printf 'Bind   : %s:%s\n' "$host" "$port"
+  if curl -sf --max-time 3 "http://localhost:${port}/api/health" 2>/dev/null | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+    printf 'Health : healthy (http://%s:%s/api/health)\n' "$host" "$port"
+  else
+    printf 'Health : unreachable\n'
   fi
 }
 
@@ -466,42 +546,42 @@ cd "$ROOT_DIR"
 print_banner
 _log INFO "run_app.sh started: args=${*:-none}"
 
+case "${1:-}" in
+  start|stop|status|restart|reset-admin-password|reset-data-all|reset-data-ids|reset-data-network|reset-all|health)
+    COMMAND="$1"
+    shift
+    ;;
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  "")
+    printf 'Missing command.\n' >&2
+    usage >&2
+    exit 1
+    ;;
+  *)
+    printf 'Unknown command: %s\n' "$1" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)
       BIND_HOST="${2:?--host requires a value}"
+      HOST_EXPLICIT=1
       shift 2
       ;;
     --port)
       BIND_PORT="${2:?--port requires a value}"
+      PORT_EXPLICIT=1
       shift 2
       ;;
     --prod)
       PROD_MODE=1
-      shift
-      ;;
-    --reset-admin-password)
-      RESET_ADMIN_PASSWORD=1
-      shift
-      ;;
-    --reset-data-all)
-      RESET_DATA_ALL=1
-      shift
-      ;;
-    --reset-data-ids)
-      RESET_DATA_IDS=1
-      shift
-      ;;
-    --reset-data-network)
-      RESET_DATA_NETWORK=1
-      shift
-      ;;
-    --reset-all)
-      FULL_RESET=1
-      shift
-      ;;
-    --health)
-      RUN_HEALTH=1
+      PROD_EXPLICIT=1
       shift
       ;;
     --help|-h)
@@ -516,8 +596,50 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$COMMAND" != "start" && "$COMMAND" != "restart" ]] \
+  && [[ "$HOST_EXPLICIT" -eq 1 || "$PORT_EXPLICIT" -eq 1 || "$PROD_EXPLICIT" -eq 1 ]]; then
+  printf -- '--host/--port/--prod only apply to the start/restart commands.\n' >&2
+  exit 1
+fi
+
+# ── stop / status ──────────────────────────────────────────────────────────────
+if [[ "$COMMAND" == "stop" ]]; then
+  cmd_stop
+  exit 0
+fi
+
+if [[ "$COMMAND" == "status" ]]; then
+  cmd_status
+  exit 0
+fi
+
+# ── restart: stop the existing instance (reusing its bind/mode unless
+# explicitly overridden), then fall through into the normal start flow ────────
+if [[ "$COMMAND" == "restart" ]]; then
+  if [[ "$HOST_EXPLICIT" -eq 0 ]]; then
+    _prev_host="$(_state_get HOST)"
+    if [[ -n "$_prev_host" ]]; then
+      BIND_HOST="$_prev_host"
+    fi
+  fi
+  if [[ "$PORT_EXPLICIT" -eq 0 ]]; then
+    _prev_port="$(_state_get PORT)"
+    if [[ -n "$_prev_port" ]]; then
+      BIND_PORT="$_prev_port"
+    fi
+  fi
+  if [[ "$PROD_EXPLICIT" -eq 0 ]]; then
+    _prev_prod="$(_state_get PROD)"
+    if [[ "$_prev_prod" == "1" ]]; then
+      PROD_MODE=1
+    fi
+  fi
+  cmd_stop
+  COMMAND="start"
+fi
+
 # ── Explicit health check ─────────────────────────────────────────────────────
-if [[ "$RUN_HEALTH" -eq 1 ]]; then
+if [[ "$COMMAND" == "health" ]]; then
   run_health_checks full
   exit $?
 fi
@@ -532,7 +654,7 @@ if ! require_command "uv" "Install uv: curl -LsSf https://astral.sh/uv/install.s
 fi
 
 # ── Full reset ────────────────────────────────────────────────────────────────
-if [[ "$FULL_RESET" -eq 1 ]]; then
+if [[ "$COMMAND" == "reset-all" ]]; then
   printf '*** FULL RESET ***\n'
   printf 'This will DELETE the entire OpenSMART database, including all users,\n'
   printf 'config, IDS data, sessions, and audit events.\n'
@@ -552,12 +674,12 @@ if [[ "$FULL_RESET" -eq 1 ]]; then
     exit 1
   fi
   _log INFO "full_reset completed"
-  printf '\nDone. Run ./scripts/run_app.sh to start OpenSMART.\n'
+  printf '\nDone. Run ./scripts/run_app.sh start to start OpenSMART.\n'
   exit 0
 fi
 
 # ── Data-all reset ────────────────────────────────────────────────────────────
-if [[ "$RESET_DATA_ALL" -eq 1 ]]; then
+if [[ "$COMMAND" == "reset-data-all" ]]; then
   printf '*** DATA RESET (ALL) ***\n'
   printf 'This will delete ALL IDS alerts, network traffic events, sessions, audit events, and login attempts.\n'
   printf 'Users, settings, and module config will be preserved.\n'
@@ -602,12 +724,12 @@ if [[ "$RESET_DATA_ALL" -eq 1 ]]; then
   fi
 
   _log INFO "reset_data_all completed"
-  printf 'Done. Run ./scripts/run_app.sh to start OpenSMART.\n'
+  printf 'Done. Run ./scripts/run_app.sh start to start OpenSMART.\n'
   exit 0
 fi
 
 # ── IDS-only reset ────────────────────────────────────────────────────────────
-if [[ "$RESET_DATA_IDS" -eq 1 ]]; then
+if [[ "$COMMAND" == "reset-data-ids" ]]; then
   printf '*** IDS DATA RESET ***\n'
   printf 'This will delete all IDS alerts and artifacts. Network traffic data is preserved.\n'
   printf '\nWARNING: This operation is NOT recoverable. Deleted data cannot be restored.\n\n'
@@ -635,12 +757,12 @@ if [[ "$RESET_DATA_IDS" -eq 1 ]]; then
   fi
 
   _log INFO "reset_data_ids completed"
-  printf 'Done. IDS alerts cleared. Run ./scripts/run_app.sh to start OpenSMART.\n'
+  printf 'Done. IDS alerts cleared. Run ./scripts/run_app.sh start to start OpenSMART.\n'
   exit 0
 fi
 
 # ── Network-only reset ────────────────────────────────────────────────────────
-if [[ "$RESET_DATA_NETWORK" -eq 1 ]]; then
+if [[ "$COMMAND" == "reset-data-network" ]]; then
   printf '*** NETWORK TRAFFIC DATA RESET ***\n'
   printf 'This will delete all network traffic events. IDS alerts are preserved.\n'
   printf '\nWARNING: This operation is NOT recoverable. Deleted data cannot be restored.\n\n'
@@ -668,12 +790,12 @@ if [[ "$RESET_DATA_NETWORK" -eq 1 ]]; then
   fi
 
   _log INFO "reset_data_network completed"
-  printf 'Done. Network traffic events cleared. Run ./scripts/run_app.sh to start OpenSMART.\n'
+  printf 'Done. Network traffic events cleared. Run ./scripts/run_app.sh start to start OpenSMART.\n'
   exit 0
 fi
 
 # ── Admin password reset ──────────────────────────────────────────────────────
-if [[ "$RESET_ADMIN_PASSWORD" -eq 1 ]]; then
+if [[ "$COMMAND" == "reset-admin-password" ]]; then
   printf 'This will reset the admin password and invalidate existing admin sessions.\n'
   printf '\nWARNING: Existing admin sessions will be immediately invalidated.\n\n'
   read -r -p 'Type RESET to continue: ' confirmation
@@ -690,7 +812,7 @@ if [[ "$RESET_ADMIN_PASSWORD" -eq 1 ]]; then
     exit 1
   fi
   _log INFO "reset_admin_password completed"
-  printf '\nDone. Run ./scripts/run_app.sh to start OpenSMART.\n'
+  printf '\nDone. Run ./scripts/run_app.sh start to start OpenSMART.\n'
   exit 0
 fi
 
@@ -700,7 +822,7 @@ fi
 printf 'Running pre-start checks...\n'
 if ! run_health_checks prestart; then
   printf '\nPre-start health check failed. Fix the issues above before starting OpenSMART.\n'
-  printf 'Run ./scripts/run_app.sh --health for a full diagnostic report.\n\n'
+  printf 'Run ./scripts/run_app.sh health for a full diagnostic report.\n\n'
   _log ERROR "pre-start health check failed: startup aborted"
   exit 1
 fi
@@ -796,6 +918,7 @@ if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
   exit 1
 fi
 _log INFO "backend started: pid=${BACKEND_PID}"
+_state_write
 
 # ── First-run: display prominent password box from backend log ────────────────
 if [[ "$FIRST_RUN_EXPECTED" -eq 1 ]]; then

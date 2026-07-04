@@ -68,7 +68,7 @@
       "start": {
         "usage": "./opensmart.sh start [--bind ADDRESS:PORT] [--prod]",
         "container_exists_behavior": "--bind/--prod are ignored (printed note explains why). Starts the container if not already running (docker compose start), then runs the shared integrity check (see integrity_check below).",
-        "no_container_behavior": "Runs opensmart/scripts/run_app.sh --host ADDRESS --port PORT [--prod] directly on the host. --bind defaults to 0.0.0.0:8000 when omitted.",
+        "no_container_behavior": "Runs opensmart/scripts/run_app.sh start --host ADDRESS --port PORT [--prod] directly on the host. --bind defaults to 0.0.0.0:8000 when omitted.",
         "dev_mode": "Runs uvicorn (--reload) on the given bind address/port plus the Vite dev server on :5173. Blocks on Enter to reveal the first-run admin password.",
         "prod_mode": "Builds the frontend once (npm run build) instead of starting the Vite dev server, serves it from FastAPI via a StaticFiles mount, and skips the interactive password-reveal prompt (prints it non-interactively). This is the mode the container entrypoint uses."
       },
@@ -119,6 +119,10 @@
       "version": {
         "usage": "./opensmart.sh version (aliases: --version, -v)",
         "output": "OpenSMART <major version> (commit <short git sha>) — major version is the hardcoded VERSION_MAJOR constant near the top of opensmart.sh (currently v0.3, no 'beta' suffix — distinct from the 'v0.3 beta' identifier used elsewhere, e.g. config.py's APP_VERSION default and the README title), commit is `git rev-parse --short HEAD` resolved from ROOT_DIR (falls back to 'unknown' outside a git checkout)."
+      },
+      "reset_and_health": {
+        "usage": "./opensmart.sh <reset-admin-password|reset-data-all|reset-data-ids|reset-data-network|reset-all|health>",
+        "action": "Forwards to opensmart/scripts/run_app.sh's own subcommand of the same name — inside the 'opensmart' container (docker exec -i, using its own uv/python environment) if one exists, or directly on the host otherwise. -i not -it, so the reset-* commands' typed confirmation prompt works both interactively and when piped."
       }
     },
     "image": {
@@ -130,6 +134,20 @@
     }
   },
 
+  "app_script": {
+    "script": "opensmart/scripts/run_app.sh",
+    "description": "The actual host-process launcher — what opensmart.sh's non-container path (and the container's own entrypoint, via opensmart.sh start --prod) delegates to. Has its own consistent subcommand CLI, mirroring opensmart.sh's: start, stop, status, restart, reset-admin-password, reset-data-all, reset-data-ids, reset-data-network, reset-all, health. No default command — a bare invocation with no subcommand now errors with usage, matching opensmart.sh's own behavior (this used to implicitly mean 'start'; that implicit default was removed for consistency).",
+    "commands": {
+      "start": "start [--host H] [--port P] [--prod] — same behavior as before (dev servers or single --prod process), now also writes logs/run_app.state (PID/HOST/PORT/PROD) once the backend is confirmed alive.",
+      "stop": "Reads logs/run_app.state; if the recorded PID is alive, SIGTERM (SIGKILL after a 15s grace period), then removes the state file. No-op with a message if nothing is running.",
+      "status": "Reads logs/run_app.state; if the recorded PID is alive, reports it plus curl's /api/health on the recorded host:port. Reports 'not running' otherwise.",
+      "restart": "Reuses the previous --host/--port/--prod from logs/run_app.state unless explicitly overridden on the command line, stops the existing instance, then falls through into the same code path as start.",
+      "reset_and_health": "reset-admin-password / reset-data-all / reset-data-ids / reset-data-network / reset-all / health — unchanged behavior from before, just renamed from --flag form to subcommand form (e.g. --reset-admin-password -> reset-admin-password)."
+    },
+    "state_file": "logs/run_app.state (relative to the app dir, i.e. opensmart/logs/run_app.state) — plain KEY=VALUE lines (PID, HOST, PORT, PROD). Read via a small grep/cut helper, not `source`, to avoid executing file content.",
+    "known_bug_fixed_2026-07-04": "cleanup() (the EXIT/INT/TERM trap) used to unconditionally rm the state file on every invocation's exit, including read-only status/stop/health calls from a SEPARATE process — so running `status` while a different instance was live would wipe that instance's state file, making the next status/stop/restart call incorrectly report 'not running'. Fixed by only touching the state file when BACKEND_PID is set (i.e. only the invocation that actually started a backend owns and cleans up the file). Verified with a full start -> status (x2) -> restart -> stop cycle against a real running instance."
+  },
+
   "dev_commands": {
     "combined_runner": "./opensmart.sh start --bind 0.0.0.0:8000",
     "backend_sync": "cd opensmart && uv sync --project backend --python 3.13",
@@ -138,7 +156,7 @@
     "backend_import_check": "cd opensmart && uv run --project backend --python 3.13 python -c \"import backend.app.admin_tools; import backend.app.main; print('backend imports ok')\"",
     "shell_syntax_check": "bash -n opensmart.sh opensmart/scripts/run_app.sh opensmart/scripts/dev_backend.sh opensmart/scripts/dev_frontend.sh",
     "frontend_build": "cd opensmart/frontend && npm run build",
-    "reset_admin_password": "./opensmart/scripts/run_app.sh --reset-admin-password",
+    "reset_admin_password": "./opensmart/scripts/run_app.sh reset-admin-password",
     "reset_telemetry_db": "./opensmart/scripts/reset_telemetry_db.sh",
     "known_gotcha": "opensmart/backend/.venv's console-script shebangs (uvicorn, etc.) are absolute paths. Any time the app directory is renamed or moved, delete and resync: rm -rf opensmart/backend/.venv && cd opensmart && uv sync --project backend --python 3.13. A bare 'python -c ...' import check still works on a stale venv — only console-script entry points break — so it is not a reliable health check by itself."
   },

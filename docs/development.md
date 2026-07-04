@@ -35,16 +35,26 @@ Or use:
 ## Combined App Runner
 
 ```bash
-./opensmart.sh start --bind 0.0.0.0:8000
+./opensmart.sh start
 ```
 
-This wraps `opensmart/scripts/run_app.sh`, which can also be called directly.
-Options (on `run_app.sh` — not exposed through `opensmart.sh` yet):
+`opensmart.sh` mirrors `opensmart/scripts/run_app.sh`'s own subcommands —
+`start`, `stop`, `status`, `restart`, `reset-admin-password`,
+`reset-data-all`, `reset-data-ids`, `reset-data-network`, `reset-all`,
+`health` — forwarding to wherever the app actually runs (inside the
+`opensmart` container if one exists, or directly on the host otherwise).
+You can also call `run_app.sh` directly with the same subcommands:
 
 ```bash
 ./opensmart/scripts/run_app.sh --help
-./opensmart/scripts/run_app.sh --reset-admin-password
+./opensmart/scripts/run_app.sh reset-admin-password
+./opensmart/scripts/run_app.sh status
 ```
+
+`run_app.sh start`/`restart` write `opensmart/logs/run_app.state` (PID,
+bind host/port, prod mode) once the backend is confirmed alive, so a
+separate later invocation of `status`/`stop`/`restart` can find and act on
+the running instance.
 
 ## Verification Commands
 

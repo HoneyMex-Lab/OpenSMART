@@ -38,6 +38,21 @@ Commands:
                                         OpenSMART as a container. Requires root.
   version                              Show the OpenSMART version (major version plus
                                         the current git commit).
+
+  reset-admin-password                 Reset the admin password and print it.
+  reset-data-all                       Delete all IDS and network traffic data; keep
+                                        config and users.
+  reset-data-ids                       Delete only IDS alert data; preserve network
+                                        traffic data.
+  reset-data-network                   Delete only network traffic data; preserve IDS
+                                        alert data.
+  reset-all                            Full reset: delete the entire database and
+                                        reinitialize.
+  health                               Run health checks and print a pass/fail summary.
+
+  The reset-*/health commands run inside the "opensmart" container if one
+  exists, or directly on the host otherwise — same as start.
+
   --help, -h                           Show this help message.
 EOF
 }
@@ -114,9 +129,9 @@ cmd_start() {
   fi
 
   if [[ "$prod" -eq 1 ]]; then
-    exec "$ROOT_DIR/opensmart/scripts/run_app.sh" --host "$host" --port "$port" --prod
+    exec "$ROOT_DIR/opensmart/scripts/run_app.sh" start --host "$host" --port "$port" --prod
   else
-    exec "$ROOT_DIR/opensmart/scripts/run_app.sh" --host "$host" --port "$port"
+    exec "$ROOT_DIR/opensmart/scripts/run_app.sh" start --host "$host" --port "$port"
   fi
 }
 
@@ -153,6 +168,29 @@ _app_health() {
     printf 'unreachable'
   fi
 }
+
+# ── run_app.sh pass-through (reset-*, health) ─────────────────────────────────
+#
+# These operate on the app's own data/health, independent of how it's
+# currently running. Forward to wherever it actually lives: inside the
+# container (using its own uv/python environment) if one exists, or directly
+# on the host otherwise. -i (not -it) so this works both interactively and
+# when piped, since reset-* prompts for a typed confirmation.
+
+_run_app_passthrough() {
+  if command -v docker >/dev/null 2>&1 && _container_exists; then
+    docker exec -i "$CONTAINER_NAME" ./opensmart/scripts/run_app.sh "$@"
+  else
+    "$ROOT_DIR/opensmart/scripts/run_app.sh" "$@"
+  fi
+}
+
+cmd_reset_admin_password() { _run_app_passthrough reset-admin-password; }
+cmd_reset_data_all() { _run_app_passthrough reset-data-all; }
+cmd_reset_data_ids() { _run_app_passthrough reset-data-ids; }
+cmd_reset_data_network() { _run_app_passthrough reset-data-network; }
+cmd_reset_all() { _run_app_passthrough reset-all; }
+cmd_health() { _run_app_passthrough health; }
 
 # ── shared integrity check (start/restart/recreate/install) ────────────
 #
@@ -550,6 +588,24 @@ case "${1:-}" in
     ;;
   install)
     cmd_install
+    ;;
+  reset-admin-password)
+    cmd_reset_admin_password
+    ;;
+  reset-data-all)
+    cmd_reset_data_all
+    ;;
+  reset-data-ids)
+    cmd_reset_data_ids
+    ;;
+  reset-data-network)
+    cmd_reset_data_network
+    ;;
+  reset-all)
+    cmd_reset_all
+    ;;
+  health)
+    cmd_health
     ;;
   version|--version|-v)
     cmd_version

@@ -10,7 +10,7 @@ The current implementation is a working v0.3 prototype with local user managemen
 - English and Spanish UI text selection through runtime platform settings.
 - Local login backed by SQLite users and Argon2 password hashes.
 - Generated first-run `admin` password with a pause so it can be saved before the frontend starts.
-- Admin password reset flow from `opensmart/scripts/run_app.sh --reset-admin-password`.
+- Admin password reset flow from `opensmart/scripts/run_app.sh reset-admin-password`.
 - HTTP-only session cookie plus CSRF token for mutating API requests.
 - Configurable failed-login lockout by username and client IP.
 - Admin-only Settings pages for Web Interface, OpenSMART Modules, Tools, Notifications, wizard placeholder, and user access.
@@ -108,10 +108,10 @@ Install Node.js/npm from your operating system package manager or from `https://
 ```
 
 `opensmart.sh` is a thin wrapper around `opensmart/scripts/run_app.sh`; you can
-also call that script directly (`./opensmart/scripts/run_app.sh`). It checks
-for `uv`, `node`, and `npm`, syncs backend dependencies with Python `3.13`,
-installs frontend dependencies when needed, prints a dependency summary, and
-starts both services if no errors occur.
+also call that script directly (`./opensmart/scripts/run_app.sh start`). It
+checks for `uv`, `node`, and `npm`, syncs backend dependencies with Python
+`3.13`, installs frontend dependencies when needed, prints a dependency
+summary, and starts both services if no errors occur.
 
 If dependencies are already installed, it reports that they are OK and starts the app.
 
@@ -146,12 +146,16 @@ Change the password after first login from `Configuration > Account`.
 To reset the local admin password:
 
 ```bash
-./opensmart/scripts/run_app.sh --reset-admin-password
+./opensmart.sh reset-admin-password
 ```
 
-The script asks you to type `RESET`, generates a new password, prints it once, logs action metadata to `logs/opensmart.log`, and exits. Run `./opensmart.sh start --bind 0.0.0.0:8000` again to start OpenSMART.
+This runs inside the `opensmart` container if one exists (from `./opensmart.sh install`), or directly on the host otherwise — same as `./opensmart/scripts/run_app.sh reset-admin-password`, which you can also call directly. The script asks you to type `RESET`, generates a new password, prints it once, logs action metadata to `logs/opensmart.log`, and exits. Run `./opensmart.sh start` again to start OpenSMART.
 
 The generated password is not written to the log.
+
+Other data-reset and diagnostic commands follow the same pattern —
+`./opensmart.sh reset-data-all`, `reset-data-ids`, `reset-data-network`,
+`reset-all`, and `health` — see `./opensmart.sh --help`.
 
 ## Reset Telemetry Databases
 
