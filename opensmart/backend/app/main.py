@@ -161,7 +161,7 @@ app.include_router(status.router)
 app.include_router(users.router)
 app.include_router(audit.router)
 
-# Serve the built frontend (OpenSMART/frontend/dist) if it exists — used in
+# Serve the built frontend (opensmart/frontend/dist) if it exists — used in
 # production/container mode where the app runs on a single port. Mounted
 # last so it never shadows the API routes above (Starlette matches routes
 # in registration order). In dev, dist/ is never built, so this is a no-op.

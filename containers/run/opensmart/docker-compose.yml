@@ -2,7 +2,7 @@ services:
   opensmart:
     build:
       context: ../../..
-      dockerfile: Containers/build/opensmart/Dockerfile
+      dockerfile: containers/build/opensmart/Dockerfile
     image: opensmart/web
     container_name: opensmart
     hostname: opensmart

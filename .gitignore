@@ -11,23 +11,23 @@ htmlcov/
 # Virtual environments
 .venv/
 venv/
-OpenSMART/backend/.venv/
+opensmart/backend/.venv/
 
 # Backend runtime data
-OpenSMART/backend/*.db
-OpenSMART/backend/*.db-*
-OpenSMART/backend/.env
-OpenSMART/backend/.env.*
-!OpenSMART/backend/.env.example
+opensmart/backend/*.db
+opensmart/backend/*.db-*
+opensmart/backend/.env
+opensmart/backend/.env.*
+!opensmart/backend/.env.example
 
 # Frontend dependencies and build output
 node_modules/
-OpenSMART/frontend/node_modules/
-OpenSMART/frontend/dist/
-OpenSMART/frontend/.vite/
-OpenSMART/frontend/*.tsbuildinfo
-OpenSMART/frontend/vite.config.js
-OpenSMART/frontend/vite.config.d.ts
+opensmart/frontend/node_modules/
+opensmart/frontend/dist/
+opensmart/frontend/.vite/
+opensmart/frontend/*.tsbuildinfo
+opensmart/frontend/vite.config.js
+opensmart/frontend/vite.config.d.ts
 
 # Environment files
 .env
@@ -63,25 +63,25 @@ opencode.jsonc
 /design notes
 
 # OpenSMART-Standalone builder generated runtime artifacts
-Containers/OpenSMART-Standalone/**/volumes/data/**
-!Containers/OpenSMART-Standalone/**/volumes/data/.gitkeep
-Containers/OpenSMART-Standalone/**/*.ovpn
-Containers/OpenSMART-Standalone/**/*.key
-Containers/OpenSMART-Standalone/**/*.crt
-Containers/OpenSMART-Standalone/**/*.pem
-Containers/OpenSMART-Standalone/**/*.log
-Containers/OpenSMART-Standalone/**/*.pcap
-Containers/OpenSMART-Standalone/**/*.db
-Containers/OpenSMART-Standalone/**/*.sqlite*
+containers/OpenSMART-Standalone/**/volumes/data/**
+!containers/OpenSMART-Standalone/**/volumes/data/.gitkeep
+containers/OpenSMART-Standalone/**/*.ovpn
+containers/OpenSMART-Standalone/**/*.key
+containers/OpenSMART-Standalone/**/*.crt
+containers/OpenSMART-Standalone/**/*.pem
+containers/OpenSMART-Standalone/**/*.log
+containers/OpenSMART-Standalone/**/*.pcap
+containers/OpenSMART-Standalone/**/*.db
+containers/OpenSMART-Standalone/**/*.sqlite*
 
-# Containers/run generated runtime artifacts (same convention as OpenSMART-Standalone)
-Containers/run/**/volumes/data/**
-!Containers/run/**/volumes/data/.gitkeep
-Containers/run/**/*.ovpn
-Containers/run/**/*.key
-Containers/run/**/*.crt
-Containers/run/**/*.pem
-Containers/run/**/*.log
-Containers/run/**/*.pcap
-Containers/run/**/*.db
-Containers/run/**/*.sqlite*
+# containers/run generated runtime artifacts (same convention as OpenSMART-Standalone)
+containers/run/**/volumes/data/**
+!containers/run/**/volumes/data/.gitkeep
+containers/run/**/*.ovpn
+containers/run/**/*.key
+containers/run/**/*.crt
+containers/run/**/*.pem
+containers/run/**/*.log
+containers/run/**/*.pcap
+containers/run/**/*.db
+containers/run/**/*.sqlite*

@@ -10,7 +10,7 @@ The current implementation is a working v0.3 prototype with local user managemen
 - English and Spanish UI text selection through runtime platform settings.
 - Local login backed by SQLite users and Argon2 password hashes.
 - Generated first-run `admin` password with a pause so it can be saved before the frontend starts.
-- Admin password reset flow from `OpenSMART/scripts/run_app.sh --reset-admin-password`.
+- Admin password reset flow from `opensmart/scripts/run_app.sh --reset-admin-password`.
 - HTTP-only session cookie plus CSRF token for mutating API requests.
 - Configurable failed-login lockout by username and client IP.
 - Admin-only Settings pages for Web Interface, OpenSMART Modules, Tools, Notifications, wizard placeholder, and user access.
@@ -27,13 +27,13 @@ The current implementation is a working v0.3 prototype with local user managemen
 - Logo uploads for main and footer branding stored in runtime settings.
 - Tools Config page for internal iframe URLs.
 - Bash backend hooks for operational integrations, currently represented by placeholder status scripts.
-- Beta `Containers/OpenSMART-Standalone/` bundle for future deployment-builder work.
+- Beta `containers/OpenSMART-Standalone/` bundle for future deployment-builder work.
 
 ## Stack
 
 - Backend: Python `>=3.11,<3.14` with Python `3.13` recommended, FastAPI, SQLite, Argon2.
 - Backend dependency manager: `uv` by default.
-- Backend scripts: Bash hooks under `OpenSMART/backend/app/scripts/`.
+- Backend scripts: Bash hooks under `opensmart/backend/app/scripts/`.
 - Frontend: React, TypeScript, Vite.
 - Frontend dependency manager: npm.
 
@@ -42,7 +42,7 @@ The current implementation is a working v0.3 prototype with local user managemen
 ```text
 .
 ├── opensmart.sh
-├── OpenSMART/
+├── opensmart/
 │   ├── backend/
 │   │   ├── app/
 │   │   │   ├── routes/
@@ -60,18 +60,32 @@ The current implementation is a working v0.3 prototype with local user managemen
 │   │   ├── package-lock.json
 │   │   ├── package.json
 │   │   └── vite.config.ts
-│   └── scripts/
-│       ├── run_app.sh
-│       ├── dev_backend.sh
-│       ├── dev_frontend.sh
-│       └── reset_telemetry_db.sh
-├── Containers/
-│   └── OpenSMART-Standalone/
+│   ├── scripts/
+│   │   ├── run_app.sh
+│   │   ├── dev_backend.sh
+│   │   ├── dev_frontend.sh
+│   │   └── reset_telemetry_db.sh
+│   └── demo/
+├── containers/
+│   ├── OpenSMART-Standalone/
+│   ├── build/
+│   │   └── opensmart/
+│   └── run/
+│       └── opensmart/
 ├── docs/
 ├── logs/
 ├── scripts/
 └── README.md
 ```
+
+- `containers/OpenSMART-Standalone/`: reference Docker Compose bundle for the
+  network-sensor stack, run manually and independently of `opensmart.sh`.
+- `containers/build/`: per-tool Dockerfiles used by `opensmart.sh --install`
+  (`base`, `suricata`, `zeek`, `wireguard`, `openvpn`, `opensmart`; official
+  upstream images like OpenSearch/Arkime/nginx have none).
+- `containers/run/`: one directory per tool with its own `docker-compose.yml`
+  and a bind-mounted `volumes/data/` (`opensearch`, `arkime`, `suricata`,
+  `zeek`, `wireguard`, `openvpn`, `nginx`, `opensmart`).
 
 ## Requirements
 
@@ -93,8 +107,8 @@ Install Node.js/npm from your operating system package manager or from `https://
 ./opensmart.sh start --bind 0.0.0.0:8000
 ```
 
-`opensmart.sh` is a thin wrapper around `OpenSMART/scripts/run_app.sh`; you can
-also call that script directly (`./OpenSMART/scripts/run_app.sh`). It checks
+`opensmart.sh` is a thin wrapper around `opensmart/scripts/run_app.sh`; you can
+also call that script directly (`./opensmart/scripts/run_app.sh`). It checks
 for `uv`, `node`, and `npm`, syncs backend dependencies with Python `3.13`,
 installs frontend dependencies when needed, prints a dependency summary, and
 starts both services if no errors occur.
@@ -132,7 +146,7 @@ Change the password after first login from `Configuration > Account`.
 To reset the local admin password:
 
 ```bash
-./OpenSMART/scripts/run_app.sh --reset-admin-password
+./opensmart/scripts/run_app.sh --reset-admin-password
 ```
 
 The script asks you to type `RESET`, generates a new password, prints it once, logs action metadata to `logs/opensmart.log`, and exits. Run `./opensmart.sh start --bind 0.0.0.0:8000` again to start OpenSMART.
@@ -144,7 +158,7 @@ The generated password is not written to the log.
 To reset Network IDS and Network Traffic telemetry without touching users, settings, audit history, or other application data:
 
 ```bash
-./OpenSMART/scripts/reset_telemetry_db.sh
+./opensmart/scripts/reset_telemetry_db.sh
 ```
 
 This recreates the IDS and Network Traffic SQLite databases used by the ingestion modules.
@@ -154,24 +168,24 @@ This recreates the IDS and Network Traffic SQLite databases used by the ingestio
 Backend with `uv`:
 
 ```bash
-uv sync --project OpenSMART/backend --python 3.13
-./OpenSMART/scripts/dev_backend.sh
+uv sync --project opensmart/backend --python 3.13
+./opensmart/scripts/dev_backend.sh
 ```
 
 Frontend in another terminal:
 
 ```bash
-cd OpenSMART/frontend
+cd opensmart/frontend
 npm install
 npm run dev
 ```
 
 ## Backend Compatibility Setup
 
-`uv` is the recommended backend workflow. `OpenSMART/backend/requirements.txt` is kept as a compatibility fallback:
+`uv` is the recommended backend workflow. `opensmart/backend/requirements.txt` is kept as a compatibility fallback:
 
 ```bash
-cd OpenSMART
+cd opensmart
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r backend/requirements.txt
@@ -234,21 +248,21 @@ Status indicators are derived automatically:
 - `warning`: tool is enabled but missing its internal URL.
 - `enabled`: item is enabled and minimally configured.
 
-Environment defaults are documented in `OpenSMART/backend/.env.example` and `docs/configuration.md`.
+Environment defaults are documented in `opensmart/backend/.env.example` and `docs/configuration.md`.
 
 Runtime SQLite files are separated by purpose:
 
-- `OpenSMART/backend/opensmart.db`: users, sessions, settings, audit events, catalog records, and resource snapshots.
-- `OpenSMART/backend/opensmart_network_ids.db`: Network IDS ingestion state, alerts, artifacts, FTS data, and tracking state.
-- `OpenSMART/backend/opensmart_network_traffic.db`: Network Traffic ingestion state and network events.
-- `OpenSMART/backend/opensmart_telemetry.db`: legacy compatibility telemetry database.
+- `opensmart/backend/opensmart.db`: users, sessions, settings, audit events, catalog records, and resource snapshots.
+- `opensmart/backend/opensmart_network_ids.db`: Network IDS ingestion state, alerts, artifacts, FTS data, and tracking state.
+- `opensmart/backend/opensmart_network_traffic.db`: Network Traffic ingestion state and network events.
+- `opensmart/backend/opensmart_telemetry.db`: legacy compatibility telemetry database.
 
 ## Verification
 
 Backend checks:
 
 ```bash
-cd OpenSMART
+cd opensmart
 uv run --project backend python -m compileall backend/app
 uv run --project backend python -c "import backend.app.admin_tools; import backend.app.main; print('backend imports ok')"
 ```
@@ -256,13 +270,13 @@ uv run --project backend python -c "import backend.app.admin_tools; import backe
 Shell checks:
 
 ```bash
-bash -n opensmart.sh OpenSMART/scripts/run_app.sh OpenSMART/scripts/dev_backend.sh OpenSMART/scripts/dev_frontend.sh
+bash -n opensmart.sh opensmart/scripts/run_app.sh opensmart/scripts/dev_backend.sh opensmart/scripts/dev_frontend.sh
 ```
 
 Frontend checks, when Node.js/npm are installed:
 
 ```bash
-cd OpenSMART/frontend
+cd opensmart/frontend
 npm install
 npm run build
 ```
@@ -278,7 +292,7 @@ npm run build
 ## Known Prototype Limitations
 
 - Several OpenSMART module pages remain placeholder content outside Network IDS and Network Traffic Monitoring.
-- Tool and summary icons are local generated SVG assets under `OpenSMART/frontend/public/assets/`.
-- Status data is placeholder JSON from `OpenSMART/backend/app/scripts/module_status.sh`.
+- Tool and summary icons are local generated SVG assets under `opensmart/frontend/public/assets/`.
+- Status data is placeholder JSON from `opensmart/backend/app/scripts/module_status.sh`.
 - There are no automated tests yet beyond syntax/import/build checks.
-- Frontend dependency versions currently use broad ranges; keep `OpenSMART/frontend/package-lock.json` tracked for reproducible frontend installs.
+- Frontend dependency versions currently use broad ranges; keep `opensmart/frontend/package-lock.json` tracked for reproducible frontend installs.

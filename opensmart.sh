@@ -63,9 +63,9 @@ cmd_start() {
   fi
 
   if [[ "$prod" -eq 1 ]]; then
-    exec "$ROOT_DIR/OpenSMART/scripts/run_app.sh" --host "$host" --port "$port" --prod
+    exec "$ROOT_DIR/opensmart/scripts/run_app.sh" --host "$host" --port "$port" --prod
   else
-    exec "$ROOT_DIR/OpenSMART/scripts/run_app.sh" --host "$host" --port "$port"
+    exec "$ROOT_DIR/opensmart/scripts/run_app.sh" --host "$host" --port "$port"
   fi
 }
 
@@ -136,7 +136,7 @@ _install_create_network() {
 
 _install_build_image() {
   printf 'Building %s image...\n' "$IMAGE_NAME"
-  if ! docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/Containers/build/opensmart/Dockerfile" "$ROOT_DIR"; then
+  if ! docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/containers/build/opensmart/Dockerfile" "$ROOT_DIR"; then
     printf 'Failed to build the %s image.\n' "$IMAGE_NAME" >&2
     exit 1
   fi
@@ -155,7 +155,7 @@ _install_fix_ownership() {
 
 _install_run_container() {
   printf 'Starting the %s container...\n' "$CONTAINER_NAME"
-  if ! (cd "$ROOT_DIR/Containers/run/opensmart" && docker compose up -d); then
+  if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose up -d); then
     printf 'Failed to start the %s container.\n' "$CONTAINER_NAME" >&2
     exit 1
   fi
