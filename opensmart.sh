@@ -142,6 +142,17 @@ _install_build_image() {
   fi
 }
 
+_install_fix_ownership() {
+  # The whole repo is bind-mounted into the container, which runs as the
+  # non-root "opensmart" user (uid 1000). If the host checkout is owned by
+  # root (e.g. a root-run git clone), that user can't create backend/.venv,
+  # frontend/node_modules, frontend/dist, the SQLite DBs, or write logs.
+  # Same fix pattern already used by OpenSMART-Standalone/deploy.sh for its
+  # bind-mounted volumes.
+  printf 'Setting ownership of the app directory to uid 1000 (container user)...\n'
+  chown -R 1000:1000 "$ROOT_DIR"
+}
+
 _install_run_container() {
   printf 'Starting the %s container...\n' "$CONTAINER_NAME"
   if ! (cd "$ROOT_DIR/Containers/run/opensmart" && docker compose up -d); then
@@ -151,11 +162,22 @@ _install_run_container() {
 }
 
 _install_wait_running() {
-  local attempt
+  local attempt restarts_before restarts_after
   for attempt in $(seq 1 30); do
     if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" ]]; then
-      printf 'Container "%s" is running.\n' "$CONTAINER_NAME"
-      return 0
+      # A crash-looping container (restart: always) can appear "running" for
+      # a brief window between crashes. Confirm it stays up and its restart
+      # count doesn't tick over before declaring success.
+      restarts_before="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
+      sleep 5
+      restarts_after="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
+      if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" && "$restarts_after" == "$restarts_before" ]]; then
+        printf 'Container "%s" is running.\n' "$CONTAINER_NAME"
+        return 0
+      fi
+      printf 'Container "%s" is stuck in a restart loop.\n' "$CONTAINER_NAME" >&2
+      printf 'Check logs with: docker logs %s\n' "$CONTAINER_NAME" >&2
+      exit 1
     fi
     sleep 1
   done
@@ -192,6 +214,7 @@ cmd_install() {
   _install_docker_engine
   _install_create_network
   _install_build_image
+  _install_fix_ownership
   _install_run_container
   _install_wait_running
   _install_show_password
