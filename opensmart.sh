@@ -106,7 +106,7 @@ cmd_start() {
 # app inside is still starting up, crashed, or not yet reachable.
 
 _container_exists() {
-  docker inspect "$CONTAINER_NAME" >/dev/null 2>&1
+  docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1
 }
 
 _container_host_port() {
@@ -138,13 +138,13 @@ cmd_status() {
   fi
 
   local state restarts
-  state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
-  restarts="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER_NAME")"
+  state="$(docker container inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
+  restarts="$(docker container inspect -f '{{.RestartCount}}' "$CONTAINER_NAME")"
   printf 'Container   : %s (restarts: %s)\n' "$state" "$restarts"
 
   case "$state" in
     running)
-      printf 'Started     : %s\n' "$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER_NAME")"
+      printf 'Started     : %s\n' "$(docker container inspect -f '{{.State.StartedAt}}' "$CONTAINER_NAME")"
       local health port
       health="$(_app_health)"
       port="$(_container_host_port)"
@@ -175,7 +175,7 @@ cmd_stop() {
   fi
 
   local state
-  state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
+  state="$(docker container inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
   if [[ "$state" != "running" && "$state" != "restarting" ]]; then
     printf 'OpenSMART container is already %s.\n' "$state"
     exit 0
@@ -314,14 +314,14 @@ _install_wait_running() {
   _step "Waiting for the container to stabilize"
   local attempt restarts_before restarts_after
   for attempt in $(seq 1 30); do
-    if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" ]]; then
+    if [[ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" ]]; then
       # A crash-looping container (restart: always) can appear "running" for
       # a brief window between crashes. Confirm it stays up and its restart
       # count doesn't tick over before declaring success.
-      restarts_before="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
+      restarts_before="$(docker container inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
       sleep 5
-      restarts_after="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
-      if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" && "$restarts_after" == "$restarts_before" ]]; then
+      restarts_after="$(docker container inspect -f '{{.RestartCount}}' "$CONTAINER_NAME" 2>/dev/null || echo 0)"
+      if [[ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" && "$restarts_after" == "$restarts_before" ]]; then
         printf 'stable\n'
         return 0
       fi
