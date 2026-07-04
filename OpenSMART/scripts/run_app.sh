@@ -13,6 +13,8 @@ FULL_RESET=0
 RUN_HEALTH=0
 BACKEND_LOG=""
 BACKEND_PYTHON="3.13"
+BIND_HOST="0.0.0.0"
+BIND_PORT="8000"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 APP_VERSION="${OPENSMART_VERSION:-v0.2 beta}"
 DB_PATH="${ROOT_DIR}/backend/opensmart.db"
@@ -39,6 +41,8 @@ usage() {
 Usage: ./scripts/run_app.sh [option]
 
 Options:
+  --host HOST             Address for the backend to bind to (default: 0.0.0.0).
+  --port PORT             Port for the backend to bind to (default: 8000).
   --reset-admin-password  Reset the admin password and print it. Does not start the app.
   --reset-data-all        Delete all IDS and network traffic data; keep config and users. Does not start the app.
   --reset-data-ids        Delete only IDS alert data; preserve network traffic data. Does not start the app.
@@ -325,9 +329,9 @@ run_health_checks() {
   if [[ "$mode" == "full" ]]; then
     if command -v curl >/dev/null 2>&1; then
       local _health_resp
-      _health_resp="$(curl -sf --max-time 3 http://localhost:8000/api/health 2>/dev/null || true)"
+      _health_resp="$(curl -sf --max-time 3 "http://localhost:${BIND_PORT}/api/health" 2>/dev/null || true)"
       if [[ "$_health_resp" == *'"ok":true'* ]]; then
-        _hcheck "Backend HTTP /api/health" ok "http://localhost:8000" 0
+        _hcheck "Backend HTTP /api/health" ok "http://localhost:${BIND_PORT}" 0
       else
         _hcheck "Backend HTTP /api/health" fail "not reachable (start the app first, or ignore if checking offline)" 0
       fi
@@ -458,32 +462,46 @@ cd "$ROOT_DIR"
 print_banner
 _log INFO "run_app.sh started: args=${*:-none}"
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host)
+      BIND_HOST="${2:?--host requires a value}"
+      shift 2
+      ;;
+    --port)
+      BIND_PORT="${2:?--port requires a value}"
+      shift 2
+      ;;
     --reset-admin-password)
       RESET_ADMIN_PASSWORD=1
+      shift
       ;;
     --reset-data-all)
       RESET_DATA_ALL=1
+      shift
       ;;
     --reset-data-ids)
       RESET_DATA_IDS=1
+      shift
       ;;
     --reset-data-network)
       RESET_DATA_NETWORK=1
+      shift
       ;;
     --reset-all)
       FULL_RESET=1
+      shift
       ;;
     --health)
       RUN_HEALTH=1
+      shift
       ;;
     --help|-h)
       usage
       exit 0
       ;;
     *)
-      printf 'Unknown option: %s\n' "$arg" >&2
+      printf 'Unknown option: %s\n' "$1" >&2
       usage >&2
       exit 1
       ;;
@@ -734,7 +752,7 @@ else
   printf '\nDependencies are ready. Starting OpenSMART...\n'
 fi
 
-printf 'Backend:  http://localhost:8000\n'
+printf 'Backend:  http://%s:%s\n' "$BIND_HOST" "$BIND_PORT"
 printf 'Frontend: http://localhost:5173\n\n'
 
 BACKEND_LOG="$(mktemp -t opensmart-backend.XXXXXX.log)"
@@ -744,8 +762,8 @@ FIRST_RUN_EXPECTED=0
 if admin_account_missing; then
   FIRST_RUN_EXPECTED=1
 fi
-_log INFO "backend starting: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload"
-uv run --project backend --python "$BACKEND_PYTHON" uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload > >(tee "$BACKEND_LOG") 2> >(tee -a "$BACKEND_LOG" >&2) &
+_log INFO "backend starting: uvicorn backend.app.main:app --host ${BIND_HOST} --port ${BIND_PORT} --reload"
+uv run --project backend --python "$BACKEND_PYTHON" uvicorn backend.app.main:app --host "$BIND_HOST" --port "$BIND_PORT" --reload > >(tee "$BACKEND_LOG") 2> >(tee -a "$BACKEND_LOG" >&2) &
 BACKEND_PID=$!
 
 sleep 2

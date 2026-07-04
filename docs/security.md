@@ -11,14 +11,14 @@ This project includes basic local security controls suitable for a prototype. Re
 
 ## First-Run Admin
 
-When no admin exists, backend startup creates username `admin` with a generated password. `scripts/run_app.sh` pauses after this password is printed so the operator can save it before the frontend starts.
+When no admin exists, backend startup creates username `admin` with a generated password. `OpenSMART/scripts/run_app.sh` (invoked via `opensmart.sh start`) pauses after this password is printed so the operator can save it before the frontend starts.
 
 ## Admin Password Reset
 
 Run:
 
 ```bash
-./scripts/run_app.sh --reset-admin-password
+./OpenSMART/scripts/run_app.sh --reset-admin-password
 ```
 
 The script requires typing `RESET`. A successful reset:

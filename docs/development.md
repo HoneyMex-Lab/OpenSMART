@@ -5,6 +5,7 @@
 Use `uv`:
 
 ```bash
+cd OpenSMART
 uv sync --project backend --python 3.13
 uv run --project backend --python 3.13 uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
@@ -14,13 +15,13 @@ The backend supports Python `>=3.11,<3.14`. Python `3.13` is recommended; Python
 Or use the helper script:
 
 ```bash
-./scripts/dev_backend.sh
+./OpenSMART/scripts/dev_backend.sh
 ```
 
 ## Frontend Workflow
 
 ```bash
-cd frontend
+cd OpenSMART/frontend
 npm install
 npm run dev
 ```
@@ -28,20 +29,21 @@ npm run dev
 Or use:
 
 ```bash
-./scripts/dev_frontend.sh
+./OpenSMART/scripts/dev_frontend.sh
 ```
 
 ## Combined App Runner
 
 ```bash
-./scripts/run_app.sh
+./opensmart.sh start --bind 0.0.0.0:8000
 ```
 
-Options:
+This wraps `OpenSMART/scripts/run_app.sh`, which can also be called directly.
+Options (on `run_app.sh` — not exposed through `opensmart.sh` yet):
 
 ```bash
-./scripts/run_app.sh --help
-./scripts/run_app.sh --reset-admin-password
+./OpenSMART/scripts/run_app.sh --help
+./OpenSMART/scripts/run_app.sh --reset-admin-password
 ```
 
 ## Verification Commands
@@ -49,6 +51,7 @@ Options:
 Backend:
 
 ```bash
+cd OpenSMART
 uv run --project backend --python 3.13 python -m compileall backend/app
 uv run --project backend --python 3.13 python -c "import backend.app.admin_tools; import backend.app.main; print('backend imports ok')"
 ```
@@ -56,19 +59,19 @@ uv run --project backend --python 3.13 python -c "import backend.app.admin_tools
 Shell scripts:
 
 ```bash
-bash -n scripts/run_app.sh scripts/dev_backend.sh scripts/dev_frontend.sh
+bash -n opensmart.sh OpenSMART/scripts/run_app.sh OpenSMART/scripts/dev_backend.sh OpenSMART/scripts/dev_frontend.sh
 ```
 
 Frontend, when Node.js/npm are installed:
 
 ```bash
-cd frontend
+cd OpenSMART/frontend
 npm run build
 ```
 
 ## Adding Backend Routes
 
-Add route modules under `backend/app/routes/` and include them from `backend/app/main.py`.
+Add route modules under `OpenSMART/backend/app/routes/` and include them from `OpenSMART/backend/app/main.py`.
 
 Use these dependency rules:
 
@@ -78,7 +81,7 @@ Use these dependency rules:
 
 ## Adding Shell Hooks
 
-Place scripts in `backend/app/scripts/` and call them with `run_script()` from `backend/app/shell.py`.
+Place scripts in `OpenSMART/backend/app/scripts/` and call them with `run_script()` from `OpenSMART/backend/app/shell.py`.
 
 Rules:
 
@@ -90,17 +93,17 @@ Rules:
 
 ## Frontend Notes
 
-- API calls are centralized in `frontend/src/api.ts`.
-- Shared types live in `frontend/src/types.ts`.
-- Admin-only navigation is filtered in `frontend/src/components/Sidebar.tsx`.
-- Responsive behavior is controlled in `frontend/src/styles.css`.
-- Static generated SVG assets live under `frontend/public/assets/`.
+- API calls are centralized in `OpenSMART/frontend/src/api.ts`.
+- Shared types live in `OpenSMART/frontend/src/types.ts`.
+- Admin-only navigation is filtered in `OpenSMART/frontend/src/components/Sidebar.tsx`.
+- Responsive behavior is controlled in `OpenSMART/frontend/src/styles.css`.
+- Static generated SVG assets live under `OpenSMART/frontend/public/assets/`.
 - Tools iframe URLs and tool enablement/config are configured through `ToolsConfigPage.tsx`.
 - OpenSMART module enablement/config is configured through `OpenSmartConfigPage.tsx`.
 - Audit UI is implemented in `AuditPage.tsx` and backed by `/api/audit`.
 
 ## Dependency Notes
 
-`backend/requirements.txt` is maintained as a compatibility fallback, but `backend/pyproject.toml` and `uv` are the default backend dependency source.
+`OpenSMART/backend/requirements.txt` is maintained as a compatibility fallback, but `OpenSMART/backend/pyproject.toml` and `uv` are the default backend dependency source.
 
 Frontend `package.json` currently uses `latest` dependency ranges. For reproducible frontend installs, run `npm install` and commit the generated lockfile.

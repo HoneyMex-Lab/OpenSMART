@@ -11,23 +11,23 @@ htmlcov/
 # Virtual environments
 .venv/
 venv/
-backend/.venv/
+OpenSMART/backend/.venv/
 
 # Backend runtime data
-backend/*.db
-backend/*.db-*
-backend/.env
-backend/.env.*
-!backend/.env.example
+OpenSMART/backend/*.db
+OpenSMART/backend/*.db-*
+OpenSMART/backend/.env
+OpenSMART/backend/.env.*
+!OpenSMART/backend/.env.example
 
 # Frontend dependencies and build output
 node_modules/
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/*.tsbuildinfo
-frontend/vite.config.js
-frontend/vite.config.d.ts
+OpenSMART/frontend/node_modules/
+OpenSMART/frontend/dist/
+OpenSMART/frontend/.vite/
+OpenSMART/frontend/*.tsbuildinfo
+OpenSMART/frontend/vite.config.js
+OpenSMART/frontend/vite.config.d.ts
 
 # Environment files
 .env
@@ -58,14 +58,14 @@ opencode.json
 opencode.jsonc
 design notes
 
-# OpenSMART builder generated runtime artifacts
-opensmart-builder/**/volumes/data/**
-!opensmart-builder/**/volumes/data/.gitkeep
-opensmart-builder/**/*.ovpn
-opensmart-builder/**/*.key
-opensmart-builder/**/*.crt
-opensmart-builder/**/*.pem
-opensmart-builder/**/*.log
-opensmart-builder/**/*.pcap
-opensmart-builder/**/*.db
-opensmart-builder/**/*.sqlite*
+# OpenSMART-Standalone builder generated runtime artifacts
+Containers/OpenSMART-Standalone/**/volumes/data/**
+!Containers/OpenSMART-Standalone/**/volumes/data/.gitkeep
+Containers/OpenSMART-Standalone/**/*.ovpn
+Containers/OpenSMART-Standalone/**/*.key
+Containers/OpenSMART-Standalone/**/*.crt
+Containers/OpenSMART-Standalone/**/*.pem
+Containers/OpenSMART-Standalone/**/*.log
+Containers/OpenSMART-Standalone/**/*.pcap
+Containers/OpenSMART-Standalone/**/*.db
+Containers/OpenSMART-Standalone/**/*.sqlite*
