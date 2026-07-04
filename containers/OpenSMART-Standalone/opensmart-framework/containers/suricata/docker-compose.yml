@@ -1,0 +1,13 @@
+services:
+  suricata:
+    image: opensmart/suricata
+    container_name: opensmart-suricata
+    hostname: suricata
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    volumes:
+      - ./volumes/data:/data
+    restart: unless-stopped

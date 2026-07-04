@@ -1,0 +1,29 @@
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    container_name: opensmart-opensearch
+    hostname: opensearch
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=false
+      - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g"
+      - path.data=/data
+      - http.compression=false
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./volumes/data:/data
+    ports:
+      - "9200:9200"
+    networks:
+      - opensmart
+    restart: unless-stopped
+
+networks:
+  opensmart:
+    external: true
+    name: opensmart

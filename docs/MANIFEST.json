@@ -1,0 +1,255 @@
+{
+  "project": {
+    "name": "OpenSMART",
+    "slug": "opensmart",
+    "tagline": "Prototype open source security operations framework",
+    "version": "v0.3 beta",
+    "repository": "HoneyMex-Lab/OpenSMART-Framework",
+    "license_file": "LICENSE",
+    "status": "prototype",
+    "audience": ["developers", "coding-agents", "operators"]
+  },
+
+  "stack": {
+    "backend": {
+      "language": "Python",
+      "python_version_range": ">=3.11,<3.14",
+      "python_version_recommended": "3.13",
+      "framework": "FastAPI",
+      "dependency_manager": "uv",
+      "key_dependencies": {
+        "fastapi": "0.115.6",
+        "uvicorn[standard]": "0.34.0",
+        "argon2-cffi": "23.1.0",
+        "pydantic": "2.11.7",
+        "psutil": ">=5.9",
+        "maxminddb": ">=2.6"
+      },
+      "compatibility_fallback": "opensmart/backend/requirements.txt (pip venv, no uv)"
+    },
+    "frontend": {
+      "language": "TypeScript",
+      "framework": "React",
+      "build_tool": "Vite",
+      "dependency_manager": "npm",
+      "dependency_range_policy": "package.json uses 'latest' ranges; package-lock.json is tracked for reproducible installs"
+    },
+    "database": "SQLite (four separate runtime DB files, see configuration.env_vars)",
+    "shell_hooks": "Bash, executed via subprocess.run([...], shell=False) only — never shell=True"
+  },
+
+  "layout": {
+    "opensmart.sh": "Root entrypoint script (start / install).",
+    "opensmart/": {
+      "description": "The whole application. Renamed from OpenSMART/ to opensmart/ on 2026-07-04 (all-lowercase convention).",
+      "backend/": "FastAPI app (opensmart/backend/app/), pyproject.toml, uv.lock, requirements.txt fallback.",
+      "frontend/": "React + Vite app (opensmart/frontend/src/), package.json, package-lock.json.",
+      "scripts/": "App launcher scripts: run_app.sh, dev_backend.sh, dev_frontend.sh, reset_telemetry_db.sh.",
+      "demo/": "Sample dashboard-seeding JSON, manually copy-pasted into Settings; not auto-imported."
+    },
+    "containers/": {
+      "description": "Docker deployment tooling. Renamed from Containers/ to containers/ on 2026-07-04.",
+      "OpenSMART-Standalone/": "Reference Docker Compose bundle (network-sensor stack: Suricata, Zeek, Arkime, OpenSearch, WireGuard, OpenVPN, nginx). Standalone reference tool, run manually via its own deploy.sh, independent of opensmart.sh. Keeps its original mixed-case directory name.",
+      "build/": "Per-tool Dockerfiles used by 'opensmart.sh install': base, suricata, zeek, wireguard, openvpn, opensmart. Official upstream images (OpenSearch, Arkime, nginx) have no local Dockerfile.",
+      "run/": "Per-tool docker-compose.yml + bind-mounted volumes/data/ (never named Docker volumes): opensearch, arkime, suricata, zeek, wireguard, openvpn, nginx, opensmart."
+    },
+    "docs/": "Human-readable documentation (this directory) plus this MANIFEST.json.",
+    "scripts/": "Repo-root complementary scripts not tied to the app or the container builders (currently: opensmart-eve-collector.service, a systemd unit template).",
+    "logs/": "Centralized runtime log directory (gitignored contents, tracked .gitkeep).",
+    "local_only_not_tracked": {
+      "description": "Present on disk for coding-agent sessions but gitignored — will not appear in a fresh clone.",
+      "paths": ["agent guidance file", "agent guidance file", "design notes"]
+    }
+  },
+
+  "entrypoint": {
+    "script": "opensmart.sh",
+    "commands": {
+      "start": {
+        "usage": "./opensmart.sh start [--bind ADDRESS:PORT] [--prod]",
+        "container_exists_behavior": "--bind/--prod are ignored (printed note explains why). Starts the container if not already running (docker compose start), then runs the shared integrity check (see integrity_check below).",
+        "no_container_behavior": "Runs opensmart/scripts/run_app.sh start --host ADDRESS --port PORT [--prod] directly on the host. --bind defaults to 0.0.0.0:8000 when omitted.",
+        "dev_mode": "Runs uvicorn (--reload) on the given bind address/port plus the Vite dev server on :5173. Blocks on Enter to reveal the first-run admin password.",
+        "prod_mode": "Builds the frontend once (npm run build) instead of starting the Vite dev server, serves it from FastAPI via a StaticFiles mount, and skips the interactive password-reveal prompt (prints it non-interactively). This is the mode the container entrypoint uses."
+      },
+      "restart": {
+        "usage": "./opensmart.sh restart",
+        "action": "docker compose restart in containers/run/opensmart/, then the shared integrity check. Errors clearly if no container exists yet."
+      },
+      "recreate": {
+        "usage": "./opensmart.sh recreate",
+        "action": "Prompts for confirmation (must type RECREATE) if a container already exists, then docker compose rm -f -s (container only, not the image/network/bind-mounted app data) followed by docker compose up -d, then the shared integrity check. Skips the confirmation if no container exists yet."
+      },
+      "integrity_check": {
+        "description": "Shared by start's container path, restart, and recreate.",
+        "steps": [
+          "Wait for the container to reach a stable running state (same crash-loop-tolerant stability check install uses)",
+          "Poll /api/health on the container's published port (resolved via docker port, not assumed) for up to 5 minutes — a cold start needs to uv sync/npm install/npm run build inside the container first"
+        ]
+      },
+      "install": {
+        "usage": "sudo ./opensmart.sh install",
+        "requires": "root, Debian or Ubuntu (apt-based) only",
+        "steps": [
+          "Install Docker Engine + Compose plugin if not already present",
+          "Create the external 'opensmart' bridge network (172.250.250.0/24) idempotently",
+          "docker build -t opensmart/web -f containers/build/opensmart/Dockerfile .",
+          "chown -R 1000:1000 the whole repo (container runs as non-root uid 1000; a root-owned checkout otherwise breaks .venv/node_modules/DB creation)",
+          "docker compose up -d in containers/run/opensmart/ (command: ./opensmart.sh start --bind 0.0.0.0:8000 --prod)",
+          "Poll for a stable running container (not just a brief window between crash-loop restarts)",
+          "Poll container logs for the first-run admin password and print it on the host"
+        ],
+        "verification_status": "Verified against a real Docker Engine on a Debian 13 reference host on 2026-07-04. Two bugs found and fixed during that verification: bind-mount ownership (crash loop) and an install-time password-reveal timeout too short for a cold install.",
+        "output": {
+          "terminal": "One line per main step (9 total: root check, distro detection, Docker Engine install, network creation, image build, ownership fix, container start, stability check, readiness/password wait), preceded by a banner (ASCII honeycomb logo, Mizton Labs & Honeynet Mexico Team attribution). Raw command output (apt-get, docker build, docker compose) is not printed to the terminal.",
+          "log_file": "logs/install.log — created fresh on every run, holds full timestamped step markers plus all redirected command output. On failure, the terminal step line is closed with 'failed' and points at this log."
+        }
+      },
+      "stop": {
+        "usage": "./opensmart.sh stop",
+        "action": "docker compose stop in containers/run/opensmart/ — stops the container without removing it (docker compose start brings it back). No-op with a clear message if the container doesn't exist or is already stopped."
+      },
+      "status": {
+        "usage": "./opensmart.sh status",
+        "reports": [
+          "Container state via docker inspect: State.Status (running/restarting/exited/...) and RestartCount",
+          "Application health, only checked when the container is running: curl against http://localhost:<published-port>/api/health, port resolved via docker port rather than assumed — distinguishes a running-but-unreachable container (still starting or crashed) from a genuinely healthy one"
+        ]
+      },
+      "version": {
+        "usage": "./opensmart.sh version (aliases: --version, -v)",
+        "output": "OpenSMART <major version> (commit <short git sha>) — major version is the hardcoded VERSION_MAJOR constant near the top of opensmart.sh (currently v0.3, no 'beta' suffix — distinct from the 'v0.3 beta' identifier used elsewhere, e.g. config.py's APP_VERSION default and the README title), commit is `git rev-parse --short HEAD` resolved from ROOT_DIR (falls back to 'unknown' outside a git checkout)."
+      },
+      "reset_and_health": {
+        "usage": "./opensmart.sh <reset-admin-password|reset-data-all|reset-data-ids|reset-data-network|reset-all|health>",
+        "action": "Forwards to opensmart/scripts/run_app.sh's own subcommand of the same name — inside the 'opensmart' container (docker exec) if one exists, or directly on the host otherwise. Always passes -i; adds -t too, but only when opensmart.sh's own stdin is a real terminal ([[ -t 0 ]]). Also passes RUN_APP_INVOKE_AS=./opensmart.sh via `docker exec -e` (host-mode invocations inherit it as an exported shell variable instead) so run_app.sh's own 'Run ... to do X' messages say './opensmart.sh' instead of naming itself.",
+        "fixed_2026-07-04": "bash's `read -p` only prints a prompt when stdin is an actual tty. docker exec -i (no -t) keeps stdin open for input but allocates no pseudo-TTY, so the reset-* confirmation prompt was silently invisible (though still functionally read) when going through the container — this is what the conditional -t fixes. A second issue fixed at the same time: run_app.sh's post-action messages (e.g. 'Run ./scripts/run_app.sh start to start OpenSMART.') always named itself even when invoked through the opensmart.sh wrapper, which was confusing since that path doesn't exist as a user-facing command of opensmart.sh — RUN_APP_INVOKE_AS makes these messages reference whichever entrypoint was actually used."
+      }
+    },
+    "image": {
+      "name": "opensmart/web",
+      "dockerfile": "containers/build/opensmart/Dockerfile",
+      "base": "debian:13",
+      "hardening": "No baked-in password and no sudo for the 'opensmart' Linux user — docker exec doesn't require a Linux password, and nothing in 'start --prod' needs root.",
+      "mount": "Whole repo bind-mounted at /opt/opensmart (not copied into the image), so container behavior reflects live host source."
+    }
+  },
+
+  "app_script": {
+    "script": "opensmart/scripts/run_app.sh",
+    "description": "The actual host-process launcher — what opensmart.sh's non-container path (and the container's own entrypoint, via opensmart.sh start --prod) delegates to. Has its own consistent subcommand CLI, mirroring opensmart.sh's: start, stop, status, restart, reset-admin-password, reset-data-all, reset-data-ids, reset-data-network, reset-all, health. No default command — a bare invocation with no subcommand now errors with usage, matching opensmart.sh's own behavior (this used to implicitly mean 'start'; that implicit default was removed for consistency).",
+    "commands": {
+      "start": "start [--host H] [--port P] [--prod] — same behavior as before (dev servers or single --prod process), now also writes logs/run_app.state (PID/HOST/PORT/PROD) once the backend is confirmed alive.",
+      "stop": "Reads logs/run_app.state; if the recorded PID is alive, SIGTERM (SIGKILL after a 15s grace period), then removes the state file. No-op with a message if nothing is running.",
+      "status": "Reads logs/run_app.state; if the recorded PID is alive, reports it plus curl's /api/health on the recorded host:port. Reports 'not running' otherwise.",
+      "restart": "Reuses the previous --host/--port/--prod from logs/run_app.state unless explicitly overridden on the command line, stops the existing instance, then falls through into the same code path as start.",
+      "reset_and_health": "reset-admin-password / reset-data-all / reset-data-ids / reset-data-network / reset-all / health — unchanged behavior from before, just renamed from --flag form to subcommand form (e.g. --reset-admin-password -> reset-admin-password)."
+    },
+    "invoke_as_self_reference": "RUN_APP_INVOKE_AS (env var, defaults to './opensmart/scripts/run_app.sh') controls how run_app.sh refers to itself in messages like 'Run <X> start to start OpenSMART.' and 'Run <X> health for a full diagnostic report.'. opensmart.sh exports it as './opensmart.sh' before invoking run_app.sh (host mode) and passes it via `docker exec -e` (container mode), so these messages point at whichever entrypoint the operator actually used instead of always naming run_app.sh.",
+    "state_file": "logs/run_app.state (relative to the app dir, i.e. opensmart/logs/run_app.state) — plain KEY=VALUE lines (PID, HOST, PORT, PROD). Read via a small grep/cut helper, not `source`, to avoid executing file content.",
+    "known_bug_fixed_2026-07-04": "cleanup() (the EXIT/INT/TERM trap) used to unconditionally rm the state file on every invocation's exit, including read-only status/stop/health calls from a SEPARATE process — so running `status` while a different instance was live would wipe that instance's state file, making the next status/stop/restart call incorrectly report 'not running'. Fixed by only touching the state file when BACKEND_PID is set (i.e. only the invocation that actually started a backend owns and cleans up the file). Verified with a full start -> status (x2) -> restart -> stop cycle against a real running instance."
+  },
+
+  "dev_commands": {
+    "combined_runner": "./opensmart.sh start --bind 0.0.0.0:8000",
+    "backend_sync": "cd opensmart && uv sync --project backend --python 3.13",
+    "backend_dev": "./opensmart/scripts/dev_backend.sh",
+    "frontend_install_dev": "cd opensmart/frontend && npm install && npm run dev",
+    "backend_import_check": "cd opensmart && uv run --project backend --python 3.13 python -c \"import backend.app.admin_tools; import backend.app.main; print('backend imports ok')\"",
+    "shell_syntax_check": "bash -n opensmart.sh opensmart/scripts/run_app.sh opensmart/scripts/dev_backend.sh opensmart/scripts/dev_frontend.sh",
+    "frontend_build": "cd opensmart/frontend && npm run build",
+    "reset_admin_password": "./opensmart/scripts/run_app.sh reset-admin-password",
+    "reset_telemetry_db": "./opensmart/scripts/reset_telemetry_db.sh",
+    "known_gotcha": "opensmart/backend/.venv's console-script shebangs (uvicorn, etc.) are absolute paths. Any time the app directory is renamed or moved, delete and resync: rm -rf opensmart/backend/.venv && cd opensmart && uv sync --project backend --python 3.13. A bare 'python -c ...' import check still works on a stale venv — only console-script entry points break — so it is not a reliable health check by itself."
+  },
+
+  "api": {
+    "base_url": "http://localhost:8000",
+    "dev_proxy": "Vite proxies /api to base_url during frontend development (opensmart/frontend/vite.config.ts)",
+    "auth_model": {
+      "session": "Server-side session, HTTP-only 'opensmart_session' cookie, SameSite=Lax",
+      "csrf": "'opensmart_csrf' cookie + X-CSRF-Token header required on mutating requests; token also returned by GET /api/auth/me",
+      "roles": ["user", "admin"]
+    },
+    "routers": [
+      {"file": "opensmart/backend/app/main.py", "prefix": null, "endpoints": ["GET /api/health"]},
+      {"file": "opensmart/backend/app/routes/auth.py", "prefix": "/api/auth", "endpoints": ["POST /api/auth/login", "GET /api/auth/me", "POST /api/auth/logout"]},
+      {"file": "opensmart/backend/app/routes/account.py", "prefix": "/api/account", "endpoints": ["POST /api/account/password", "PUT /api/account/profile", "GET /api/account/sessions", "DELETE /api/account/sessions/others"]},
+      {"file": "opensmart/backend/app/routes/settings.py", "prefix": "/api/settings", "endpoints": ["GET /api/settings", "PUT /api/settings", "GET /api/settings/public"]},
+      {"file": "opensmart/backend/app/routes/modules.py", "prefix": "/api/modules", "endpoints": ["GET /api/modules", "PUT /api/modules"], "note": "legacy compatibility endpoint"},
+      {"file": "opensmart/backend/app/routes/tools.py", "prefix": "/api/tools", "endpoints": ["GET /api/tools", "PUT /api/tools"]},
+      {"file": "opensmart/backend/app/routes/opensmart_modules.py", "prefix": "/api/opensmart-modules", "endpoints": ["GET /api/opensmart-modules", "PUT /api/opensmart-modules"]},
+      {"file": "opensmart/backend/app/routes/network_ids.py", "prefix": "/api/network-ids", "endpoints": ["GET /api/network-ids/config", "GET /api/network-ids/status", "GET /api/network-ids/summary", "POST /api/network-ids/summary/cancel", "GET /api/network-ids/alerts", "POST /api/network-ids/alerts/cancel", "GET /api/network-ids/details", "POST /api/network-ids/details/cancel", "GET /api/network-ids/attack-map", "POST /api/network-ids/tracking/ack", "POST /api/network-ids/tracking/ack-critical"]},
+      {"file": "opensmart/backend/app/routes/network_traffic.py", "prefix": "/api/network-traffic", "endpoints": ["GET /api/network-traffic/config", "GET /api/network-traffic/summary", "POST /api/network-traffic/summary/cancel", "GET /api/network-traffic/details", "POST /api/network-traffic/details/cancel"]},
+      {"file": "opensmart/backend/app/routes/status.py", "prefix": "/api/status", "endpoints": ["GET /api/status", "GET /api/status/resources", "GET /api/status/resources/history", "GET /api/status/schema-check", "GET /api/status/data-info"]},
+      {"file": "opensmart/backend/app/routes/users.py", "prefix": "/api/users", "endpoints": ["GET /api/users", "POST /api/users", "PUT /api/users/{user_id}", "DELETE /api/users/{user_id}"]},
+      {"file": "opensmart/backend/app/routes/audit.py", "prefix": "/api/audit", "endpoints": ["GET /api/audit"]}
+    ],
+    "reference": "docs/api.md"
+  },
+
+  "configuration": {
+    "layers": ["environment variables (process-level defaults)", "SQLite 'settings' table (runtime, admin-editable)"],
+    "env_vars": [
+      {"name": "OPENSMART_DB_PATH", "default": "opensmart/backend/opensmart.db", "purpose": "main app DB: users, sessions, settings, audit, catalogs, resource snapshots"},
+      {"name": "OPENSMART_TELEMETRY_DB_PATH", "default": "opensmart/backend/opensmart_telemetry.db", "purpose": "legacy compatibility telemetry DB"},
+      {"name": "OPENSMART_NETWORK_IDS_DB_PATH", "default": "opensmart/backend/opensmart_network_ids.db", "purpose": "Network IDS telemetry DB"},
+      {"name": "OPENSMART_NETWORK_TRAFFIC_DB_PATH", "default": "opensmart/backend/opensmart_network_traffic.db", "purpose": "Network Traffic telemetry DB"},
+      {"name": "OPENSMART_FRONTEND_ORIGIN", "default": "http://localhost:5173", "purpose": "allowed CORS origin"},
+      {"name": "OPENSMART_SESSION_TTL_HOURS", "default": "12", "purpose": "session lifetime in hours"},
+      {"name": "OPENSMART_VERSION", "default": "v0.3 beta", "purpose": "platform version used for seeded settings and startup banners"}
+    ],
+    "reference": "docs/configuration.md"
+  },
+
+  "security": {
+    "summary": [
+      "Argon2 password hashing (argon2-cffi); plaintext passwords never stored",
+      "Server-side sessions in SQLite, HTTP-only cookie, SameSite=Lax",
+      "CSRF token required on mutating authenticated requests",
+      "Failed-login lockout tracked by username + client IP",
+      "Shell hooks run via subprocess.run([...], shell=False) only"
+    ],
+    "current_limitations": [
+      "No Secure cookie flag — production behind HTTPS should add it",
+      "X-Forwarded-For trusted unconditionally — restrict to known reverse proxies in production",
+      "No password complexity policy beyond minimum length",
+      "No automated security tests yet",
+      "Module config accepted as raw JSON string without content validation",
+      "Uploaded logos stored as data URLs in SQLite — keep image sizes modest"
+    ],
+    "reference": "docs/security.md"
+  },
+
+  "deployment": {
+    "phases": [
+      {"phase": 1, "name": "Repo restructure", "status": "done", "summary": "backend/frontend/scripts moved under opensmart/ (originally OpenSMART/); opensmart-builder renamed to containers/OpenSMART-Standalone; opensmart.sh start --bind added."},
+      {"phase": 2, "name": "Container build/run split", "status": "done", "summary": "containers/build/ and containers/run/ created, copied from OpenSMART-Standalone, plus new opensmart/ entries for the main app."},
+      {"phase": 3, "name": "opensmart.sh install + prod mode", "status": "done, verified against a real Docker Engine", "summary": "Docker Engine bootstrap, image build, container run, single-port production serving via FastAPI StaticFiles."}
+    ],
+    "reference": "docs/architecture.md"
+  },
+
+  "known_limitations": [
+    "Several OpenSMART module pages remain placeholder content outside Network IDS and Network Traffic Monitoring",
+    "GET /api/status returns placeholder JSON from opensmart/backend/app/scripts/module_status.sh",
+    "No automated tests beyond syntax/import/build checks",
+    "Frontend dependency versions use broad ('latest') ranges; package-lock.json is tracked for reproducibility"
+  ],
+
+  "documentation": {
+    "architecture": "docs/architecture.md",
+    "api": "docs/api.md",
+    "configuration": "docs/configuration.md",
+    "security": "docs/security.md",
+    "development": "docs/development.md",
+    "manifest": "docs/MANIFEST.json (this file)",
+    "containers_overview": "containers/README.md",
+    "standalone_bundle": "containers/OpenSMART-Standalone/README.md"
+  },
+
+  "generated": {
+    "date": "2026-07-04",
+    "maintained_by": "update manually alongside architecture.md when structure, API surface, or deployment status changes"
+  }
+}

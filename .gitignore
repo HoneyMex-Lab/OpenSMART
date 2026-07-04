@@ -11,23 +11,23 @@ htmlcov/
 # Virtual environments
 .venv/
 venv/
-backend/.venv/
+opensmart/backend/.venv/
 
 # Backend runtime data
-backend/*.db
-backend/*.db-*
-backend/.env
-backend/.env.*
-!backend/.env.example
+opensmart/backend/*.db
+opensmart/backend/*.db-*
+opensmart/backend/.env
+opensmart/backend/.env.*
+!opensmart/backend/.env.example
 
 # Frontend dependencies and build output
 node_modules/
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/*.tsbuildinfo
-frontend/vite.config.js
-frontend/vite.config.d.ts
+opensmart/frontend/node_modules/
+opensmart/frontend/dist/
+opensmart/frontend/.vite/
+opensmart/frontend/*.tsbuildinfo
+opensmart/frontend/vite.config.js
+opensmart/frontend/vite.config.d.ts
 
 # Environment files
 .env
@@ -56,16 +56,32 @@ docs/agent-handoff/
 .agents/
 opencode.json
 opencode.jsonc
-design notes
 
-# OpenSMART builder generated runtime artifacts
-opensmart-builder/**/volumes/data/**
-!opensmart-builder/**/volumes/data/.gitkeep
-opensmart-builder/**/*.ovpn
-opensmart-builder/**/*.key
-opensmart-builder/**/*.crt
-opensmart-builder/**/*.pem
-opensmart-builder/**/*.log
-opensmart-builder/**/*.pcap
-opensmart-builder/**/*.db
-opensmart-builder/**/*.sqlite*
+# Local-only coding-agent process files (never tracked)
+/agent guidance file
+/agent guidance file
+/design notes
+
+# OpenSMART-Standalone builder generated runtime artifacts
+containers/OpenSMART-Standalone/**/volumes/data/**
+!containers/OpenSMART-Standalone/**/volumes/data/.gitkeep
+containers/OpenSMART-Standalone/**/*.ovpn
+containers/OpenSMART-Standalone/**/*.key
+containers/OpenSMART-Standalone/**/*.crt
+containers/OpenSMART-Standalone/**/*.pem
+containers/OpenSMART-Standalone/**/*.log
+containers/OpenSMART-Standalone/**/*.pcap
+containers/OpenSMART-Standalone/**/*.db
+containers/OpenSMART-Standalone/**/*.sqlite*
+
+# containers/run generated runtime artifacts (same convention as OpenSMART-Standalone)
+containers/run/**/volumes/data/**
+!containers/run/**/volumes/data/.gitkeep
+containers/run/**/*.ovpn
+containers/run/**/*.key
+containers/run/**/*.crt
+containers/run/**/*.pem
+containers/run/**/*.log
+containers/run/**/*.pcap
+containers/run/**/*.db
+containers/run/**/*.sqlite*

@@ -1,0 +1,40 @@
+services:
+  # Capture sniffs eth0 -> must use host networking (like Zeek/Suricata).
+  capture:
+    image: ghcr.io/arkime/arkime/arkime:v6-latest
+    container_name: opensmart-arkime-capture
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - IPC_LOCK
+      - SYS_RESOURCE
+    command: /opt/arkime/bin/docker.sh capture --wait-for-db http://localhost:9200 --db 'http://localhost:9200 init --ifneeded' -- -n opensmart
+    environment:
+      - ARKIME__elasticsearch=http://localhost:9200
+    volumes:
+      - ./etc/config.ini:/opt/arkime/etc/config.ini
+      - ./volumes/data:/data
+    restart: unless-stopped
+
+  # Viewer UI on the opensmart network, reaches OpenSearch by service alias.
+  viewer:
+    image: ghcr.io/arkime/arkime/arkime:v6-latest
+    container_name: opensmart-arkime-viewer
+    hostname: arkime-viewer
+    command: /opt/arkime/bin/docker.sh viewer --wait-for-db http://opensearch:9200 -- -n opensmart
+    environment:
+      - ARKIME__elasticsearch=http://opensearch:9200
+    volumes:
+      - ./etc/config.ini:/opt/arkime/etc/config.ini
+      - ./volumes/data:/data
+    ports:
+      - "8005:8005"
+    networks:
+      - opensmart
+    restart: unless-stopped
+
+networks:
+  opensmart:
+    external: true
+    name: opensmart

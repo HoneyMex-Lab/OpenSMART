@@ -6,6 +6,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BASE_DIR.parent
 LOG_DIR = PROJECT_ROOT / "logs"
+FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
 DB_PATH = Path(os.getenv("OPENSMART_DB_PATH", BASE_DIR / "opensmart.db"))
 TELEMETRY_DB_PATH = Path(os.getenv("OPENSMART_TELEMETRY_DB_PATH", BASE_DIR / "opensmart_telemetry.db"))
 NETWORK_IDS_DB_PATH = Path(os.getenv("OPENSMART_NETWORK_IDS_DB_PATH", BASE_DIR / "opensmart_network_ids.db"))
