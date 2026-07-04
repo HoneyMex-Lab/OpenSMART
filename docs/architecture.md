@@ -76,6 +76,15 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   few minutes to build the frontend and sync backend dependencies inside the
   container before it's reachable.
 
+**Install output:** `--install` prints one line per main step (root check,
+distro detection, Docker Engine install, network creation, image build,
+ownership fix, container start, stability check, readiness/password wait) —
+shows a banner (HoneyMex Lab & Mizton Labs attribution, ASCII honeycomb logo)
+first. Full command output (apt-get, docker build, docker compose) is not
+shown on the terminal — it goes only to `logs/install.log`, which is created
+fresh on every run. On failure, the current step line is closed with
+"failed" and the error points at that log file.
+
 **Single-port production serving:** `opensmart/backend/app/main.py` mounts
 `opensmart/frontend/dist` as static files (via `fastapi.staticfiles.StaticFiles`,
 mounted after all API routes) whenever `frontend/dist/index.html` exists. In

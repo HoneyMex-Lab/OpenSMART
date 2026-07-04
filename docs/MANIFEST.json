@@ -83,7 +83,11 @@
           "Poll for a stable running container (not just a brief window between crash-loop restarts)",
           "Poll container logs for the first-run admin password and print it on the host"
         ],
-        "verification_status": "Verified against a real Docker Engine on a Debian 13 reference host on 2026-07-04. Two bugs found and fixed during that verification: bind-mount ownership (crash loop) and an install-time password-reveal timeout too short for a cold install."
+        "verification_status": "Verified against a real Docker Engine on a Debian 13 reference host on 2026-07-04. Two bugs found and fixed during that verification: bind-mount ownership (crash loop) and an install-time password-reveal timeout too short for a cold install.",
+        "output": {
+          "terminal": "One line per main step (9 total: root check, distro detection, Docker Engine install, network creation, image build, ownership fix, container start, stability check, readiness/password wait), preceded by a banner (ASCII honeycomb logo, HoneyMex Lab & Mizton Labs attribution). Raw command output (apt-get, docker build, docker compose) is not printed to the terminal.",
+          "log_file": "logs/install.log — created fresh on every run, holds full timestamped step markers plus all redirected command output. On failure, the terminal step line is closed with 'failed' and points at this log."
+        }
       }
     },
     "image": {
