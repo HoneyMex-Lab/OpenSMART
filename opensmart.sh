@@ -21,6 +21,9 @@ Commands:
                                         --prod builds the frontend once and serves it
                                         from the backend on a single port instead of
                                         running the Vite dev server.
+  stop                                 Stop the OpenSMART container (docker compose stop).
+  status                               Show the OpenSMART container state and whether the
+                                        application inside it is responding.
   --install                            Install Docker Engine (Debian/Ubuntu only),
                                         build the opensmart/web image, and run
                                         OpenSMART as a container. Requires root.
@@ -91,6 +94,100 @@ cmd_start() {
     exec "$ROOT_DIR/opensmart/scripts/run_app.sh" --host "$host" --port "$port" --prod
   else
     exec "$ROOT_DIR/opensmart/scripts/run_app.sh" --host "$host" --port "$port"
+  fi
+}
+
+# ── stop / status helpers ─────────────────────────────────────────────────────
+#
+# These act on the containerized deployment created by --install (container
+# name "opensmart"). They report/act on two independent things: the Docker
+# container's own state, and whether the application inside it is actually
+# responding on its published port — a container can be "running" while the
+# app inside is still starting up, crashed, or not yet reachable.
+
+_container_exists() {
+  docker inspect "$CONTAINER_NAME" >/dev/null 2>&1
+}
+
+_container_host_port() {
+  # Host-side port mapped to the container's 8000/tcp, e.g. "8000". Empty if
+  # the container isn't running or isn't published.
+  docker port "$CONTAINER_NAME" 8000/tcp 2>/dev/null | head -n1 | sed -E 's/.*:([0-9]+)$/\1/'
+}
+
+_app_health() {
+  local port
+  port="$(_container_host_port)"
+  if [[ -n "$port" ]] && curl -sf --max-time 3 "http://localhost:${port}/api/health" 2>/dev/null | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+    printf 'healthy'
+  else
+    printf 'unreachable'
+  fi
+}
+
+cmd_status() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker is not installed. Run: sudo ./opensmart.sh --install\n' >&2
+    exit 1
+  fi
+
+  if ! _container_exists; then
+    printf 'Container   : not found\n'
+    printf 'Try: sudo ./opensmart.sh --install\n'
+    exit 1
+  fi
+
+  local state restarts
+  state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
+  restarts="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER_NAME")"
+  printf 'Container   : %s (restarts: %s)\n' "$state" "$restarts"
+
+  case "$state" in
+    running)
+      printf 'Started     : %s\n' "$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER_NAME")"
+      local health port
+      health="$(_app_health)"
+      port="$(_container_host_port)"
+      if [[ "$health" == "healthy" ]]; then
+        printf 'Application : healthy (http://localhost:%s/api/health)\n' "${port:-8000}"
+      else
+        printf 'Application : unreachable (container is running, but the app is not responding yet — it may still be starting, or check: docker logs %s)\n' "$CONTAINER_NAME"
+      fi
+      ;;
+    restarting)
+      printf 'Application : crash-looping — check: docker logs %s\n' "$CONTAINER_NAME"
+      ;;
+    *)
+      printf 'Application : not running\n'
+      ;;
+  esac
+}
+
+cmd_stop() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker is not installed; nothing to stop.\n' >&2
+    exit 1
+  fi
+
+  if ! _container_exists; then
+    printf 'No "%s" container found. Nothing to stop.\n' "$CONTAINER_NAME"
+    exit 0
+  fi
+
+  local state
+  state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
+  if [[ "$state" != "running" && "$state" != "restarting" ]]; then
+    printf 'OpenSMART container is already %s.\n' "$state"
+    exit 0
+  fi
+
+  printf 'Stopping OpenSMART container...\n'
+  if (cd "$ROOT_DIR/containers/run/opensmart" && docker compose stop); then
+    printf '✔ OpenSMART container stopped.\n'
+    printf 'Restart with: (cd containers/run/opensmart && docker compose start)\n'
+  else
+    printf '✘ Failed to stop the OpenSMART container.\n' >&2
+    exit 1
   fi
 }
 
@@ -290,6 +387,12 @@ case "${1:-}" in
   start)
     shift
     cmd_start "$@"
+    ;;
+  stop)
+    cmd_stop
+    ;;
+  status)
+    cmd_status
     ;;
   --install)
     cmd_install

@@ -85,6 +85,19 @@ shown on the terminal — it goes only to `logs/install.log`, which is created
 fresh on every run. On failure, the current step line is closed with
 "failed" and the error points at that log file.
 
+- `./opensmart.sh stop` runs `docker compose stop` in
+  `containers/run/opensmart/` (stops the container without removing it —
+  `docker compose start` brings it back). No-op with a clear message if the
+  container doesn't exist or is already stopped.
+- `./opensmart.sh status` reports two independent things: the Docker
+  container's own state (`docker inspect`'s `State.Status` and
+  `RestartCount` — running/restarting/exited/not found) and, only when the
+  container is running, whether the application inside it is actually
+  responding (`curl .../api/health` against the container's published
+  port, resolved via `docker port` rather than assumed). A running container
+  with an unreachable app (still starting, or crashed) is reported
+  distinctly from a genuinely healthy one.
+
 **Single-port production serving:** `opensmart/backend/app/main.py` mounts
 `opensmart/frontend/dist` as static files (via `fastapi.staticfiles.StaticFiles`,
 mounted after all API routes) whenever `frontend/dist/index.html` exists. In

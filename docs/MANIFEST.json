@@ -88,6 +88,17 @@
           "terminal": "One line per main step (9 total: root check, distro detection, Docker Engine install, network creation, image build, ownership fix, container start, stability check, readiness/password wait), preceded by a banner (ASCII honeycomb logo, HoneyMex Lab & Mizton Labs attribution). Raw command output (apt-get, docker build, docker compose) is not printed to the terminal.",
           "log_file": "logs/install.log — created fresh on every run, holds full timestamped step markers plus all redirected command output. On failure, the terminal step line is closed with 'failed' and points at this log."
         }
+      },
+      "stop": {
+        "usage": "./opensmart.sh stop",
+        "action": "docker compose stop in containers/run/opensmart/ — stops the container without removing it (docker compose start brings it back). No-op with a clear message if the container doesn't exist or is already stopped."
+      },
+      "status": {
+        "usage": "./opensmart.sh status",
+        "reports": [
+          "Container state via docker inspect: State.Status (running/restarting/exited/...) and RestartCount",
+          "Application health, only checked when the container is running: curl against http://localhost:<published-port>/api/health, port resolved via docker port rather than assumed — distinguishes a running-but-unreachable container (still starting or crashed) from a genuinely healthy one"
+        ]
       }
     },
     "image": {
