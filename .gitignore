@@ -56,7 +56,11 @@ docs/agent-handoff/
 .agents/
 opencode.json
 opencode.jsonc
-design notes
+
+# Local-only coding-agent process files (never tracked)
+/agent guidance file
+/agent guidance file
+/design notes
 
 # OpenSMART-Standalone builder generated runtime artifacts
 Containers/OpenSMART-Standalone/**/volumes/data/**
