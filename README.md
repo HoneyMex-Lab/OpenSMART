@@ -80,7 +80,7 @@ The current implementation is a working v0.3 prototype with local user managemen
 
 - `containers/OpenSMART-Standalone/`: reference Docker Compose bundle for the
   network-sensor stack, run manually and independently of `opensmart.sh`.
-- `containers/build/`: per-tool Dockerfiles used by `opensmart.sh --install`
+- `containers/build/`: per-tool Dockerfiles used by `opensmart.sh install`
   (`base`, `suricata`, `zeek`, `wireguard`, `openvpn`, `opensmart`; official
   upstream images like OpenSearch/Arkime/nginx have none).
 - `containers/run/`: one directory per tool with its own `docker-compose.yml`

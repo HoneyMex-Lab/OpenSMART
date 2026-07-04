@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION_MAJOR="v0.3"
 NETWORK_NAME="opensmart"
 NETWORK_SUBNET="172.250.250.0/24"
 IMAGE_NAME="opensmart/web"
@@ -27,14 +28,16 @@ Commands:
   stop                                 Stop the OpenSMART container (docker compose stop).
   status                               Show the OpenSMART container state and whether the
                                         application inside it is responding.
-  --restart                            Restart the existing OpenSMART container and
+  restart                              Restart the existing OpenSMART container and
                                         check its integrity afterward.
-  --recreate                           Delete the existing OpenSMART container and
+  recreate                             Delete the existing OpenSMART container and
                                         create a new one from the current image, then
                                         check its integrity. Asks for confirmation.
-  --install                            Install Docker Engine (Debian/Ubuntu only),
+  install                              Install Docker Engine (Debian/Ubuntu only),
                                         build the opensmart/web image, and run
                                         OpenSMART as a container. Requires root.
+  version                              Show the OpenSMART version (major version plus
+                                        the current git commit).
   --help, -h                           Show this help message.
 EOF
 }
@@ -93,7 +96,7 @@ cmd_start() {
     if [[ -n "$bind" || "$prod" -eq 1 ]]; then
       printf 'Note: an "%s" container already exists; --bind/--prod are ignored (the\n' "$CONTAINER_NAME"
       printf 'container always runs in --prod mode on the port published by its\n'
-      printf 'docker-compose.yml). Use ./opensmart.sh --recreate to replace it.\n\n'
+      printf 'docker-compose.yml). Use ./opensmart.sh recreate to replace it.\n\n'
     fi
     _start_existing_container
     return
@@ -117,9 +120,15 @@ cmd_start() {
   fi
 }
 
+cmd_version() {
+  local commit
+  commit="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+  printf 'OpenSMART %s (commit %s)\n' "$VERSION_MAJOR" "$commit"
+}
+
 # ── stop / status helpers ─────────────────────────────────────────────────────
 #
-# These act on the containerized deployment created by --install (container
+# These act on the containerized deployment created by install (container
 # name "opensmart"). They report/act on two independent things: the Docker
 # container's own state, and whether the application inside it is actually
 # responding on its published port — a container can be "running" while the
@@ -145,11 +154,11 @@ _app_health() {
   fi
 }
 
-# ── shared integrity check (start/--restart/--recreate/--install) ────────────
+# ── shared integrity check (start/restart/recreate/install) ────────────
 #
 # _wait_stable / _wait_healthy are silent (return 0/1 only) so every caller
 # can present the result in whatever format fits it (numbered install steps
-# vs. plain lines for start/--restart/--recreate).
+# vs. plain lines for start/restart/recreate).
 
 _wait_stable() {
   # Returns 0 once the container is running and stays running with an
@@ -224,13 +233,13 @@ _start_existing_container() {
 
 cmd_status() {
   if ! command -v docker >/dev/null 2>&1; then
-    printf 'Docker is not installed. Run: sudo ./opensmart.sh --install\n' >&2
+    printf 'Docker is not installed. Run: sudo ./opensmart.sh install\n' >&2
     exit 1
   fi
 
   if ! _container_exists; then
     printf 'Container   : not found\n'
-    printf 'Try: sudo ./opensmart.sh --install\n'
+    printf 'Try: sudo ./opensmart.sh install\n'
     exit 1
   fi
 
@@ -295,7 +304,7 @@ cmd_restart() {
   fi
 
   if ! _container_exists; then
-    printf 'No "%s" container found. Run: sudo ./opensmart.sh --install\n' "$CONTAINER_NAME" >&2
+    printf 'No "%s" container found. Run: sudo ./opensmart.sh install\n' "$CONTAINER_NAME" >&2
     exit 1
   fi
 
@@ -343,7 +352,7 @@ cmd_recreate() {
   printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
 }
 
-# ── --install helpers ─────────────────────────────────────────────────────────
+# ── install helpers ─────────────────────────────────────────────────────────
 #
 # Terminal output is kept to one line per main step; every command's full
 # (often noisy) output goes only to $INSTALL_LOG. On failure, the current
@@ -351,7 +360,7 @@ cmd_recreate() {
 
 _log_init() {
   mkdir -p "$LOG_DIR"
-  printf '\n===== opensmart.sh --install started %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$INSTALL_LOG"
+  printf '\n===== opensmart.sh install started %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$INSTALL_LOG"
 }
 
 _step() {
@@ -370,7 +379,7 @@ _step_fail() {
 _install_require_root() {
   _step "Checking root privileges"
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    _step_fail "opensmart.sh --install must be run as root. Try: sudo ./opensmart.sh --install"
+    _step_fail "opensmart.sh install must be run as root. Try: sudo ./opensmart.sh install"
   fi
   printf 'ok\n'
 }
@@ -378,14 +387,14 @@ _install_require_root() {
 _install_check_distro() {
   _step "Detecting Linux distribution"
   if [[ ! -r /etc/os-release ]]; then
-    _step_fail "Cannot detect the Linux distribution (/etc/os-release not found). opensmart.sh --install only supports Debian and Ubuntu."
+    _step_fail "Cannot detect the Linux distribution (/etc/os-release not found). opensmart.sh install only supports Debian and Ubuntu."
   fi
   # shellcheck disable=SC1091
   . /etc/os-release
   local id="${ID:-}"
   local id_like="${ID_LIKE:-}"
   if [[ "$id" != "debian" && "$id" != "ubuntu" && "$id_like" != *debian* ]]; then
-    _step_fail "Unsupported Linux distribution: ${PRETTY_NAME:-$id}. opensmart.sh --install only supports Debian and Ubuntu (apt-based)."
+    _step_fail "Unsupported Linux distribution: ${PRETTY_NAME:-$id}. opensmart.sh install only supports Debian and Ubuntu (apt-based)."
   fi
   DISTRO_ID="$id"
   printf '%s\n' "${PRETTY_NAME:-$id}"
@@ -533,14 +542,17 @@ case "${1:-}" in
   status)
     cmd_status
     ;;
-  --restart)
+  restart)
     cmd_restart
     ;;
-  --recreate)
+  recreate)
     cmd_recreate
     ;;
-  --install)
+  install)
     cmd_install
+    ;;
+  version|--version|-v)
+    cmd_version
     ;;
   --help|-h)
     usage

@@ -55,12 +55,12 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
 
 - `./opensmart.sh start [--bind ADDRESS:PORT] [--prod]` behaves differently
   depending on whether an `opensmart` container already exists (i.e.
-  `--install` has been run before):
+  `install` has been run before):
   - **Container exists:** `--bind`/`--prod` are ignored (with a note printed
     explaining why — the container's bind address is fixed by
     `containers/run/opensmart/docker-compose.yml`). If the container isn't
     already running, starts it (`docker compose start`); either way, then
-    runs the same integrity check `--restart`/`--recreate` use (see below).
+    runs the same integrity check `restart`/`recreate` use (see below).
   - **No container:** runs directly on the host via
     `opensmart/scripts/run_app.sh --host ADDRESS --port PORT [--prod]`,
     defaulting to `--bind 0.0.0.0:8000` when `--bind` is omitted. Without
@@ -70,23 +70,23 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
     the interactive first-run password-reveal prompt, and lets the backend
     serve the built frontend itself (see below) — this is the mode the
     container entrypoint uses.
-- `./opensmart.sh --restart` runs `docker compose restart` then the same
+- `./opensmart.sh restart` runs `docker compose restart` then the same
   integrity check as `start`'s container path. Errors clearly if no
   container exists yet.
-- `./opensmart.sh --recreate` asks for confirmation (must type `RECREATE`),
+- `./opensmart.sh recreate` asks for confirmation (must type `RECREATE`),
   then removes the existing container (`docker compose rm -f -s`, only the
   container — not the image, network, or the bind-mounted app data) and
   creates a fresh one from the current `opensmart/web` image, then runs the
   integrity check. Skips the confirmation (nothing to remove) if no
   container exists yet.
-- **Integrity check** (shared by `start`'s container path, `--restart`, and
-  `--recreate`): first confirms the container reaches a stable running
-  state (same stability logic `--install` uses — tolerant of the brief
+- **Integrity check** (shared by `start`'s container path, `restart`, and
+  `recreate`): first confirms the container reaches a stable running
+  state (same stability logic `install` uses — tolerant of the brief
   "running" window a crash-looping container can show between restarts),
   then polls `/api/health` on the container's published port (resolved via
   `docker port`, not assumed) for up to 5 minutes, since a cold start needs
   to `uv sync`/`npm install`/`npm run build` inside the container first.
-- `./opensmart.sh --install` bootstraps Docker Engine on Debian/Ubuntu (apt
+- `./opensmart.sh install` bootstraps Docker Engine on Debian/Ubuntu (apt
   only), creates the `opensmart` bridge network, builds the `opensmart/web`
   image from `containers/build/opensmart/Dockerfile`, chowns the bind-mounted
   app directory to uid 1000 (the container's non-root `opensmart` user; a
@@ -101,7 +101,7 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   few minutes to build the frontend and sync backend dependencies inside the
   container before it's reachable.
 
-**Install output:** `--install` prints one line per main step (root check,
+**Install output:** `install` prints one line per main step (root check,
 distro detection, Docker Engine install, network creation, image build,
 ownership fix, container start, stability check, readiness/password wait) —
 shows a banner (Mizton Labs & Honeynet Mexico Team attribution, ASCII honeycomb logo)

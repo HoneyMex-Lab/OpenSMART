@@ -13,10 +13,14 @@ Docker-related deployment artifacts for OpenSMART and its tool integrations.
   in `OpenSMART-Standalone`.
 - `run/` — one directory per tool/module, each with its own
   `docker-compose.yaml` and a `volumes/data/` directory bind-mounted into the
-  container (never a named Docker volume). Includes an `opensmart/`
-  placeholder for the main app container, not yet built out.
+  container (never a named Docker volume). `run/opensmart/` is the main app
+  container: `docker-compose.yml` bind-mounts the whole repo at
+  `/opt/opensmart` and runs `./opensmart.sh start --bind 0.0.0.0:8000 --prod`.
 
-`build/` and `run/` are not yet wired together by any script — that is planned
-for `opensmart.sh --install`, which is not implemented yet. Until then, use
-`OpenSMART-Standalone/opensmart-framework/deploy.sh` directly if you want to
-run this stack.
+`build/opensmart/Dockerfile` and `run/opensmart/docker-compose.yml` are wired
+together by `./opensmart.sh install` (root, Debian/Ubuntu only): bootstraps
+Docker Engine, creates the `opensmart` network, builds the image, fixes bind-mount
+ownership, and starts the container. Once installed, use `./opensmart.sh
+start` / `stop` / `status` / `restart` / `recreate` to manage it — see
+`docs/architecture.md` for details. `OpenSMART-Standalone/opensmart-framework/deploy.sh`
+remains available if you want to run the network-sensor stack independently.

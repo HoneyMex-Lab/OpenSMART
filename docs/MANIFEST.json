@@ -39,7 +39,7 @@
   },
 
   "layout": {
-    "opensmart.sh": "Root entrypoint script (start / --install).",
+    "opensmart.sh": "Root entrypoint script (start / install).",
     "opensmart/": {
       "description": "The whole application. Renamed from OpenSMART/ to opensmart/ on 2026-07-04 (all-lowercase convention).",
       "backend/": "FastAPI app (opensmart/backend/app/), pyproject.toml, uv.lock, requirements.txt fallback.",
@@ -50,7 +50,7 @@
     "containers/": {
       "description": "Docker deployment tooling. Renamed from Containers/ to containers/ on 2026-07-04.",
       "OpenSMART-Standalone/": "Reference Docker Compose bundle (network-sensor stack: Suricata, Zeek, Arkime, OpenSearch, WireGuard, OpenVPN, nginx). Standalone reference tool, run manually via its own deploy.sh, independent of opensmart.sh. Keeps its original mixed-case directory name.",
-      "build/": "Per-tool Dockerfiles used by 'opensmart.sh --install': base, suricata, zeek, wireguard, openvpn, opensmart. Official upstream images (OpenSearch, Arkime, nginx) have no local Dockerfile.",
+      "build/": "Per-tool Dockerfiles used by 'opensmart.sh install': base, suricata, zeek, wireguard, openvpn, opensmart. Official upstream images (OpenSearch, Arkime, nginx) have no local Dockerfile.",
       "run/": "Per-tool docker-compose.yml + bind-mounted volumes/data/ (never named Docker volumes): opensearch, arkime, suricata, zeek, wireguard, openvpn, nginx, opensmart."
     },
     "docs/": "Human-readable documentation (this directory) plus this MANIFEST.json.",
@@ -73,22 +73,22 @@
         "prod_mode": "Builds the frontend once (npm run build) instead of starting the Vite dev server, serves it from FastAPI via a StaticFiles mount, and skips the interactive password-reveal prompt (prints it non-interactively). This is the mode the container entrypoint uses."
       },
       "restart": {
-        "usage": "./opensmart.sh --restart",
+        "usage": "./opensmart.sh restart",
         "action": "docker compose restart in containers/run/opensmart/, then the shared integrity check. Errors clearly if no container exists yet."
       },
       "recreate": {
-        "usage": "./opensmart.sh --recreate",
+        "usage": "./opensmart.sh recreate",
         "action": "Prompts for confirmation (must type RECREATE) if a container already exists, then docker compose rm -f -s (container only, not the image/network/bind-mounted app data) followed by docker compose up -d, then the shared integrity check. Skips the confirmation if no container exists yet."
       },
       "integrity_check": {
-        "description": "Shared by start's container path, --restart, and --recreate.",
+        "description": "Shared by start's container path, restart, and recreate.",
         "steps": [
-          "Wait for the container to reach a stable running state (same crash-loop-tolerant stability check --install uses)",
+          "Wait for the container to reach a stable running state (same crash-loop-tolerant stability check install uses)",
           "Poll /api/health on the container's published port (resolved via docker port, not assumed) for up to 5 minutes — a cold start needs to uv sync/npm install/npm run build inside the container first"
         ]
       },
       "install": {
-        "usage": "sudo ./opensmart.sh --install",
+        "usage": "sudo ./opensmart.sh install",
         "requires": "root, Debian or Ubuntu (apt-based) only",
         "steps": [
           "Install Docker Engine + Compose plugin if not already present",
@@ -115,6 +115,10 @@
           "Container state via docker inspect: State.Status (running/restarting/exited/...) and RestartCount",
           "Application health, only checked when the container is running: curl against http://localhost:<published-port>/api/health, port resolved via docker port rather than assumed — distinguishes a running-but-unreachable container (still starting or crashed) from a genuinely healthy one"
         ]
+      },
+      "version": {
+        "usage": "./opensmart.sh version (aliases: --version, -v)",
+        "output": "OpenSMART <major version> (commit <short git sha>) — major version is the hardcoded VERSION_MAJOR constant near the top of opensmart.sh (currently v0.3, no 'beta' suffix — distinct from the 'v0.3 beta' identifier used elsewhere, e.g. config.py's APP_VERSION default and the README title), commit is `git rev-parse --short HEAD` resolved from ROOT_DIR (falls back to 'unknown' outside a git checkout)."
       }
     },
     "image": {
@@ -201,7 +205,7 @@
     "phases": [
       {"phase": 1, "name": "Repo restructure", "status": "done", "summary": "backend/frontend/scripts moved under opensmart/ (originally OpenSMART/); opensmart-builder renamed to containers/OpenSMART-Standalone; opensmart.sh start --bind added."},
       {"phase": 2, "name": "Container build/run split", "status": "done", "summary": "containers/build/ and containers/run/ created, copied from OpenSMART-Standalone, plus new opensmart/ entries for the main app."},
-      {"phase": 3, "name": "opensmart.sh --install + prod mode", "status": "done, verified against a real Docker Engine", "summary": "Docker Engine bootstrap, image build, container run, single-port production serving via FastAPI StaticFiles."}
+      {"phase": 3, "name": "opensmart.sh install + prod mode", "status": "done, verified against a real Docker Engine", "summary": "Docker Engine bootstrap, image build, container run, single-port production serving via FastAPI StaticFiles."}
     ],
     "reference": "docs/architecture.md"
   },
