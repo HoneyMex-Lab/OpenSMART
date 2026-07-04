@@ -15,6 +15,7 @@ BACKEND_LOG=""
 BACKEND_PYTHON="3.13"
 BIND_HOST="0.0.0.0"
 BIND_PORT="8000"
+PROD_MODE=0
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 APP_VERSION="${OPENSMART_VERSION:-v0.2 beta}"
 DB_PATH="${ROOT_DIR}/backend/opensmart.db"
@@ -43,6 +44,9 @@ Usage: ./scripts/run_app.sh [option]
 Options:
   --host HOST             Address for the backend to bind to (default: 0.0.0.0).
   --port PORT             Port for the backend to bind to (default: 8000).
+  --prod                  Production mode: build the frontend once and serve it from the
+                          backend on a single port instead of running the Vite dev server,
+                          and skip the interactive first-run password prompt.
   --reset-admin-password  Reset the admin password and print it. Does not start the app.
   --reset-data-all        Delete all IDS and network traffic data; keep config and users. Does not start the app.
   --reset-data-ids        Delete only IDS alert data; preserve network traffic data. Does not start the app.
@@ -472,6 +476,10 @@ while [[ $# -gt 0 ]]; do
       BIND_PORT="${2:?--port requires a value}"
       shift 2
       ;;
+    --prod)
+      PROD_MODE=1
+      shift
+      ;;
     --reset-admin-password)
       RESET_ADMIN_PASSWORD=1
       shift
@@ -744,6 +752,16 @@ else
   fi
 fi
 
+if [[ "$PROD_MODE" -eq 1 ]]; then
+  if npm run build --prefix frontend; then
+    FRONTEND_STATUS="built"
+  else
+    FRONTEND_STATUS="failed: build"
+    print_summary
+    exit 1
+  fi
+fi
+
 print_summary
 
 if [[ "$BACKEND_STATUS" == "ok" && "$FRONTEND_STATUS" == "ok" ]]; then
@@ -752,8 +770,12 @@ else
   printf '\nDependencies are ready. Starting OpenSMART...\n'
 fi
 
-printf 'Backend:  http://%s:%s\n' "$BIND_HOST" "$BIND_PORT"
-printf 'Frontend: http://localhost:5173\n\n'
+if [[ "$PROD_MODE" -eq 1 ]]; then
+  printf 'OpenSMART: http://%s:%s\n\n' "$BIND_HOST" "$BIND_PORT"
+else
+  printf 'Backend:  http://%s:%s\n' "$BIND_HOST" "$BIND_PORT"
+  printf 'Frontend: http://localhost:5173\n\n'
+fi
 
 BACKEND_LOG="$(mktemp -t opensmart-backend.XXXXXX.log)"
 CONSOLIDATED_LOG="${ROOT_DIR}/logs/opensmart.log"
@@ -786,12 +808,19 @@ if [[ -f "$BACKEND_LOG" ]] && grep -q "$FIRST_RUN_MARKER" "$BACKEND_LOG"; then
     "admin" \
     "${_pw:-see backend log}" \
     "Change this password after first login."
-  printf 'Press Enter to start the frontend...'
-  read -r
+  if [[ "$PROD_MODE" -eq 0 ]]; then
+    printf 'Press Enter to start the frontend...'
+    read -r
+  fi
 elif [[ "$FIRST_RUN_EXPECTED" -eq 1 ]]; then
   printf '\nWARNING: initial admin account was expected, but the password was not captured within 30 seconds.\n' >&2
   printf 'Check the backend output above before logging in.\n\n' >&2
 fi
 
-_log INFO "frontend starting: npm --prefix frontend run dev"
-npm --prefix frontend run dev 2>&1 | tee -a "$CONSOLIDATED_LOG"
+if [[ "$PROD_MODE" -eq 1 ]]; then
+  _log INFO "prod mode: frontend served by backend; skipping Vite dev server"
+  wait "$BACKEND_PID"
+else
+  _log INFO "frontend starting: npm --prefix frontend run dev"
+  npm --prefix frontend run dev 2>&1 | tee -a "$CONSOLIDATED_LOG"
+fi

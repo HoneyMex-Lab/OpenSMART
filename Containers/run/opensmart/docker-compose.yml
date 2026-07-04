@@ -1,0 +1,21 @@
+services:
+  opensmart:
+    build:
+      context: ../../..
+      dockerfile: Containers/build/opensmart/Dockerfile
+    image: opensmart/web
+    container_name: opensmart
+    hostname: opensmart
+    volumes:
+      - ../../..:/opt/opensmart
+    ports:
+      - "8000:8000"
+    networks:
+      - opensmart
+    restart: always
+    command: ["./opensmart.sh", "start", "--bind", "0.0.0.0:8000", "--prod"]
+
+networks:
+  opensmart:
+    external: true
+    name: opensmart

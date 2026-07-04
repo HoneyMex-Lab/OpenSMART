@@ -2,25 +2,40 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NETWORK_NAME="opensmart"
+NETWORK_SUBNET="172.250.250.0/24"
+IMAGE_NAME="opensmart/web"
+CONTAINER_NAME="opensmart"
+FIRST_RUN_MARKER="OpenSMART initial admin account created"
 
 usage() {
   cat <<'EOF'
 Usage: ./opensmart.sh <command> [options]
 
 Commands:
-  start --bind ADDRESS:PORT   Start the OpenSMART app bound to ADDRESS:PORT.
-  --install                   Install and run OpenSMART as a Docker container (not yet implemented).
-  --help, -h                  Show this help message.
+  start --bind ADDRESS:PORT [--prod]   Start the OpenSMART app bound to ADDRESS:PORT.
+                                        --prod builds the frontend once and serves it
+                                        from the backend on a single port instead of
+                                        running the Vite dev server.
+  --install                            Install Docker Engine (Debian/Ubuntu only),
+                                        build the opensmart/web image, and run
+                                        OpenSMART as a container. Requires root.
+  --help, -h                           Show this help message.
 EOF
 }
 
 cmd_start() {
   local bind=""
+  local prod=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --bind)
         bind="${2:?--bind requires an ADDRESS:PORT value}"
         shift 2
+        ;;
+      --prod)
+        prod=1
+        shift
         ;;
       --help|-h)
         usage
@@ -47,7 +62,140 @@ cmd_start() {
     exit 1
   fi
 
-  exec "$ROOT_DIR/OpenSMART/scripts/run_app.sh" --host "$host" --port "$port"
+  if [[ "$prod" -eq 1 ]]; then
+    exec "$ROOT_DIR/OpenSMART/scripts/run_app.sh" --host "$host" --port "$port" --prod
+  else
+    exec "$ROOT_DIR/OpenSMART/scripts/run_app.sh" --host "$host" --port "$port"
+  fi
+}
+
+# ── --install helpers ─────────────────────────────────────────────────────────
+
+_install_require_root() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    printf 'opensmart.sh --install must be run as root. Try: sudo ./opensmart.sh --install\n' >&2
+    exit 1
+  fi
+}
+
+_install_check_distro() {
+  if [[ ! -r /etc/os-release ]]; then
+    printf 'Cannot detect the Linux distribution (/etc/os-release not found).\n' >&2
+    printf 'opensmart.sh --install only supports Debian and Ubuntu.\n' >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  local id="${ID:-}"
+  local id_like="${ID_LIKE:-}"
+  if [[ "$id" != "debian" && "$id" != "ubuntu" && "$id_like" != *debian* ]]; then
+    printf 'Unsupported Linux distribution: %s\n' "${PRETTY_NAME:-$id}" >&2
+    printf 'opensmart.sh --install only supports Debian and Ubuntu (apt-based).\n' >&2
+    exit 1
+  fi
+  DISTRO_ID="$id"
+}
+
+_install_docker_engine() {
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    printf 'Docker Engine and the Compose plugin are already installed; skipping install.\n'
+    return 0
+  fi
+
+  printf 'Installing Docker Engine (%s)...\n' "$DISTRO_ID"
+  apt-get update
+  apt-get install -y ca-certificates curl
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL "https://download.docker.com/linux/${DISTRO_ID}/gpg" -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+
+  local arch codename
+  arch="$(dpkg --print-architecture)"
+  codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+  cat >/etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${DISTRO_ID} ${codename} stable
+EOF
+
+  apt-get update
+  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker Engine install appears to have failed: "docker" command not found.\n' >&2
+    exit 1
+  fi
+}
+
+_install_create_network() {
+  if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+    printf 'Docker network "%s" already exists; skipping.\n' "$NETWORK_NAME"
+  else
+    printf 'Creating docker network "%s" (%s)...\n' "$NETWORK_NAME" "$NETWORK_SUBNET"
+    docker network create --driver bridge --subnet "$NETWORK_SUBNET" "$NETWORK_NAME"
+  fi
+}
+
+_install_build_image() {
+  printf 'Building %s image...\n' "$IMAGE_NAME"
+  if ! docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/Containers/build/opensmart/Dockerfile" "$ROOT_DIR"; then
+    printf 'Failed to build the %s image.\n' "$IMAGE_NAME" >&2
+    exit 1
+  fi
+}
+
+_install_run_container() {
+  printf 'Starting the %s container...\n' "$CONTAINER_NAME"
+  if ! (cd "$ROOT_DIR/Containers/run/opensmart" && docker compose up -d); then
+    printf 'Failed to start the %s container.\n' "$CONTAINER_NAME" >&2
+    exit 1
+  fi
+}
+
+_install_wait_running() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" ]]; then
+      printf 'Container "%s" is running.\n' "$CONTAINER_NAME"
+      return 0
+    fi
+    sleep 1
+  done
+  printf 'Container "%s" did not reach a running state.\n' "$CONTAINER_NAME" >&2
+  printf 'Check logs with: docker logs %s\n' "$CONTAINER_NAME" >&2
+  exit 1
+}
+
+_install_show_password() {
+  local attempt logs pw
+  for attempt in $(seq 1 30); do
+    logs="$(docker logs "$CONTAINER_NAME" 2>&1 || true)"
+    if grep -q "$FIRST_RUN_MARKER" <<<"$logs"; then
+      pw="$(sed -n 's/^Password: //p' <<<"$logs" | tail -n 1)"
+      printf '\n************************************************************\n'
+      printf '*  OpenSMART - Initial Admin Account Created\n'
+      printf '*\n'
+      printf '*    Username : admin\n'
+      printf '*    Password : %s\n' "${pw:-see: docker logs ${CONTAINER_NAME}}"
+      printf '*\n'
+      printf '*  Change this password after first login.\n'
+      printf '************************************************************\n\n'
+      return 0
+    fi
+    sleep 1
+  done
+  printf 'Could not find the initial admin password in container logs within 30 seconds.\n' >&2
+  printf 'View it with: docker logs %s\n' "$CONTAINER_NAME" >&2
+}
+
+cmd_install() {
+  _install_require_root
+  _install_check_distro
+  _install_docker_engine
+  _install_create_network
+  _install_build_image
+  _install_run_container
+  _install_wait_running
+  _install_show_password
+  printf 'OpenSMART is running at http://0.0.0.0:8000\n'
 }
 
 case "${1:-}" in
@@ -56,8 +204,7 @@ case "${1:-}" in
     cmd_start "$@"
     ;;
   --install)
-    printf 'opensmart.sh --install is not implemented yet (planned for a later phase).\n' >&2
-    exit 1
+    cmd_install
     ;;
   --help|-h)
     usage

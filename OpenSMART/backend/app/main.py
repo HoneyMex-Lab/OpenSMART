@@ -10,8 +10,9 @@ import psutil
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from .config import APP_VERSION, BUILD_VERSION, FRONTEND_ORIGIN, resolve_log_path
+from .config import APP_VERSION, BUILD_VERSION, FRONTEND_DIST_DIR, FRONTEND_ORIGIN, resolve_log_path
 from .database import get_db, init_db, init_network_ids_db, init_network_traffic_db
 from . import retention as _retention
 from .routes import account, audit, auth, modules, network_ids, network_traffic, opensmart_modules, settings, status, tools, users
@@ -159,3 +160,10 @@ app.include_router(network_traffic.router)
 app.include_router(status.router)
 app.include_router(users.router)
 app.include_router(audit.router)
+
+# Serve the built frontend (OpenSMART/frontend/dist) if it exists — used in
+# production/container mode where the app runs on a single port. Mounted
+# last so it never shadows the API routes above (Starlette matches routes
+# in registration order). In dev, dist/ is never built, so this is a no-op.
+if (FRONTEND_DIST_DIR / "index.html").exists():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST_DIR), html=True), name="frontend")
