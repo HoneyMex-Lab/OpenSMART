@@ -12,6 +12,13 @@ LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
 STEP_TOTAL=9
 STEP_NUM=0
+# Tells run_app.sh to refer to *this* script in its own user-facing
+# "run ... to do X" messages, instead of naming itself — keeps messages
+# consistent for anyone using opensmart.sh, since it's meant to be a
+# wrapper: exported so every host-side exec/invocation of run_app.sh below
+# inherits it automatically; the docker-exec path passes it explicitly
+# since docker exec starts a fresh environment, not inheriting the host's.
+export RUN_APP_INVOKE_AS="./opensmart.sh"
 
 usage() {
   cat <<'EOF'
@@ -174,12 +181,24 @@ _app_health() {
 # These operate on the app's own data/health, independent of how it's
 # currently running. Forward to wherever it actually lives: inside the
 # container (using its own uv/python environment) if one exists, or directly
-# on the host otherwise. -i (not -it) so this works both interactively and
-# when piped, since reset-* prompts for a typed confirmation.
+# on the host otherwise.
+#
+# The reset-* commands prompt for a typed confirmation via `read -p`, and
+# bash only *prints* a `read -p` prompt when stdin is an actual terminal —
+# `docker exec -i` alone (no -t) keeps stdin open for input but allocates no
+# pseudo-TTY, so the prompt text silently never appears even though the
+# confirmation is still being read underneath (this is what made it look
+# like "the prompt isn't shown"). Request a TTY with -t, but only when our
+# own stdin actually is one ([[ -t 0 ]]) — otherwise `docker exec -it` errors
+# with "the input device is not a TTY" for piped/scripted invocations.
 
 _run_app_passthrough() {
   if command -v docker >/dev/null 2>&1 && _container_exists; then
-    docker exec -i "$CONTAINER_NAME" ./opensmart/scripts/run_app.sh "$@"
+    local -a exec_flags=(-i)
+    if [[ -t 0 ]]; then
+      exec_flags+=(-t)
+    fi
+    docker exec "${exec_flags[@]}" -e RUN_APP_INVOKE_AS="$RUN_APP_INVOKE_AS" "$CONTAINER_NAME" ./opensmart/scripts/run_app.sh "$@"
   else
     "$ROOT_DIR/opensmart/scripts/run_app.sh" "$@"
   fi

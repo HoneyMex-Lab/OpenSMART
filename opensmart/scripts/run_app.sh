@@ -15,6 +15,11 @@ BIND_HOST="0.0.0.0"
 BIND_PORT="8000"
 PROD_MODE=0
 STATE_FILE="${ROOT_DIR}/logs/run_app.state"
+# How this script refers to itself in user-facing "run ... to do X" messages.
+# opensmart.sh (a wrapper around this script) overrides this to "./opensmart.sh"
+# when it invokes run_app.sh, so messages stay consistent with whichever
+# entrypoint the operator actually used, instead of always naming this script.
+RUN_APP_INVOKE_AS="${RUN_APP_INVOKE_AS:-./opensmart/scripts/run_app.sh}"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 APP_VERSION="${OPENSMART_VERSION:-v0.3 beta}"
 DB_PATH="${ROOT_DIR}/backend/opensmart.db"
@@ -674,7 +679,7 @@ if [[ "$COMMAND" == "reset-all" ]]; then
     exit 1
   fi
   _log INFO "full_reset completed"
-  printf '\nDone. Run ./scripts/run_app.sh start to start OpenSMART.\n'
+  printf '\nDone. Run %s start to start OpenSMART.\n' "$RUN_APP_INVOKE_AS"
   exit 0
 fi
 
@@ -724,7 +729,7 @@ if [[ "$COMMAND" == "reset-data-all" ]]; then
   fi
 
   _log INFO "reset_data_all completed"
-  printf 'Done. Run ./scripts/run_app.sh start to start OpenSMART.\n'
+  printf 'Done. Run %s start to start OpenSMART.\n' "$RUN_APP_INVOKE_AS"
   exit 0
 fi
 
@@ -757,7 +762,7 @@ if [[ "$COMMAND" == "reset-data-ids" ]]; then
   fi
 
   _log INFO "reset_data_ids completed"
-  printf 'Done. IDS alerts cleared. Run ./scripts/run_app.sh start to start OpenSMART.\n'
+  printf 'Done. IDS alerts cleared. Run %s start to start OpenSMART.\n' "$RUN_APP_INVOKE_AS"
   exit 0
 fi
 
@@ -790,7 +795,7 @@ if [[ "$COMMAND" == "reset-data-network" ]]; then
   fi
 
   _log INFO "reset_data_network completed"
-  printf 'Done. Network traffic events cleared. Run ./scripts/run_app.sh start to start OpenSMART.\n'
+  printf 'Done. Network traffic events cleared. Run %s start to start OpenSMART.\n' "$RUN_APP_INVOKE_AS"
   exit 0
 fi
 
@@ -812,7 +817,7 @@ if [[ "$COMMAND" == "reset-admin-password" ]]; then
     exit 1
   fi
   _log INFO "reset_admin_password completed"
-  printf '\nDone. Run ./scripts/run_app.sh start to start OpenSMART.\n'
+  printf '\nDone. Run %s start to start OpenSMART.\n' "$RUN_APP_INVOKE_AS"
   exit 0
 fi
 
@@ -822,7 +827,7 @@ fi
 printf 'Running pre-start checks...\n'
 if ! run_health_checks prestart; then
   printf '\nPre-start health check failed. Fix the issues above before starting OpenSMART.\n'
-  printf 'Run ./scripts/run_app.sh health for a full diagnostic report.\n\n'
+  printf 'Run %s health for a full diagnostic report.\n\n' "$RUN_APP_INVOKE_AS"
   _log ERROR "pre-start health check failed: startup aborted"
   exit 1
 fi

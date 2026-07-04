@@ -138,8 +138,27 @@ instance; `restart` reuses the previous bind/mode from that file unless
 explicitly overridden. `opensmart.sh reset-admin-password` /
 `reset-data-all` / `reset-data-ids` / `reset-data-network` / `reset-all` /
 `health` forward to the same-named `run_app.sh` subcommand — inside the
-container (`docker exec -i`) if one exists, or directly on the host
+container (`docker exec`) if one exists, or directly on the host
 otherwise — so these no longer require knowing about `run_app.sh` at all.
+
+Two consistency fixes on that forwarding path:
+- `run_app.sh`'s `reset-*` subcommands ask for a typed confirmation via
+  `read -p`, and bash only *prints* that prompt when stdin is an actual
+  terminal — `docker exec -i` alone (no `-t`) keeps stdin open for input but
+  allocates no pseudo-TTY, so the prompt was silently invisible (though
+  still functionally read) when going through the container. `opensmart.sh`
+  now adds `-t` too, but only when its own stdin is a real terminal
+  (`[[ -t 0 ]]`) — `-it` unconditionally would instead error ("not a TTY")
+  for piped/scripted invocations.
+- `run_app.sh`'s own post-action messages (e.g. "Run ./scripts/run_app.sh
+  start to start OpenSMART.") used to always name itself, even when invoked
+  through the `opensmart.sh` wrapper — confusing, since
+  `./scripts/run_app.sh` isn't a command `opensmart.sh` exposes.
+  `RUN_APP_INVOKE_AS` (env var, default `./opensmart/scripts/run_app.sh`)
+  controls this self-reference; `opensmart.sh` sets it to `./opensmart.sh`
+  (exported for host-mode invocations, passed via `docker exec -e` for the
+  container) so these messages point at whichever entrypoint was actually
+  used.
 
 **Single-port production serving:** `opensmart/backend/app/main.py` mounts
 `opensmart/frontend/dist` as static files (via `fastapi.staticfiles.StaticFiles`,
