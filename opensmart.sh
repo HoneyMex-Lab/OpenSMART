@@ -187,8 +187,13 @@ _install_wait_running() {
 }
 
 _install_show_password() {
+  # A genuinely fresh install has to uv-sync the backend, npm-install, and
+  # npm-run-build the frontend inside the container before the app logs the
+  # first-run marker — that routinely takes a couple of minutes on a cold
+  # cache, well past a 30-second window. Poll for up to 5 minutes.
   local attempt logs pw
-  for attempt in $(seq 1 30); do
+  printf 'Waiting for the initial admin account (first run can take a few minutes to install dependencies and build the frontend)...\n'
+  for attempt in $(seq 1 150); do
     logs="$(docker logs "$CONTAINER_NAME" 2>&1 || true)"
     if grep -q "$FIRST_RUN_MARKER" <<<"$logs"; then
       pw="$(sed -n 's/^Password: //p' <<<"$logs" | tail -n 1)"
@@ -202,9 +207,9 @@ _install_show_password() {
       printf '************************************************************\n\n'
       return 0
     fi
-    sleep 1
+    sleep 2
   done
-  printf 'Could not find the initial admin password in container logs within 30 seconds.\n' >&2
+  printf 'Could not find the initial admin password in container logs within 5 minutes.\n' >&2
   printf 'View it with: docker logs %s\n' "$CONTAINER_NAME" >&2
 }
 
