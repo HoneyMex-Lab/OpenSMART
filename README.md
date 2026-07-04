@@ -288,6 +288,7 @@ npm run build
 - `docs/configuration.md`: environment and runtime configuration.
 - `docs/security.md`: security behavior and limitations.
 - `docs/development.md`: local development workflow.
+- `docs/MANIFEST.json`: machine-readable project manifest (stack, layout, entrypoints, API surface, configuration, security posture, deployment status) for tooling and coding agents.
 
 ## Known Prototype Limitations
 

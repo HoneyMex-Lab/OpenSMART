@@ -211,7 +211,7 @@ Request:
 
 Requires authentication.
 
-Runs `backend/app/scripts/module_status.sh` and returns parsed JSON.
+Runs `opensmart/backend/app/scripts/module_status.sh` and returns parsed JSON.
 
 Response:
 

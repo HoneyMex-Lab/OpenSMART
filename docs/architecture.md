@@ -2,6 +2,8 @@
 
 OpenSMART is split into a Python backend, a React frontend, and Bash operational hooks. The whole app lives under `opensmart/` at the repo root, alongside a `containers/` tree for Docker-based deployment tooling and a root-level `opensmart.sh` entrypoint.
 
+This document is the human-readable architecture reference. `docs/MANIFEST.json` is the machine-readable companion — the same facts (stack, layout, entrypoints, API surface, configuration, security posture, deployment status) in a structured format meant for tooling and coding agents to parse directly rather than scrape from prose.
+
 ## Runtime Components
 
 - Frontend: React + TypeScript + Vite, served by the Vite dev server during development.
@@ -61,12 +63,18 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   itself (see below) — this is the mode the container entrypoint uses.
 - `./opensmart.sh --install` bootstraps Docker Engine on Debian/Ubuntu (apt
   only), creates the `opensmart` bridge network, builds the `opensmart/web`
-  image from `containers/build/opensmart/Dockerfile`, and runs it via
+  image from `containers/build/opensmart/Dockerfile`, chowns the bind-mounted
+  app directory to uid 1000 (the container's non-root `opensmart` user; a
+  root-owned checkout otherwise leaves the container unable to create
+  `.venv`/`node_modules`/the SQLite DBs), and runs it via
   `containers/run/opensmart/docker-compose.yml` with
   `./opensmart.sh start --bind 0.0.0.0:8000 --prod` as its command. It must
-  run as root and is implemented but **has not been executed against a real
-  Docker Engine** — it was written and statically reviewed only; verify it
-  yourself on a host you're ready to commit to before relying on it.
+  run as root. **Verified against a real Docker Engine** on a Debian 13 test
+  host: a fresh install ends with a stable container serving `/api/health`
+  and the built frontend, and the initial admin password extracted from
+  `docker logs`. A cold install (no cached `.venv`/`node_modules`) can take a
+  few minutes to build the frontend and sync backend dependencies inside the
+  container before it's reachable.
 
 **Single-port production serving:** `opensmart/backend/app/main.py` mounts
 `opensmart/frontend/dist` as static files (via `fastapi.staticfiles.StaticFiles`,

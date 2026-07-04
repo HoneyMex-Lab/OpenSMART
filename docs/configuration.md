@@ -4,14 +4,14 @@ OpenSMART uses two configuration layers: environment variables for process-level
 
 ## Environment Variables
 
-Example values are in `backend/.env.example`.
+Example values are in `opensmart/backend/.env.example`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENSMART_DB_PATH` | `backend/opensmart.db` | Main SQLite database path for users, sessions, settings, audit events, catalogs, and resource snapshots. |
-| `OPENSMART_TELEMETRY_DB_PATH` | `backend/opensmart_telemetry.db` | Legacy compatibility telemetry SQLite database path. |
-| `OPENSMART_NETWORK_IDS_DB_PATH` | `backend/opensmart_network_ids.db` | Network IDS telemetry SQLite database path. |
-| `OPENSMART_NETWORK_TRAFFIC_DB_PATH` | `backend/opensmart_network_traffic.db` | Network Traffic telemetry SQLite database path. |
+| `OPENSMART_DB_PATH` | `opensmart/backend/opensmart.db` | Main SQLite database path for users, sessions, settings, audit events, catalogs, and resource snapshots. |
+| `OPENSMART_TELEMETRY_DB_PATH` | `opensmart/backend/opensmart_telemetry.db` | Legacy compatibility telemetry SQLite database path. |
+| `OPENSMART_NETWORK_IDS_DB_PATH` | `opensmart/backend/opensmart_network_ids.db` | Network IDS telemetry SQLite database path. |
+| `OPENSMART_NETWORK_TRAFFIC_DB_PATH` | `opensmart/backend/opensmart_network_traffic.db` | Network Traffic telemetry SQLite database path. |
 | `OPENSMART_FRONTEND_ORIGIN` | `http://localhost:5173` | Allowed CORS origin for the frontend. |
 | `OPENSMART_SESSION_TTL_HOURS` | `12` | Session lifetime in hours. |
 | `OPENSMART_VERSION` | `v0.3 beta` | Platform version used for seeded settings. |
@@ -122,9 +122,9 @@ Default OpenSMART modules are seeded on startup:
 
 Ignored runtime files include:
 
-- `backend/*.db`
-- `backend/*.db-*`
-- `backend/.env`
+- `opensmart/backend/*.db`
+- `opensmart/backend/*.db-*`
+- `opensmart/backend/.env`
 - `logs/*.log`
 - virtual environments and frontend build artifacts
 
