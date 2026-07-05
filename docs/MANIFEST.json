@@ -91,6 +91,7 @@
         "usage": "sudo ./opensmart.sh install",
         "requires": "root, Debian or Ubuntu (apt-based) only",
         "steps": [
+          "Check every ancestor directory of the checkout is traversable by the container's non-root user (fails clearly here — e.g. installing under /root, mode 700 — instead of an opaque crash loop later)",
           "Install Docker Engine + Compose plugin if not already present",
           "Create the external 'opensmart' bridge network (172.250.250.0/24) idempotently",
           "docker build -t opensmart/web -f containers/build/opensmart/Dockerfile .",
@@ -99,7 +100,7 @@
           "Poll for a stable running container (not just a brief window between crash-loop restarts)",
           "Poll container logs for the first-run admin password and print it on the host"
         ],
-        "verification_status": "Verified against a real Docker Engine on a Debian 13 reference host on 2026-07-04. Two bugs found and fixed during that verification: bind-mount ownership (crash loop) and an install-time password-reveal timeout too short for a cold install.",
+        "verification_status": "Verified against a real Docker Engine on a Debian 13 reference host on 2026-07-04. Two bugs found and fixed during that verification: bind-mount ownership (crash loop) and an install-time password-reveal timeout too short for a cold install. On 2026-07-05, installing under /root on the same reference host reproduced a related-but-distinct crash loop (container's own entrypoint gets 'Permission denied' — chowning the checkout doesn't help when an ANCESTOR directory like /root, mode 700, blocks the non-root container user's traversal) — fixed by adding an explicit pre-flight check (see steps above) rather than another silent chown.",
         "output": {
           "terminal": "One line per main step (9 total: root check, distro detection, Docker Engine install, network creation, image build, ownership fix, container start, stability check, readiness/password wait), preceded by a banner (ASCII honeycomb logo, Mizton Labs & Honeynet Mexico Team attribution). Raw command output (apt-get, docker build, docker compose) is not printed to the terminal.",
           "log_file": "logs/install.log — created fresh on every run, holds full timestamped step markers plus all redirected command output. On failure, the terminal step line is closed with 'failed' and points at this log."

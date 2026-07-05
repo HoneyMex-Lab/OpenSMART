@@ -10,7 +10,7 @@ CONTAINER_NAME="opensmart"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
-STEP_TOTAL=9
+STEP_TOTAL=10
 STEP_NUM=0
 # Tells run_app.sh to refer to *this* script in its own user-facing
 # "run ... to do X" messages, instead of naming itself — keeps messages
@@ -455,6 +455,28 @@ _install_require_root() {
   printf 'ok\n'
 }
 
+_install_check_path_traversable() {
+  # The container runs as a non-root user (uid 1000) and needs every ancestor
+  # directory of the bind-mounted checkout to be traversable (the "other"
+  # execute bit) for it to reach anything inside — chowning the checkout
+  # itself (see _install_fix_ownership) doesn't help if a directory ABOVE it
+  # blocks traversal. Installing under /root (mode 700, root-only) is the
+  # common way to hit this: the container starts, but its own entrypoint
+  # gets "Permission denied" trying to exec anything inside the mount,
+  # crash-looping with no indication of why. Confirmed twice against a real
+  # Docker Engine before this check was added.
+  _step "Checking the install path is reachable by the container's non-root user"
+  local dir="$ROOT_DIR" perms
+  while [[ "$dir" != "/" && -n "$dir" ]]; do
+    perms="$(stat -c '%A' "$dir" 2>/dev/null)" || break
+    if [[ "${perms:9:1}" != "x" ]]; then
+      _step_fail "\"$dir\" is not traversable by the container's non-root user (permissions: $perms). The container will start but crash-loop with \"Permission denied\" trying to run anything inside the bind mount. This usually means installing under /root (mode 700, root-only). Move this checkout to a world-readable location (e.g. /opt, /srv, or a regular user's home directory) and re-run install from there."
+    fi
+    dir="$(dirname "$dir")"
+  done
+  printf 'ok\n'
+}
+
 _install_check_distro() {
   _step "Detecting Linux distribution"
   if [[ ! -r /etc/os-release ]]; then
@@ -591,6 +613,7 @@ cmd_install() {
   _log_init
   printf 'Full installer log: %s\n\n' "$INSTALL_LOG"
   _install_require_root
+  _install_check_path_traversable
   _install_check_distro
   _install_docker_engine
   _install_create_network

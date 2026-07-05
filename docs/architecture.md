@@ -88,7 +88,15 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   then polls `/api/health` on the container's published port (resolved via
   `docker port`, not assumed) for up to 5 minutes, since a cold start needs
   to `uv sync`/`npm install`/`npm run build` inside the container first.
-- `./opensmart.sh install` bootstraps Docker Engine on Debian/Ubuntu (apt
+- `./opensmart.sh install` first checks that every ancestor directory of the
+  checkout is traversable by the container's non-root user (the "other"
+  execute bit) — installing under `/root` (mode `700`) is the common way to
+  fail this, and fails clearly here rather than as an opaque crash loop
+  later (confirmed twice against a real Docker Engine before this check
+  existed: the container starts, but its own entrypoint gets "Permission
+  denied" trying to run anything inside the bind mount, because chowning the
+  checkout itself — see below — doesn't help when a directory *above* it
+  blocks traversal). It then bootstraps Docker Engine on Debian/Ubuntu (apt
   only), creates the `opensmart` bridge network, builds the `opensmart/web`
   image from `containers/build/opensmart/Dockerfile`, chowns the bind-mounted
   app directory to uid 1000 (the container's non-root `opensmart` user; a
