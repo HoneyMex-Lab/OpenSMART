@@ -99,6 +99,10 @@ DEFAULT_SETTINGS = {
     "notification_platform_event_health_alerts": "false",
     "notification_platform_event_internal_feeds": "false",
     "password_policy": "strict",
+    # Existing/upgraded installs default to "true" (already set up); only a
+    # genuinely fresh install (bootstrap_admin() below) sets this to "false"
+    # so the first-run Wizard doesn't retroactively appear after an upgrade.
+    "wizard_completed": "true",
 }
 
 
@@ -748,6 +752,10 @@ def bootstrap_admin() -> None:
             VALUES (?, ?, 'admin', 'OpenSMART Administrator', '', 1, 1, ?)
             """,
             ("admin", ph.hash(password), now_iso()),
+        )
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('wizard_completed', 'false') "
+            "ON CONFLICT(key) DO UPDATE SET value = 'false'"
         )
         db.commit()
     print("OpenSMART initial admin account created", flush=True)

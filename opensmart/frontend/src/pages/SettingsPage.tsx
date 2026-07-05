@@ -52,7 +52,7 @@ export default function SettingsPage({ settings, setSettings, tools, onToolsUpda
       {tab === 'opensmart-modules' && <OpenSmartConfigPage modules={modules} onModulesUpdate={onModulesUpdate} />}
       {tab === 'tools' && <ToolsConfigPage settings={settings} setSettings={setSettings} tools={tools} onToolsUpdate={onToolsUpdate} />}
       {tab === 'notifications' && <NotificationsPage settings={settings} setSettings={setSettings} />}
-      {tab === 'wizard' && <WizardPage />}
+      {tab === 'wizard' && <WizardPage settings={settings} setSettings={setSettings} modules={modules} onModulesUpdate={onModulesUpdate} tools={tools} onToolsUpdate={onToolsUpdate} />}
     </section>
   );
 }
