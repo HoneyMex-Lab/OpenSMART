@@ -22,6 +22,16 @@ CONTAINER_DEPENDENCIES: dict[str, list[str]] = {
     "arkime": ["opensearch"],
 }
 
+# Containers whose service is gated behind a compose profile not activated
+# by default. openvpn's docker-compose.yml keeps it out of a bare
+# `docker compose up` (see that file's own header comment: no /dev/net/tun
+# on this environment's host) — without passing this along, `up`/`down`/`ps`
+# would silently no-op on it instead of actually starting, stopping, or
+# checking it.
+CONTAINER_PROFILES: dict[str, str] = {
+    "openvpn": "manual",
+}
+
 # OpenSMART module name -> required container(s), or None if no container
 # template exists for it yet (reported to the caller, not silently skipped).
 MODULE_CONTAINERS: dict[str, list[str] | None] = {
@@ -57,9 +67,11 @@ def _run_compose(container: str, *args: str) -> tuple[bool, str]:
     path = _compose_path(container)
     if not path.is_file():
         return False, f"No docker-compose.yml found for '{container}' at {path}"
+    profile = CONTAINER_PROFILES.get(container)
+    profile_args = ["--profile", profile] if profile else []
     try:
         result = subprocess.run(
-            ["docker", "compose", "-f", str(path), *args],
+            ["docker", "compose", "-f", str(path), *profile_args, *args],
             cwd=str(path.parent),
             capture_output=True,
             text=True,

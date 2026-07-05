@@ -1,5 +1,14 @@
 services:
   wireguard:
+    # Built by opensmart.sh (install/recreate) against the real host Docker
+    # daemon, not by the backend's provisioning.py — the docker-socket-proxy
+    # it talks through has BUILD disabled on purpose (see
+    # docs/architecture.md). This build: section is for manual
+    # `docker compose build`/`up --build` use only; it also needs
+    # opensmart/base built first (containers/build/base/).
+    build:
+      context: ../../../../containers/build/wireguard
+      dockerfile: Dockerfile
     image: opensmart/wireguard
     container_name: opensmart-wireguard
     hostname: wireguard

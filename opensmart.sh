@@ -435,11 +435,16 @@ cmd_recreate() {
     exit 1
   fi
 
-  # Same reasoning as above: keep the native module images (Suricata, Zeek)
-  # in sync with the current checkout rather than silently reusing whatever
-  # was tagged opensmart/base|suricata|zeek from a previous install.
-  printf 'Rebuilding native module images (base, Suricata, Zeek)...\n'
-  if ! _build_native_module_image base || ! _build_native_module_image suricata || ! _build_native_module_image zeek; then
+  # Same reasoning as above: keep the native module images (Suricata, Zeek,
+  # WireGuard, OpenVPN) in sync with the current checkout rather than
+  # silently reusing whatever was tagged opensmart/base|suricata|zeek|
+  # wireguard|openvpn from a previous install.
+  printf 'Rebuilding native module images (base, Suricata, Zeek, WireGuard, OpenVPN)...\n'
+  if ! _build_native_module_image base \
+    || ! _build_native_module_image suricata \
+    || ! _build_native_module_image zeek \
+    || ! _build_native_module_image wireguard \
+    || ! _build_native_module_image openvpn; then
     printf '✘ Failed to rebuild native module images.\n' >&2
     exit 1
   fi
@@ -627,7 +632,8 @@ _build_native_module_image() {
 }
 
 _install_build_native_modules() {
-  # Suricata and Zeek (opensmart/containers/run/{suricata,zeek}/) ship as
+  # Suricata, Zeek, WireGuard, and OpenVPN
+  # (opensmart/containers/run/{suricata,zeek,wireguard,openvpn}/) ship as
   # Dockerfile templates, not pre-built/pullable images, so something has to
   # build them. That can't be the backend's own provisioning.py: it talks to
   # the host Docker daemon through the docker-socket-proxy sidecar, whose
@@ -636,15 +642,16 @@ _install_build_native_modules() {
   # the host is exactly the privilege that proxy exists to withhold. So this
   # runs here instead, host-side, against the real daemon, once per
   # install/recreate; provisioning.py only ever starts/stops images that
-  # already exist. Both Suricata and Zeek build FROM opensmart/base, so it's
-  # built first.
-  _step "Building native module images (base, Suricata, Zeek)"
+  # already exist. All four build FROM opensmart/base, so it's built first.
+  _step "Building native module images (base, Suricata, Zeek, WireGuard, OpenVPN)"
   {
     _build_native_module_image base &&
     _build_native_module_image suricata &&
-    _build_native_module_image zeek
+    _build_native_module_image zeek &&
+    _build_native_module_image wireguard &&
+    _build_native_module_image openvpn
   } >> "$INSTALL_LOG" 2>&1 \
-    || _step_fail "Failed to build native module images (base/Suricata/Zeek)."
+    || _step_fail "Failed to build native module images (base/Suricata/Zeek/WireGuard/OpenVPN)."
   printf 'done\n'
 }
 
