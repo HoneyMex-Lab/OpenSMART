@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import type { NetworkIdsSummary, NetworkTrafficSummary, OpenSmartModule, ResourcePoint, ResourceStatus, Settings, ToolConfig } from '../types';
 import { api } from '../api';
-import { toolDefinitions } from './ToolsPage';
+import { toolDefinitions } from './toolDefinitions';
 import { t } from '../i18n';
 
 type Props = {
@@ -228,16 +228,6 @@ function PanelTitle({ title, subtitle, isDemo, isEmpty, onDemoClick, action }: {
   );
 }
 
-function MetricCard({ label, value, detail, tone = 'good', className = '', onClick }: { label: string; value: number; detail?: string; tone?: string; className?: string; onClick: () => void }) {
-  return (
-    <button className={`metric-card ${tone} ${className}`.trim()} onClick={onClick}>
-      <h2>{label}</h2>
-      <strong>{value}</strong>
-      {detail && <small>{detail}</small>}
-    </button>
-  );
-}
-
 function notificationWarningChips(settings: Settings): Chip[] {
   const items = [
     ['notification_ids_webhook_status', 'IDS webhook'],
@@ -406,10 +396,9 @@ function FirewallChart({ blocked, allowed }: { blocked: number; allowed: number 
 }
 
 function useFirewallBuckets(blocked: number, allowed: number) {
-  const ref = useRef<{ blocked: number; allowed: number }[] | null>(null);
-  if (!ref.current) {
+  return useMemo(() => {
     const seed = blocked + allowed;
-    ref.current = Array.from({ length: 12 }, (_, i) => {
+    return Array.from({ length: 12 }, (_, i) => {
       const bf = 0.6 + 0.8 * Math.abs(Math.sin((seed + i * 17) * 0.37));
       const af = 0.6 + 0.8 * Math.abs(Math.sin((seed + i * 13) * 0.41));
       return {
@@ -417,8 +406,7 @@ function useFirewallBuckets(blocked: number, allowed: number) {
         allowed: Math.round((allowed / 12) * af),
       };
     });
-  }
-  return ref.current;
+  }, [blocked, allowed]);
 }
 
 function ServiceLink({ label, value, target, modules, onNavigate, isDemo = false, isEmpty = false, disabledNoDemo = false }: { label: string; value: number; target: string; modules: OpenSmartModule[]; onNavigate: (page: string) => void; isDemo?: boolean; isEmpty?: boolean; disabledNoDemo?: boolean }) {

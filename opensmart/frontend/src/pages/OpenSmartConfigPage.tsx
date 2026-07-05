@@ -78,7 +78,7 @@ export default function OpenSmartConfigPage({ modules, onModulesUpdate }: { modu
   const [activeId, setActiveId] = useState<number | null>(modules[0]?.id ?? null);
   useEffect(() => {
     setDraft(modules);
-    if (activeId === null && modules.length > 0) setActiveId(modules[0].id);
+    setActiveId((prev) => (prev === null && modules.length > 0 ? modules[0].id : prev));
   }, [modules]);
 
   function requestSave() {

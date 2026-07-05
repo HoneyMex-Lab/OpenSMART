@@ -22,8 +22,6 @@ export default function AccessPage() {
   const [passwordPanel, setPasswordPanel] = useState<PasswordPanel | null>(null);
   const [message, setMessage] = useState('');
 
-  useEffect(() => { refreshUsers(); }, []);
-
   async function refreshUsers() {
     try {
       const result = await api.users();
@@ -32,6 +30,8 @@ export default function AccessPage() {
       setMessage(error instanceof Error ? error.message : 'Could not load users');
     }
   }
+
+  useEffect(() => { refreshUsers(); }, []);
 
   async function create(event: FormEvent) {
     event.preventDefault();

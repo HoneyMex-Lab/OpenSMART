@@ -21,10 +21,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .database import get_network_ids_db, get_network_traffic_db, now_iso
+from .database import get_network_ids_db, get_network_traffic_db
 from .eve_ingest import (
     _update_state,
-    compute_event_hash,
     normalize_network_event,
     shared_config,
     write_network_events,
