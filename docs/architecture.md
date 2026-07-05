@@ -4,6 +4,8 @@ OpenSMART is split into a Python backend, a React frontend, and Bash operational
 
 This document is the human-readable architecture reference. `docs/MANIFEST.json` is the machine-readable companion — the same facts (stack, layout, entrypoints, API surface, configuration, security posture, deployment status) in a structured format meant for tooling and coding agents to parse directly rather than scrape from prose.
 
+Two other technical references cover different depths of the same system: `docs/technical-overview.md` (shorter, request-flow-level summary with a diagram of the container provisioning flow) and `docs/modules-reference.md` (per-module/tool detail: what each one does, its config keys, and its implementation status). `docs/user-guide.md` covers the same ground for a non-technical audience.
+
 ## Runtime Components
 
 - Frontend: React + TypeScript + Vite, served by the Vite dev server during development.
@@ -34,14 +36,14 @@ This document is the human-readable architecture reference. `docs/MANIFEST.json`
 
 - `opensmart/frontend/src/App.tsx`: auth bootstrap and app-level state.
 - `opensmart/frontend/src/api.ts`: fetch wrapper and API client functions.
-- `opensmart/frontend/src/components/`: login, shell, and sidebar components.
+- `opensmart/frontend/src/components/`: login, forced-password-change, shell, and sidebar components.
 - `opensmart/frontend/src/pages/`: OpenSMART modules, tools, account, status, audit, about, WebConsole Config, Tools Config, OpenSMART Config, wizard, and access pages.
 - `opensmart/frontend/public/assets/`: local generated SVG assets for tool and summary cards.
 - `opensmart/frontend/src/styles.css`: responsive dark theme and layout styles.
 
 ## Admin Bootstrap
 
-On backend startup, `init_db()` creates the schema and default records. If no admin user exists, it creates username `admin` with a generated password and prints it once.
+On backend startup, `init_db()` creates the schema and default records. If no admin user exists, it creates username `admin` with a generated password, prints it once, marks the account as requiring a password change on next login, and marks the install as needing the first-run Wizard — see "Password Policy and Forced Change" and "First-Run Wizard" below.
 
 `opensmart/scripts/run_app.sh` watches backend startup output for the first-run marker and pauses so the operator can save the password before the frontend starts.
 
@@ -216,8 +218,12 @@ if the container's view of `opensmart/` matches the host's. Running
 the app container does not mount `docker.sock` directly. Instead,
 `opensmart/containers/run/opensmart/docker-compose.yml` runs a
 `docker-socket-proxy` sidecar (holds the real socket, mounted read-only) with
-an explicit allowlist (`CONTAINERS`, `NETWORKS`, `IMAGES`, `POST` only — no
-`EXEC`, `BUILD`, `SWARM`, `VOLUMES`, `SECRETS`, etc.), and the `opensmart`
+an explicit allowlist (`CONTAINERS`, `NETWORKS`, `IMAGES`, `VOLUMES`, `POST`
+only — no `EXEC`, `BUILD`, `SWARM`, `SECRETS`, `SERVICES`, `PLUGINS`,
+`CONFIGS`, `SESSION`, `DISTRIBUTION`, `SYSTEM`, `AUTH`; `VOLUMES` is on
+because `docker compose` queries the `/volumes` API as part of normal project
+reconciliation even for bind-mount-only projects — confirmed via the proxy's
+own access logs during live testing, not a guess), and the `opensmart`
 service's `DOCKER_HOST` points at it. The backend shells out to
 `docker compose -f <path> up -d`/`down` against that restricted endpoint,
 allowlisted to the container names that actually exist under
@@ -225,4 +231,75 @@ allowlisted to the container names that actually exist under
 an arbitrary path. `MODULE_CONTAINERS`/`TOOL_CONTAINERS` in that file map
 OpenSMART modules/tools to the container(s) they need, and explicitly report
 "no template yet" for the ones with no container (Wazuh-backed modules,
-Graylog) rather than silently no-op'ing.
+Graylog) rather than silently no-op'ing. See `docs/technical-overview.md`
+for a diagram of this flow and its security model.
+
+**Verified against a real Docker Engine** (not just typecheck/lint): built
+the `opensmart/base` and `opensmart/suricata` images, started/stopped
+Suricata through `/api/provisioning/start`/`stop` with `docker ps` confirming
+actual container state, and exercised the module-level path (`kind:
+"module"`) that the Wizard and the Network IDS toggle actually use. That
+test surfaced and fixed three real issues: the app container's own
+entrypoint (`opensmart.sh start`) initially saw itself as "an existing
+opensmart container" once it gained Docker access and tried to manage
+itself instead of starting the app (fixed with a `/.dockerenv` check that
+only applies the host/container-detection branch on the actual host); the
+mount had to anchor at the repo root, not just `opensmart/`, since
+`opensmart.sh` itself lives one level up; and the proxy's allowlist needed
+`VOLUMES=1` (see above).
+
+## Password Policy and Forced Change
+
+- `users.must_change_password` (added via `ALTER TABLE`) is set whenever a
+  password is set *for* a user rather than *by* them: the bootstrap admin
+  account, a brand-new user an admin creates, an admin resetting another
+  user's (or their own) password, and the CLI `reset-admin-password`/
+  `full-reset` paths. It is cleared when the user changes their own password
+  via `POST /api/account/password`.
+- Enforced server-side, not just in the UI: `security.require_csrf()` (used
+  by every mutating route) returns `423 Locked` while the flag is set,
+  except for `/api/auth/me`, `/api/auth/logout`, and
+  `/api/account/password` — just enough surface for the user to identify
+  themselves, fix their password, or log out. The frontend renders a
+  blocking `ForceChangePasswordPage` in the same situations.
+- A configurable complexity policy (`password_policy` setting: `strict`
+  [default] / `moderate` / `low` / `disabled`) is enforced by
+  `security.validate_password_complexity()` on every user-supplied password
+  (account self-service, admin-created users, admin password resets — not
+  the CLI's own randomly-generated reset passwords, which are always
+  complex enough by construction). The Settings UI shows a red warning
+  banner when `low`/`disabled` is selected.
+- The two previously-duplicated password-hashing code paths (`routes/*.py`
+  vs. the CLI's direct `argon2` calls in `admin_tools.py`) are now one
+  shared helper, `security.set_user_password()`.
+
+## First-Run Wizard
+
+- A global `wizard_completed` setting (default `"true"` for
+  existing/upgraded installs) is set to `"false"` only by `bootstrap_admin()`
+  — i.e. only on a genuinely fresh install with no admin user yet — so it
+  never retroactively appears after an upgrade.
+- After the bootstrap admin's forced password change, `App.tsx` renders
+  `WizardPage.tsx` instead of the normal app shell while
+  `wizard_completed !== 'true'` and the logged-in user is an admin.
+- Five steps: mandatory version-acknowledgment, optional logo upload,
+  enable OpenSMART modules (reuses `OpenSmartConfigPage.tsx` as-is), enable
+  Tools (reuses `ToolsConfigPage.tsx` as-is), and Finish — which attempts
+  real container provisioning for every enabled module/tool and reports a
+  per-item result. The same `WizardPage` is also reachable manually from
+  `Settings > Wizard` for re-configuration later.
+- No real "check for updates"/auto-update mechanism exists yet — the
+  Update step is an honest acknowledgment gate (link to the repo, run
+  `./opensmart.sh install`/`--recreate`), not a fabricated auto-updater.
+
+## Network IDS: Native vs. External eve.json
+
+- The Network IDS module's config gained an `eve_source` field
+  (`external` [default, preserves existing installs] / `native`).
+- In `native` mode, `network_ids.ids_config()` derives the eve.json path
+  automatically from the bundled Suricata container's known output location
+  (`NATIVE_SURICATA_EVE_PATH`, computed from `opensmart/containers/run/suricata`'s
+  bind mount) instead of a manually-typed path, mirroring the existing
+  Network Traffic Monitoring log-source toggle. The OpenSMART Config UI
+  shows a live Start/Stop/status control for the Suricata container in this
+  mode, backed by the provisioning engine above.
