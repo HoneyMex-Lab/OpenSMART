@@ -1,3 +1,4 @@
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -10,6 +11,17 @@ from .config import CSRF_COOKIE, SESSION_COOKIE, SESSION_TTL_HOURS
 from .database import get_db, now_iso
 
 ph = PasswordHasher()
+
+PASSWORD_POLICIES = ("strict", "moderate", "low", "disabled")
+
+# (min_length, min_character_classes) per policy. Character classes counted:
+# lowercase, uppercase, digit, symbol.
+_PASSWORD_POLICY_RULES = {
+    "strict": (12, 4),
+    "moderate": (10, 3),
+    "low": (8, 0),
+    "disabled": (1, 0),
+}
 
 
 def utc_now() -> datetime:
@@ -49,6 +61,41 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def hash_password(password: str) -> str:
     return ph.hash(password)
+
+
+def get_password_policy() -> str:
+    with get_db() as db:
+        row = db.execute("SELECT value FROM settings WHERE key = 'password_policy'").fetchone()
+    policy = row["value"] if row else "strict"
+    return policy if policy in PASSWORD_POLICIES else "strict"
+
+
+def validate_password_complexity(password: str, policy: str | None = None) -> None:
+    policy = policy if policy in PASSWORD_POLICIES else get_password_policy()
+    min_length, min_classes = _PASSWORD_POLICY_RULES[policy]
+    class_count = sum(
+        bool(re.search(pattern, password))
+        for pattern in (r"[a-z]", r"[A-Z]", r"\d", r"[^A-Za-z0-9]")
+    )
+    if len(password) < min_length or class_count < min_classes:
+        requirement = f"at least {min_length} characters"
+        if min_classes:
+            requirement += f" and {min_classes} of: lowercase, uppercase, digit, symbol"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Password does not meet the '{policy}' complexity policy ({requirement}).",
+        )
+
+
+def set_user_password(user_id: int, new_password: str, *, require_change: bool, invalidate_sessions: bool = False) -> None:
+    with get_db() as db:
+        db.execute(
+            "UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?",
+            (hash_password(new_password), 1 if require_change else 0, user_id),
+        )
+        if invalidate_sessions:
+            db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        db.commit()
 
 
 def check_lockout(username: str, ip_address: str) -> None:
@@ -129,7 +176,7 @@ def get_current_user(session_token: Annotated[str | None, Cookie(alias=SESSION_C
     with get_db() as db:
         row = db.execute(
             """
-            SELECT s.token, s.csrf_token, s.expires_at, u.id, u.username, u.role, u.full_name, u.email, u.enabled
+            SELECT s.token, s.csrf_token, s.expires_at, u.id, u.username, u.role, u.full_name, u.email, u.enabled, u.must_change_password
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ?
@@ -144,10 +191,17 @@ def get_current_user(session_token: Annotated[str | None, Cookie(alias=SESSION_C
     return dict(row)
 
 
+# Routes a user with a pending forced password change may still reach —
+# just enough to identify themselves, fix their password, or bail out.
+PASSWORD_CHANGE_EXEMPT_PATHS = {"/api/auth/me", "/api/auth/logout", "/api/account/password"}
+
+
 def require_csrf(request: Request, user: Annotated[dict, Depends(get_current_user)]) -> dict:
     csrf_header = request.headers.get("x-csrf-token")
     if not csrf_header or not secrets.compare_digest(csrf_header, user["csrf_token"]):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token")
+    if user["must_change_password"] and request.url.path not in PASSWORD_CHANGE_EXEMPT_PATHS:
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Password change required")
     return user
 
 

@@ -69,13 +69,13 @@ export default function AccessPage() {
       setMessage('New password and confirmation do not match.');
       return;
     }
-    if (passwordPanel.password.length < 12) {
-      setMessage('Password must be at least 12 characters.');
-      return;
+    try {
+      await updateUser(user, { password: passwordPanel.password });
+      setPasswordPanel(null);
+      setMessage(`Password changed for ${user.username}. They must change it on next login.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not change password');
     }
-    await updateUser(user, { password: passwordPanel.password });
-    setPasswordPanel(null);
-    setMessage(`Password changed for ${user.username}.`);
   }
 
   async function toggleEnabled(user: User) {
@@ -96,7 +96,7 @@ export default function AccessPage() {
         <h2>Create User</h2>
         <form onSubmit={create} className="stack-form">
           <input placeholder="Username" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required />
-          <input type="password" placeholder="Password, minimum 12 characters" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} minLength={12} required />
+          <input type="password" placeholder="Password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required />
           <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })}><option value="user">User</option><option value="admin">Admin</option></select>
           <input placeholder="Full name" value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} />
           <input placeholder="Email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
@@ -127,8 +127,8 @@ export default function AccessPage() {
             <h2>Change Password</h2>
             <p className="muted">User: {users.find((user) => user.id === passwordPanel.userId)?.username}</p>
             <div className="stack-form">
-              <input type="password" placeholder="New password, minimum 12 characters" value={passwordPanel.password} onChange={(event) => setPasswordPanel({ ...passwordPanel, password: event.target.value })} minLength={12} />
-              <input type="password" placeholder="Confirm new password" value={passwordPanel.confirm} onChange={(event) => setPasswordPanel({ ...passwordPanel, confirm: event.target.value })} minLength={12} />
+              <input type="password" placeholder="New password" value={passwordPanel.password} onChange={(event) => setPasswordPanel({ ...passwordPanel, password: event.target.value })} />
+              <input type="password" placeholder="Confirm new password" value={passwordPanel.confirm} onChange={(event) => setPasswordPanel({ ...passwordPanel, confirm: event.target.value })} />
               <div className="confirm-actions"><button className="btn-secondary" onClick={() => setPasswordPanel(null)}>Cancel</button><button onClick={() => { const user = users.find((item) => item.id === passwordPanel.userId); if (user) acceptPasswordChange(user); }}>Accept</button></div>
             </div>
           </div>

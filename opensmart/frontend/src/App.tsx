@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, setCsrfToken } from './api';
 import AppShell from './components/AppShell';
+import ForceChangePasswordPage from './components/ForceChangePasswordPage';
 import LoginPage from './components/LoginPage';
 import { t } from './i18n';
 import type { Settings, User } from './types';
@@ -68,7 +69,13 @@ export default function App() {
     setUser(null);
   }
 
+  async function handlePasswordChanged() {
+    const me = await api.me();
+    setUser({ ...me.user, csrfToken: me.user.csrfToken });
+  }
+
   if (loading) return <div className="loading">{t(settings, 'common.loadingOpenSMART', 'Loading OpenSMART...')}</div>;
   if (!user) return <LoginPage settings={settings} onLogin={handleLogin} />;
+  if (user.mustChangePassword) return <ForceChangePasswordPage settings={settings} onChanged={handlePasswordChanged} />;
   return <AppShell user={user} setUser={setUser} settings={settings} setSettings={setSettings} onLogout={handleLogout} />;
 }

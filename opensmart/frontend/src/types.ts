@@ -8,6 +8,7 @@ export type User = {
   email: string;
   enabled?: boolean;
   csrfToken?: string;
+  mustChangePassword?: boolean;
 };
 
 export type Settings = Record<string, string>;

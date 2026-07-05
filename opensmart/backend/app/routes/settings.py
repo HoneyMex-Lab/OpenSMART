@@ -32,6 +32,7 @@ PUBLIC_KEYS = {
     "developed_by",
     "failed_login_limit",
     "lockout_minutes",
+    "password_policy",
     "tool_base_path",
     "tool_url_opnsense",
     "tool_url_ntop",

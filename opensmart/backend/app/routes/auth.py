@@ -32,6 +32,7 @@ def public_user(user: dict) -> dict:
         "role": user["role"],
         "fullName": user["full_name"],
         "email": user["email"],
+        "mustChangePassword": bool(user["must_change_password"]),
     }
 
 

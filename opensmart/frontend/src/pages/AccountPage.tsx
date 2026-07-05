@@ -81,8 +81,8 @@ export default function AccountPage({ user, onUserUpdate }: Props) {
         <h2>Change Password</h2>
         <form onSubmit={changePassword} className="stack-form">
           <input type="password" placeholder="Current password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
-          <input type="password" placeholder="New password, minimum 12 characters" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={12} required />
-          <input type="password" placeholder="Confirm new password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={12} required />
+          <input type="password" placeholder="New password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+          <input type="password" placeholder="Confirm new password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
           <button>Update password</button>
           {passwordMessage && <p className="muted">{passwordMessage}</p>}
         </form>
