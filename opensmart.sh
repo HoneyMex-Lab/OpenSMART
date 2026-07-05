@@ -10,7 +10,7 @@ CONTAINER_NAME="opensmart"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
-STEP_TOTAL=10
+STEP_TOTAL=11
 STEP_NUM=0
 # Tells run_app.sh to refer to *this* script in its own user-facing
 # "run ... to do X" messages, instead of naming itself — keeps messages
@@ -435,6 +435,15 @@ cmd_recreate() {
     exit 1
   fi
 
+  # Same reasoning as above: keep the native module images (Suricata, Zeek)
+  # in sync with the current checkout rather than silently reusing whatever
+  # was tagged opensmart/base|suricata|zeek from a previous install.
+  printf 'Rebuilding native module images (base, Suricata, Zeek)...\n'
+  if ! _build_native_module_image base || ! _build_native_module_image suricata || ! _build_native_module_image zeek; then
+    printf '✘ Failed to rebuild native module images.\n' >&2
+    exit 1
+  fi
+
   printf 'Creating the OpenSMART container...\n'
   if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose up -d); then
     printf '✘ Failed to create the OpenSMART container.\n' >&2
@@ -608,6 +617,37 @@ _install_build_image() {
   printf 'done\n'
 }
 
+# Builds one native module image (opensmart/<name>) from
+# containers/build/<name>/Dockerfile, using that directory itself as the
+# build context (these Dockerfiles COPY, if anything, only files that live
+# alongside them — see containers/build/openvpn/Dockerfile).
+_build_native_module_image() {
+  local name="$1"
+  docker build -t "opensmart/$name" -f "$ROOT_DIR/containers/build/$name/Dockerfile" "$ROOT_DIR/containers/build/$name"
+}
+
+_install_build_native_modules() {
+  # Suricata and Zeek (opensmart/containers/run/{suricata,zeek}/) ship as
+  # Dockerfile templates, not pre-built/pullable images, so something has to
+  # build them. That can't be the backend's own provisioning.py: it talks to
+  # the host Docker daemon through the docker-socket-proxy sidecar, whose
+  # allowlist deliberately excludes BUILD (see docs/architecture.md's
+  # security section) — letting the app container build arbitrary images on
+  # the host is exactly the privilege that proxy exists to withhold. So this
+  # runs here instead, host-side, against the real daemon, once per
+  # install/recreate; provisioning.py only ever starts/stops images that
+  # already exist. Both Suricata and Zeek build FROM opensmart/base, so it's
+  # built first.
+  _step "Building native module images (base, Suricata, Zeek)"
+  {
+    _build_native_module_image base &&
+    _build_native_module_image suricata &&
+    _build_native_module_image zeek
+  } >> "$INSTALL_LOG" 2>&1 \
+    || _step_fail "Failed to build native module images (base/Suricata/Zeek)."
+  printf 'done\n'
+}
+
 _install_fix_ownership() {
   # The whole repo is bind-mounted into the container, which runs as the
   # non-root "opensmart" user (uid 1000). If the host checkout is owned by
@@ -691,6 +731,7 @@ cmd_install() {
   _install_docker_engine
   _install_create_network
   _install_build_image
+  _install_build_native_modules
   _install_fix_ownership
   _install_run_container
   _install_wait_running
