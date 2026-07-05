@@ -23,7 +23,10 @@ export default function AuditPage({ user }: Props) {
   }, []);
 
   useEffect(() => {
+    // Intentionally reload only on tab switch, not on every logN change —
+    // the line-count dropdown is applied via the explicit Refresh button.
     if (tab === 'log') loadLog(logN);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   async function loadLog(lines: number) {

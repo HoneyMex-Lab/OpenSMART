@@ -133,6 +133,9 @@ export default function NetworkIdsPage() {
   }, []);
 
   useEffect(() => {
+    // Runs once on mount with default filters; queryParams intentionally
+    // excluded since it's recreated every render and would otherwise
+    // trigger a refetch loop.
     api.networkIdsConfig().then((result) => {
       setConfig(result.config);
       setTopN(result.config.default_top_n || 10);
@@ -144,6 +147,7 @@ export default function NetworkIdsPage() {
         .then(setSummary)
         .finally(() => setSummaryLoading(false));
     }).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Timeframe, search, and Top N changes are staged; Run button applies them.
   useEffect(() => {
@@ -151,7 +155,7 @@ export default function NetworkIdsPage() {
       autoRunAlertsRef.current = false;
       loadAlerts();
     }
-  }, [tab, filters]);
+  }, [tab, filters, loadAlerts]);
 
   // Poll ingestion status while a refresh is running so the UI advances past
   // the in-loop 99% cap and shows "Rebuilding artifact index" → "Idle" without
@@ -173,6 +177,10 @@ export default function NetworkIdsPage() {
     };
     const id = window.setInterval(tick, 2000);
     return () => { cancelled = true; window.clearInterval(id); };
+    // Deps intentionally narrowed to refresh_status fields, not the full
+    // config/summary objects (which change every tick) — using the full
+    // objects would tear down and recreate the interval every 2s.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [summary?.refresh_status, config?.refresh_status]);
 
   async function loadSummary(refresh = false, overrides: Record<string, string | number> = {}) {
@@ -789,7 +797,7 @@ function DetailsTab({
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
 
   // Reset filters when table changes
-  useEffect(() => { setSearchText(''); setColFilters({}); setDetailsPage(0); }, [detailsTable]);
+  useEffect(() => { setSearchText(''); setColFilters({}); setDetailsPage(0); }, [detailsTable, setDetailsPage]);
 
   // Apply client-side filters
   const filteredRows = detailsRows.filter((row) => {

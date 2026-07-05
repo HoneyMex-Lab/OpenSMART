@@ -78,10 +78,13 @@ export default function NetworkTrafficPage({ settings }: { settings: Settings })
   }, []);
 
   useEffect(() => {
+    // Runs once on mount; loadSummary is recreated every render and would
+    // otherwise trigger a refetch loop.
     setLoading(true);
     setLoadingAction('Loading Network Traffic summary');
     api.networkTrafficConfig().then((result) => setConfig(result.config)).catch(() => undefined);
     loadSummary(false, {}, true).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -93,12 +96,16 @@ export default function NetworkTrafficPage({ settings }: { settings: Settings })
       }).catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(id);
+    // Deps intentionally narrowed to refresh_status fields, not the full
+    // config/summary objects (which change every tick) — using the full
+    // objects would tear down and recreate the interval every 2s.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [summary?.refresh_status, config?.refresh_status]);
 
   useEffect(() => {
     if (tab !== 'details' || !detailsTable || detailsLoaded || detailsLoading || moduleBusyRef.current || firstIngestionActive) return;
     runDetailsQuery({ table: detailsTable, field: '', value: '' }, detailsMaxRows).catch(() => undefined);
-  }, [tab, detailsTable, detailsLoaded, detailsLoading, firstIngestionActive]);
+  }, [tab, detailsTable, detailsLoaded, detailsLoading, firstIngestionActive, detailsMaxRows, runDetailsQuery]);
 
   function params(extra: Record<string, string | number | boolean | undefined> = {}) {
     const result: Record<string, string | number | boolean | undefined> = { timeframe, q, top_n: topN, ...extra };

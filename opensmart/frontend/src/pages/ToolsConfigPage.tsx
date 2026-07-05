@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Settings, ToolConfig } from '../types';
-import { toolDefinitions } from './ToolsPage';
+import { toolDefinitions } from './toolDefinitions';
 
 type DiffEntry = { field: string; from: string; to: string };
 
@@ -87,7 +87,7 @@ export default function ToolsConfigPage({ settings, setSettings, tools, onToolsU
   useEffect(() => { setSettingsDraft(settings); }, [settings]);
   useEffect(() => {
     setToolDraft(tools);
-    if (activeId === null && tools.length > 0) setActiveId(tools[0].id);
+    setActiveId((prev) => (prev === null && tools.length > 0 ? tools[0].id : prev));
   }, [tools]);
 
   function requestSave() {

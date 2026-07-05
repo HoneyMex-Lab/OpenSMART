@@ -137,18 +137,19 @@ function StatusRow({ item }: { item: StatusItem }) {
   );
 }
 
+function ModuleRetention({ label, m }: { label: string; m: DataInfo['ids'] }) {
+  return (
+    <div className="data-retention-col">
+      <h3>{label}</h3>
+      <div className="data-retention-row"><span className="muted">Retention</span><span className={`badge ${m.retention_enabled ? '' : 'warning'}`}>{m.retention_enabled ? `${m.retention_days}d` : 'Disabled'}</span></div>
+      {m.retention_enabled && <div className="data-retention-row"><span className="muted">Cleanup at</span><span>{m.retention_time || '02:00'}</span></div>}
+      <div className="data-retention-row"><span className="muted">Earliest event</span><span>{m.earliest_event ? m.earliest_event.slice(0, 19).replace('T', ' ') : '—'}</span></div>
+      <div className="data-retention-row"><span className="muted">Total records</span><span>{m.total.toLocaleString()}</span></div>
+    </div>
+  );
+}
+
 function DataRetentionPanel({ info }: { info: DataInfo }) {
-  function ModuleRetention({ label, m }: { label: string; m: DataInfo['ids'] }) {
-    return (
-      <div className="data-retention-col">
-        <h3>{label}</h3>
-        <div className="data-retention-row"><span className="muted">Retention</span><span className={`badge ${m.retention_enabled ? '' : 'warning'}`}>{m.retention_enabled ? `${m.retention_days}d` : 'Disabled'}</span></div>
-        {m.retention_enabled && <div className="data-retention-row"><span className="muted">Cleanup at</span><span>{m.retention_time || '02:00'}</span></div>}
-        <div className="data-retention-row"><span className="muted">Earliest event</span><span>{m.earliest_event ? m.earliest_event.slice(0, 19).replace('T', ' ') : '—'}</span></div>
-        <div className="data-retention-row"><span className="muted">Total records</span><span>{m.total.toLocaleString()}</span></div>
-      </div>
-    );
-  }
   return (
     <div className="card">
       <h2>Data Retention &amp; Coverage</h2>

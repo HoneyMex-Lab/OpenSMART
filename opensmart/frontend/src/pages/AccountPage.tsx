@@ -18,13 +18,13 @@ export default function AccountPage({ user, onUserUpdate }: Props) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [logons, setLogons] = useState<LogonInfo[]>([]);
 
-  useEffect(() => {
-    refreshSessions();
-  }, []);
-
   async function refreshSessions() {
     api.accountSessions().then((result) => { setSessions(result.sessions); setLogons(result.logons); }).catch(() => undefined);
   }
+
+  useEffect(() => {
+    refreshSessions();
+  }, []);
 
   async function terminateOtherSessions() {
     if (!window.confirm('Terminate all other sessions for this account?')) return;
