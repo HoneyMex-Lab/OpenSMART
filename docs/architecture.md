@@ -109,7 +109,13 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   and the built frontend, and the initial admin password extracted from
   `docker logs`. A cold install (no cached `.venv`/`node_modules`) can take a
   few minutes to build the frontend and sync backend dependencies inside the
-  container before it's reachable.
+  container before it's reachable — on a host with slow/unreliable network
+  access to PyPI (backend deps) or npm, this can crash-loop for well past
+  the 5-minute password-reveal window (confirmed on the same reference host under
+  degraded network conditions). `install` only prints the final "✔ running"
+  banner if it actually confirmed the first-run marker in time; otherwise it
+  exits non-zero with a `docker ps`/`docker logs` pointer instead of
+  claiming success.
 
 **Install output:** `install` prints one line per main step (root check,
 distro detection, Docker Engine install, network creation, image build,

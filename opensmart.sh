@@ -606,6 +606,7 @@ _install_show_password() {
   } >> "$INSTALL_LOG"
   printf '\nCould not find the initial admin password in container logs within 5 minutes.\n' >&2
   printf 'See %s (or: docker logs %s) for details.\n' "$INSTALL_LOG" "$CONTAINER_NAME" >&2
+  return 1
 }
 
 cmd_install() {
@@ -621,8 +622,23 @@ cmd_install() {
   _install_fix_ownership
   _install_run_container
   _install_wait_running
-  _install_show_password
-  printf '✔ OpenSMART is running at http://0.0.0.0:8000\n'
+  # A container that reaches a "stable" running state above can still crash
+  # again shortly after — that check only confirms it wasn't caught
+  # crash-looping during a short observation window, not that it will stay
+  # up forever (e.g. a cold-start dependency sync that keeps failing on a
+  # slow/unreliable network can crash-loop for much longer than that
+  # window). Only print the unconditional success banner if the
+  # first-run-password wait actually confirmed the app came up; otherwise
+  # say so plainly instead of claiming success right after a timeout warning.
+  if _install_show_password; then
+    printf '✔ OpenSMART is running at http://0.0.0.0:8000\n'
+  else
+    printf '⚠ Install finished, but readiness could not be confirmed within 5 minutes.\n' >&2
+    printf 'The container may still be starting (e.g. a slow network stalling the\n' >&2
+    printf 'first-run dependency sync) or may be crash-looping. Check: docker ps,\n' >&2
+    printf 'docker logs %s, and %s\n' "$CONTAINER_NAME" "$INSTALL_LOG" >&2
+    exit 1
+  fi
 }
 
 case "${1:-}" in
