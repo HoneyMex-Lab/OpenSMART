@@ -128,8 +128,15 @@ export default function OpenSmartConfigPage({ modules, onModulesUpdate }: { modu
             </div>
             {module.name === 'Network IDS' && (
               <>
+                <div className="traffic-source-card">
+                  <h3>eve.json source</h3>
+                  <label className="radio-option"><input type="radio" name={`ids-source-${module.id}`} checked={(config.eve_source || 'external') === 'external'} onChange={() => updateConfig(module.id, 'eve_source', 'external')} /><span><strong>External file</strong><small className="muted">Point at an eve.json produced by a Suricata instance you manage yourself.</small></span></label>
+                  <label className="radio-option"><input type="radio" name={`ids-source-${module.id}`} checked={config.eve_source === 'native'} onChange={() => updateConfig(module.id, 'eve_source', 'native')} /><span><strong>Native Suricata (in-container)</strong><small className="muted">Use the bundled Suricata container's eve.json. Starting/stopping that container isn't wired up yet — enabling this only points ingestion at its expected output path.</small></span></label>
+                </div>
                 <div className="config-field-table">
-                  <label><span>eve.json path</span><input placeholder="/var/log/suricata/eve.json" value={config.eve_json_path || ''} onChange={(event) => updateConfig(module.id, 'eve_json_path', event.target.value)} /></label>
+                  {(config.eve_source || 'external') === 'external'
+                    ? <label><span>eve.json path</span><input placeholder="/var/log/suricata/eve.json" value={config.eve_json_path || ''} onChange={(event) => updateConfig(module.id, 'eve_json_path', event.target.value)} /></label>
+                    : <label><span>eve.json path (managed)</span><input value="containers/run/suricata/volumes/data/log/eve.json" disabled /></label>}
                   <label><span>Summary refresh minutes</span><input type="number" min="1" value={config.summary_refresh_minutes || '5'} onChange={(event) => updateConfig(module.id, 'summary_refresh_minutes', event.target.value)} /></label>
                   <label><span>Initial ingestion size</span><input type="number" min="0" step="0.1" value={config.initial_ingestion_gb ?? '2'} onChange={(event) => updateConfig(module.id, 'initial_ingestion_gb', event.target.value)} /></label>
                   <p className="config-field-hint">Value is in GB. 0 ingests the full file initially and may take a long time on large eve.json files.</p>

@@ -56,6 +56,7 @@ export type LogonInfo = {
 };
 
 export type NetworkIdsConfig = {
+  eve_source?: string;
   eve_json_path: string;
   initial_ingestion_gb?: string | number;
   summary_refresh_minutes: number;
