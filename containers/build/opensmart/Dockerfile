@@ -25,6 +25,14 @@ RUN groupadd opensmart -g 1000 \
 USER opensmart
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/home/opensmart/.local/bin:${PATH}"
+# Debian 13's apt-installed python3 (above) is already 3.13.x, satisfying
+# backend/pyproject.toml's >=3.11,<3.14 requirement, so there's no need for
+# uv to ever fetch its own managed Python build from astral's CDN — that
+# download has repeatedly stalled on networks with restricted/unreliable
+# egress, crash-looping the container on cold start ("Python 3.13 available
+# (not found via uv)" in the pre-start health check) despite a perfectly
+# usable interpreter already being present in the image.
+ENV UV_PYTHON_PREFERENCE=only-system
 
 # No fixed WORKDIR: this image is only ever run via
 # containers/run/opensmart/docker-compose.yml, which sets `working_dir` to

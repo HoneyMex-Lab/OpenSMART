@@ -136,7 +136,8 @@
       "dockerfile": "containers/build/opensmart/Dockerfile",
       "base": "debian:13",
       "hardening": "No baked-in password and no sudo for the 'opensmart' Linux user — docker exec doesn't require a Linux password, and nothing in 'start --prod' needs root.",
-      "mount": "opensmart/ directory bind-mounted at the same absolute path inside the container as on the host (host-path parity via OPENSMART_PROJECT_DIR, not a fixed /opt path), not copied into the image, so container behavior reflects live host source."
+      "mount": "opensmart/ directory bind-mounted at the same absolute path inside the container as on the host (host-path parity via OPENSMART_PROJECT_DIR, not a fixed /opt path), not copied into the image, so container behavior reflects live host source.",
+      "python": "ENV UV_PYTHON_PREFERENCE=only-system forces uv to use the apt-installed python3 (already 3.13.x on Debian 13) instead of also downloading its own managed Python build from astral's CDN on every cold start — a second, avoidable network dependency on top of the actual package installs (fastapi/uvicorn/etc. via PyPI, which this does NOT eliminate). Reproduced and fixed on the reference host: cold starts were crash-looping with '[FAIL] Python 3.13 available (not found via uv)' on a network with unreliable egress to astral's CDN."
     }
   },
 

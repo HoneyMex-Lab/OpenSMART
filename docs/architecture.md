@@ -126,7 +126,17 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   container before it's reachable — on a host with slow/unreliable network
   access to PyPI (backend deps) or npm, this can crash-loop for well past
   the 5-minute password-reveal window (confirmed on the same reference host under
-  degraded network conditions). `install` only prints the final "✔ running"
+  degraded network conditions). The Dockerfile sets
+  `UV_PYTHON_PREFERENCE=only-system` so `uv` uses the apt-installed
+  `python3` (already 3.13.x on Debian 13) instead of also trying to
+  download its own managed Python build from astral's CDN on every cold
+  start — that download was a second, avoidable point of failure on the
+  same flaky network (confirmed: it reliably reproduced `[FAIL] Python
+  3.13 available (not found via uv)` in the pre-start health check).
+  Backend *package* installation (`fastapi`, `uvicorn`, etc., still via
+  PyPI) is unaffected by this and can still stall on a sufficiently broken
+  network — that part has no code-level fix, since it genuinely needs to
+  fetch those packages the first time. `install` only prints the final "✔ running"
   banner if it actually confirmed the first-run marker in time; otherwise it
   exits non-zero with a `docker ps`/`docker logs` pointer instead of
   claiming success.
