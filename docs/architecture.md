@@ -77,10 +77,17 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   container exists yet.
 - `./opensmart.sh recreate` asks for confirmation (must type `RECREATE`),
   then removes the existing container (`docker compose rm -f -s`, only the
-  container — not the image, network, or the bind-mounted app data) and
-  creates a fresh one from the current `opensmart/web` image, then runs the
-  integrity check. Skips the confirmation (nothing to remove) if no
-  container exists yet.
+  container — not the image, network, or the bind-mounted app data),
+  **rebuilds the `opensmart/web` image from the current source and
+  Dockerfile** (normal Docker layer caching applies — fast if nothing
+  actually changed), and creates a fresh container from the rebuilt image,
+  then runs the integrity check. Skips the confirmation (nothing to remove)
+  if no container exists yet. The rebuild step is not optional: without it,
+  `recreate` would silently keep running whatever image was already tagged
+  `opensmart/web` even after a `git pull` brought in Dockerfile changes —
+  confirmed on the reference host as the actual reason a Dockerfile fix appeared
+  not to take effect after "cloning the repo after fixes and running
+  again" (recreate, not a full `install`, was what picked the code back up).
 - `./opensmart.sh uninstall` asks for confirmation (must type `UNINSTALL`),
   then runs `docker compose down` in every directory under
   `opensmart/containers/run/` that has a `docker-compose.yml` — the main app

@@ -45,8 +45,9 @@ Commands:
                                         application inside it is responding.
   restart                              Restart the existing OpenSMART container and
                                         check its integrity afterward.
-  recreate                             Delete the existing OpenSMART container and
-                                        create a new one from the current image, then
+  recreate                             Rebuild the opensmart/web image from the current
+                                        source, delete the existing OpenSMART container,
+                                        and create a new one from the rebuilt image, then
                                         check its integrity. Asks for confirmation.
   install                              Install Docker Engine (Debian/Ubuntu only),
                                         build the opensmart/web image, and run
@@ -400,10 +401,11 @@ cmd_recreate() {
   fi
 
   if _container_exists; then
-    printf 'This will stop and remove the existing "%s" container, then create a new\n' "$CONTAINER_NAME"
-    printf 'one from the current %s image. The app'"'"'s own data (SQLite DBs, logs,\n' "$IMAGE_NAME"
-    printf 'venvs, node_modules) lives in the bind-mounted app directory and is not\n'
-    printf 'affected — only the container itself is discarded and recreated.\n\n'
+    printf 'This will rebuild the %s image from the current source and Dockerfile,\n' "$IMAGE_NAME"
+    printf 'then stop and remove the existing "%s" container and create a new one\n' "$CONTAINER_NAME"
+    printf 'from it. The app'"'"'s own data (SQLite DBs, logs, venvs, node_modules)\n'
+    printf 'lives in the bind-mounted app directory and is not affected — only the\n'
+    printf 'container and image are discarded and recreated.\n\n'
     read -r -p 'Type RECREATE to continue: ' confirmation
     if [[ "$confirmation" != "RECREATE" ]]; then
       printf 'Recreate cancelled.\n'
@@ -416,7 +418,21 @@ cmd_recreate() {
       exit 1
     fi
   else
-    printf 'No existing "%s" container found; creating a new one.\n' "$CONTAINER_NAME"
+    printf 'No existing "%s" container found; building and creating a new one.\n' "$CONTAINER_NAME"
+  fi
+
+  # Always rebuild first — recreate's whole point is "give me a fresh
+  # instance from what's actually in the checkout right now". Without this,
+  # `recreate` silently reused whatever image was already tagged
+  # "$IMAGE_NAME" on the host, even after `git pull` brought in Dockerfile
+  # changes (confirmed on the reference host: a fix landed in the Dockerfile but
+  # a plain `recreate` kept running the pre-fix image until an explicit
+  # rebuild). `docker build` still uses normal layer caching, so this is
+  # fast when nothing actually changed.
+  printf 'Rebuilding the %s image from the current source...\n' "$IMAGE_NAME"
+  if ! docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/containers/build/opensmart/Dockerfile" "$ROOT_DIR"; then
+    printf '✘ Failed to rebuild the %s image.\n' "$IMAGE_NAME" >&2
+    exit 1
   fi
 
   printf 'Creating the OpenSMART container...\n'

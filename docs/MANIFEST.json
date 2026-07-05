@@ -78,7 +78,7 @@
       },
       "recreate": {
         "usage": "./opensmart.sh recreate",
-        "action": "Prompts for confirmation (must type RECREATE) if a container already exists, then docker compose rm -f -s (container only, not the image/network/bind-mounted app data) followed by docker compose up -d, then the shared integrity check. Skips the confirmation if no container exists yet."
+        "action": "Prompts for confirmation (must type RECREATE) if a container already exists, then docker compose rm -f -s (container only, not the image/network/bind-mounted app data), rebuilds the opensmart/web image from the current source/Dockerfile (docker build, normal layer caching), then docker compose up -d, then the shared integrity check. Skips the confirmation if no container exists yet. The rebuild step was added on 2026-07-05 after confirming on the reference host that recreate previously reused whatever image was already tagged opensmart/web even after a git pull brought in Dockerfile changes — a plain recreate silently never picked up the fix."
       },
       "uninstall": {
         "usage": "./opensmart.sh uninstall",
