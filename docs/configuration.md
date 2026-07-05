@@ -36,7 +36,7 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | `developed_by` | `Developed by` | Sidebar footer text. |
 | `failed_login_limit` | `5` | Failed login count before lockout. |
 | `lockout_minutes` | `15` | Lockout duration after too many failed attempts. |
-| `tool_base_path` | `/opt/opensmart/tools` | Placeholder path for future local tool integrations. |
+| `tool_base_path` | (none — set to a real path on the host) | Placeholder path for future local tool integrations. |
 | `tool_url_opnsense` | empty | Internal iframe URL for OPNsense. |
 | `tool_url_ntop` | empty | Internal iframe URL for NTOP. |
 | `tool_url_arkime` | empty | Internal iframe URL for Arkime. |

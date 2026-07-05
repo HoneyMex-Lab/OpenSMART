@@ -19,6 +19,14 @@ STEP_NUM=0
 # inherits it automatically; the docker-exec path passes it explicitly
 # since docker exec starts a fresh environment, not inheriting the host's.
 export RUN_APP_INVOKE_AS="./opensmart.sh"
+# Host-path parity for the opensmart container's bind mount (see
+# opensmart/containers/run/opensmart/docker-compose.yml): the repo root is
+# mounted at this same absolute path inside the container, instead of a
+# fixed /opt path. The container's CMD (./opensmart.sh) needs the repo root
+# specifically, not just opensmart/, since that's where opensmart.sh lives;
+# mounting the whole repo root also makes sibling-container bind mounts
+# under opensmart/containers/run/*/ resolve against real host paths.
+export OPENSMART_PROJECT_DIR="$ROOT_DIR"
 
 usage() {
   cat <<'EOF'
@@ -113,8 +121,14 @@ cmd_start() {
   # If the "opensmart" container already exists, this is a container-managed
   # deployment: (re)start the existing container and verify it rather than
   # running the app directly on the host. --bind/--prod don't apply here —
-  # the container's bind address is fixed by its docker-compose.yml.
-  if command -v docker >/dev/null 2>&1 && _container_exists; then
+  # the container's bind address is fixed by its docker-compose.yml. This
+  # detection only makes sense on the HOST: since the container itself now
+  # also has a `docker` CLI (for sibling-container provisioning, reaching
+  # the Docker API through docker-socket-proxy), running this script *inside*
+  # the opensmart container would otherwise see itself as "an existing
+  # container" and loop trying to manage itself instead of actually starting
+  # the app — /.dockerenv is the standard signal that we're inside one.
+  if [[ ! -f /.dockerenv ]] && command -v docker >/dev/null 2>&1 && _container_exists; then
     if [[ -n "$bind" || "$prod" -eq 1 ]]; then
       printf 'Note: an "%s" container already exists; --bind/--prod are ignored (the\n' "$CONTAINER_NAME"
       printf 'container always runs in --prod mode on the port published by its\n'
@@ -193,7 +207,7 @@ _app_health() {
 # with "the input device is not a TTY" for piped/scripted invocations.
 
 _run_app_passthrough() {
-  if command -v docker >/dev/null 2>&1 && _container_exists; then
+  if [[ ! -f /.dockerenv ]] && command -v docker >/dev/null 2>&1 && _container_exists; then
     local -a exec_flags=(-i)
     if [[ -t 0 ]]; then
       exec_flags+=(-t)
@@ -279,7 +293,7 @@ _start_existing_container() {
     printf 'OpenSMART container is already running.\n'
   else
     printf 'Starting the OpenSMART container...\n'
-    if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose start); then
+    if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose start); then
       printf '✘ Failed to start the OpenSMART container.\n' >&2
       exit 1
     fi
@@ -345,9 +359,9 @@ cmd_stop() {
   fi
 
   printf 'Stopping OpenSMART container...\n'
-  if (cd "$ROOT_DIR/containers/run/opensmart" && docker compose stop); then
+  if (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose stop); then
     printf '✔ OpenSMART container stopped.\n'
-    printf 'Restart with: (cd containers/run/opensmart && docker compose start)\n'
+    printf 'Restart with: (cd opensmart/containers/run/opensmart && docker compose start)\n'
   else
     printf '✘ Failed to stop the OpenSMART container.\n' >&2
     exit 1
@@ -366,7 +380,7 @@ cmd_restart() {
   fi
 
   printf 'Restarting the OpenSMART container...\n'
-  if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose restart); then
+  if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose restart); then
     printf '✘ Failed to restart the OpenSMART container.\n' >&2
     exit 1
   fi
@@ -392,7 +406,7 @@ cmd_recreate() {
     fi
 
     printf 'Removing existing container...\n'
-    if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose rm -f -s); then
+    if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose rm -f -s); then
       printf '✘ Failed to remove the existing container.\n' >&2
       exit 1
     fi
@@ -401,7 +415,7 @@ cmd_recreate() {
   fi
 
   printf 'Creating the OpenSMART container...\n'
-  if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose up -d); then
+  if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose up -d); then
     printf '✘ Failed to create the OpenSMART container.\n' >&2
     exit 1
   fi
@@ -523,7 +537,7 @@ _install_fix_ownership() {
 
 _install_run_container() {
   _step "Starting the $CONTAINER_NAME container"
-  (cd "$ROOT_DIR/containers/run/opensmart" && docker compose up -d) >> "$INSTALL_LOG" 2>&1 \
+  (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose up -d) >> "$INSTALL_LOG" 2>&1 \
     || _step_fail "Failed to start the $CONTAINER_NAME container."
   printf 'done\n'
 }

@@ -1,6 +1,6 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { OpenSmartModule, Settings, ToolConfig } from '../types';
+import type { OpenSmartModule, ProvisionResult, Settings, ToolConfig } from '../types';
 import OpenSmartConfigPage from './OpenSmartConfigPage';
 import ToolsConfigPage from './ToolsConfigPage';
 
@@ -33,6 +33,7 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   const [logoMessage, setLogoMessage] = useState('');
   const [finishing, setFinishing] = useState(false);
   const [finished, setFinished] = useState(false);
+  const [provisionResults, setProvisionResults] = useState<ProvisionResult[]>([]);
 
   useEffect(() => {
     if (modulesProp) return;
@@ -66,6 +67,13 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   async function finish() {
     setFinishing(true);
     try {
+      const enabledModules = modules.filter((m) => m.enabled);
+      const enabledTools = tools.filter((t) => t.enabled);
+      const results = await Promise.all([
+        ...enabledModules.map((m) => api.provisionStart(m.name, 'module').catch((error): ProvisionResult => ({ name: m.name, ok: false, detail: error instanceof Error ? error.message : 'Failed to provision', containers: [] }))),
+        ...enabledTools.map((t) => api.provisionStart(t.name, 'tool').catch((error): ProvisionResult => ({ name: t.name, ok: false, detail: error instanceof Error ? error.message : 'Failed to provision', containers: [] }))),
+      ]);
+      setProvisionResults(results);
       const result = await api.saveSettings({ ...settings, wizard_completed: 'true' });
       setSettings(result.settings);
       setFinished(true);
@@ -155,10 +163,23 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
           <h2>{finished ? 'Setup complete' : 'Ready to finish setup'}</h2>
           <p>
             {finished
-              ? 'OpenSMART is configured. Enabled modules and tools are ready to use.'
-              : 'Review the previous steps, then finish setup. You can revisit these settings anytime from Configuration.'}
+              ? 'OpenSMART is configured. Provisioning results for enabled modules/tools are below.'
+              : 'Finishing setup will attempt to start the containers backing your enabled modules/tools. You can revisit these settings anytime from Configuration.'}
           </p>
-          {!finished && <button disabled={finishing} onClick={finish}>{finishing ? 'Finishing...' : 'Finish setup'}</button>}
+          {!finished && <button disabled={finishing} onClick={finish}>{finishing ? 'Provisioning...' : 'Finish setup'}</button>}
+          {finished && provisionResults.length > 0 && (
+            <div className="config-field-table" style={{ marginTop: 16 }}>
+              {provisionResults.map((result) => (
+                <div className="checkbox-row" key={result.name}>
+                  <span className={`badge ${result.ok ? 'ok-dim' : 'warning'}`}>{result.ok ? 'OK' : 'Attention'}</span>
+                  <span>
+                    <strong>{result.name}</strong>
+                    <small className="muted">{result.detail || (result.ok ? 'Started.' : 'No detail available.')}</small>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </article>
       )}
     </section>

@@ -215,3 +215,10 @@ export type SchemaCheckResult = {
   missing_tables: string[];
   extra_tables: string[];
 };
+
+export type ProvisionResult = {
+  name: string;
+  ok: boolean;
+  detail: string;
+  containers: { container: string; ok: boolean; detail: string }[];
+};

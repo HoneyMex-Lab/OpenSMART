@@ -19,7 +19,7 @@ def list_audit_events(user: Annotated[dict, Depends(get_current_user)]) -> dict:
                 """
                 SELECT created_at, actor_username, event_type, target, ip_address, detail
                 FROM audit_events
-                WHERE event_type IN ('logon', 'logout', 'settings_update', 'tools_config_update', 'opensmart_config_update', 'user_create', 'user_update', 'user_delete', 'password_change', 'profile_update', 'sessions_terminated')
+                WHERE event_type IN ('logon', 'logout', 'settings_update', 'tools_config_update', 'opensmart_config_update', 'user_create', 'user_update', 'user_delete', 'password_change', 'profile_update', 'sessions_terminated', 'provisioning_start', 'provisioning_stop')
                 ORDER BY id DESC
                 LIMIT 100
                 """

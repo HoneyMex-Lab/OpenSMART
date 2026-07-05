@@ -58,7 +58,7 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   `install` has been run before):
   - **Container exists:** `--bind`/`--prod` are ignored (with a note printed
     explaining why — the container's bind address is fixed by
-    `containers/run/opensmart/docker-compose.yml`). If the container isn't
+    `opensmart/containers/run/opensmart/docker-compose.yml`). If the container isn't
     already running, starts it (`docker compose start`); either way, then
     runs the same integrity check `restart`/`recreate` use (see below).
   - **No container:** runs directly on the host via
@@ -92,7 +92,7 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   app directory to uid 1000 (the container's non-root `opensmart` user; a
   root-owned checkout otherwise leaves the container unable to create
   `.venv`/`node_modules`/the SQLite DBs), and runs it via
-  `containers/run/opensmart/docker-compose.yml` with
+  `opensmart/containers/run/opensmart/docker-compose.yml` with
   `./opensmart.sh start --bind 0.0.0.0:8000 --prod` as its command. It must
   run as root. **Verified against a real Docker Engine** on a Debian 13 test
   host: a fresh install ends with a stable container serving `/api/health`
@@ -111,7 +111,7 @@ fresh on every run. On failure, the current step line is closed with
 "failed" and the error points at that log file.
 
 - `./opensmart.sh stop` runs `docker compose stop` in
-  `containers/run/opensmart/` (stops the container without removing it —
+  `opensmart/containers/run/opensmart/` (stops the container without removing it —
   `docker compose start` brings it back). No-op with a clear message if the
   container doesn't exist or is already stopped.
 - `./opensmart.sh status` reports two independent things: the Docker
@@ -178,11 +178,51 @@ bundle for the network-sensor stack (Suricata, Zeek, Arkime, OpenSearch,
 WireGuard, OpenVPN, nginx) — a standalone tool users can run and customize
 separately, left untouched.
 
-`containers/build/` and `containers/run/` hold the per-tool Dockerfiles and
-compose files copied from `OpenSMART-Standalone` (`base`, `suricata`, `zeek`,
-`wireguard`, `openvpn` — official upstream images like OpenSearch/Arkime/nginx
-have none), plus `containers/build/opensmart/Dockerfile` and
-`containers/run/opensmart/docker-compose.yml` for the main app container
-(self-contained image, whole repo bind-mounted at `/opt/opensmart`, no
-Linux-user password or sudo — `docker exec` doesn't need one and nothing in
-`start --prod` requires root).
+`containers/build/` holds the per-tool Dockerfiles copied from
+`OpenSMART-Standalone` (`base`, `suricata`, `zeek`, `wireguard`, `openvpn` —
+official upstream images like OpenSearch/Arkime/nginx have none), plus
+`containers/build/opensmart/Dockerfile` for the main app container
+(self-contained image; no Linux-user password or sudo — `docker exec` doesn't
+need one and nothing in `start --prod` requires root). `containers/build/`
+stays at the repo root — these are build-time templates, not tied to a
+specific running instance.
+
+`opensmart/containers/run/` holds the actual compose files that get started —
+`arkime`, `nginx`, `opensearch`, `opensmart` (the main app),
+`openvpn`, `suricata`, `wireguard`, `zeek` — one per service, mostly
+bind-mounting `./volumes/data`. This lives *inside* `opensmart/` (not at the
+repo root, unlike `containers/build/`) so it's covered by the same host-path
+mount as the rest of the app.
+
+**Host-path parity, not `/opt/opensmart`:** the `opensmart` service in
+`opensmart/containers/run/opensmart/docker-compose.yml` mounts the project's
+`opensmart/` directory at the *same absolute path* inside the container as it
+has on the host (via `OPENSMART_PROJECT_DIR`, exported by `opensmart.sh`
+before every `docker compose` invocation — see its definition near the top of
+the script), instead of remapping to a fixed path like `/opt/opensmart`. This
+matters because the backend's provisioning module (`app/provisioning.py`)
+runs `docker compose` for sibling containers (Suricata, Zeek, Arkime, ...)
+*from inside* the `opensmart` container, but those commands are executed by
+the *host's* Docker daemon (reached through the `docker-socket-proxy` sidecar
+— see below). Bind-mount sources in `opensmart/containers/run/*/docker-compose.yml`
+(e.g. `./volumes/data`) are resolved to absolute paths by the `docker compose`
+CLI based on where *it* sees the compose file, then applied by the host
+daemon against *its own* filesystem — so those paths only resolve correctly
+if the container's view of `opensmart/` matches the host's. Running
+`docker compose` manually (not via `opensmart.sh`) requires exporting
+`OPENSMART_PROJECT_DIR` yourself first.
+
+**Container provisioning (`app/provisioning.py` + `routes/provisioning.py`):**
+the app container does not mount `docker.sock` directly. Instead,
+`opensmart/containers/run/opensmart/docker-compose.yml` runs a
+`docker-socket-proxy` sidecar (holds the real socket, mounted read-only) with
+an explicit allowlist (`CONTAINERS`, `NETWORKS`, `IMAGES`, `POST` only — no
+`EXEC`, `BUILD`, `SWARM`, `VOLUMES`, `SECRETS`, etc.), and the `opensmart`
+service's `DOCKER_HOST` points at it. The backend shells out to
+`docker compose -f <path> up -d`/`down` against that restricted endpoint,
+allowlisted to the container names that actually exist under
+`opensmart/containers/run/` (`KNOWN_CONTAINERS` in `provisioning.py`) — never
+an arbitrary path. `MODULE_CONTAINERS`/`TOOL_CONTAINERS` in that file map
+OpenSMART modules/tools to the container(s) they need, and explicitly report
+"no template yet" for the ones with no container (Wazuh-backed modules,
+Graylog) rather than silently no-op'ing.

@@ -74,7 +74,7 @@
       },
       "restart": {
         "usage": "./opensmart.sh restart",
-        "action": "docker compose restart in containers/run/opensmart/, then the shared integrity check. Errors clearly if no container exists yet."
+        "action": "docker compose restart in opensmart/containers/run/opensmart/, then the shared integrity check. Errors clearly if no container exists yet."
       },
       "recreate": {
         "usage": "./opensmart.sh recreate",
@@ -95,7 +95,7 @@
           "Create the external 'opensmart' bridge network (172.250.250.0/24) idempotently",
           "docker build -t opensmart/web -f containers/build/opensmart/Dockerfile .",
           "chown -R 1000:1000 the whole repo (container runs as non-root uid 1000; a root-owned checkout otherwise breaks .venv/node_modules/DB creation)",
-          "docker compose up -d in containers/run/opensmart/ (command: ./opensmart.sh start --bind 0.0.0.0:8000 --prod)",
+          "docker compose up -d in opensmart/containers/run/opensmart/ (command: ./opensmart.sh start --bind 0.0.0.0:8000 --prod)",
           "Poll for a stable running container (not just a brief window between crash-loop restarts)",
           "Poll container logs for the first-run admin password and print it on the host"
         ],
@@ -107,7 +107,7 @@
       },
       "stop": {
         "usage": "./opensmart.sh stop",
-        "action": "docker compose stop in containers/run/opensmart/ — stops the container without removing it (docker compose start brings it back). No-op with a clear message if the container doesn't exist or is already stopped."
+        "action": "docker compose stop in opensmart/containers/run/opensmart/ — stops the container without removing it (docker compose start brings it back). No-op with a clear message if the container doesn't exist or is already stopped."
       },
       "status": {
         "usage": "./opensmart.sh status",
@@ -131,7 +131,7 @@
       "dockerfile": "containers/build/opensmart/Dockerfile",
       "base": "debian:13",
       "hardening": "No baked-in password and no sudo for the 'opensmart' Linux user — docker exec doesn't require a Linux password, and nothing in 'start --prod' needs root.",
-      "mount": "Whole repo bind-mounted at /opt/opensmart (not copied into the image), so container behavior reflects live host source."
+      "mount": "opensmart/ directory bind-mounted at the same absolute path inside the container as on the host (host-path parity via OPENSMART_PROJECT_DIR, not a fixed /opt path), not copied into the image, so container behavior reflects live host source."
     }
   },
 
@@ -225,7 +225,8 @@
     "phases": [
       {"phase": 1, "name": "Repo restructure", "status": "done", "summary": "backend/frontend/scripts moved under opensmart/ (originally OpenSMART/); opensmart-builder renamed to containers/OpenSMART-Standalone; opensmart.sh start --bind added."},
       {"phase": 2, "name": "Container build/run split", "status": "done", "summary": "containers/build/ and containers/run/ created, copied from OpenSMART-Standalone, plus new opensmart/ entries for the main app."},
-      {"phase": 3, "name": "opensmart.sh install + prod mode", "status": "done, verified against a real Docker Engine", "summary": "Docker Engine bootstrap, image build, container run, single-port production serving via FastAPI StaticFiles."}
+      {"phase": 3, "name": "opensmart.sh install + prod mode", "status": "done, verified against a real Docker Engine", "summary": "Docker Engine bootstrap, image build, container run, single-port production serving via FastAPI StaticFiles."},
+      {"phase": 4, "name": "Container provisioning engine", "status": "done, not yet live-tested against a real Docker Engine", "summary": "containers/run/ moved from repo root into opensmart/containers/run/ (containers/build/ stays at repo root as build-time templates). Main app container mount switched from a fixed /opt/opensmart path to host-path parity via OPENSMART_PROJECT_DIR (exported by opensmart.sh), so sibling-container bind mounts resolve correctly. Added a docker-socket-proxy sidecar (restricted allowlist: CONTAINERS/NETWORKS/IMAGES/POST only) instead of mounting docker.sock directly; backend app/provisioning.py shells out to `docker compose` against it to start/stop Suricata/Zeek/Arkime/OpenSearch/WireGuard/OpenVPN, wired into the first-run Wizard's Finish step and the Network IDS native-Suricata toggle. Wazuh and Graylog have no container template yet, so modules/tools backed by them report 'no template available' rather than silently no-op'ing."}
     ],
     "reference": "docs/architecture.md"
   },

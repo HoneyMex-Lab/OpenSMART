@@ -1,0 +1,63 @@
+services:
+  opensmart:
+    build:
+      context: ../../../..
+      dockerfile: containers/build/opensmart/Dockerfile
+    image: opensmart/web
+    container_name: opensmart
+    hostname: opensmart
+    volumes:
+      # Host-path parity, not a fixed /opt path: the project's opensmart/
+      # directory is mounted at the SAME absolute path inside the container
+      # as it has on the host. opensmart.sh always exports
+      # OPENSMART_PROJECT_DIR (an absolute path) before invoking `docker
+      # compose`; running compose directly requires exporting it yourself,
+      # e.g. `export OPENSMART_PROJECT_DIR="$(cd ../../.. && pwd)"`. This is
+      # what lets sibling-container bind mounts under containers/run/*/
+      # (resolved by `docker compose` running inside this container, but
+      # applied by the host daemon via docker-socket-proxy) point at real
+      # host paths instead of a path that only exists inside this container.
+      - ${OPENSMART_PROJECT_DIR:?Set OPENSMART_PROJECT_DIR to the absolute host path of the opensmart/ directory}:${OPENSMART_PROJECT_DIR:?}
+    working_dir: ${OPENSMART_PROJECT_DIR:?}
+    ports:
+      - "8000:8000"
+    environment:
+      # Sibling-container provisioning (Wizard installer, native Suricata
+      # toggle) talks to the host Docker daemon through this restricted
+      # proxy instead of a raw docker.sock mount.
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+    depends_on:
+      - docker-socket-proxy
+    networks:
+      - opensmart
+    restart: always
+    command: ["./opensmart.sh", "start", "--bind", "0.0.0.0:8000", "--prod"]
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: opensmart-docker-proxy
+    environment:
+      # Explicit allowlist: only what container provisioning needs. `docker
+      # compose` queries the /volumes API as part of its normal project
+      # reconciliation even for bind-mount-only projects (confirmed via
+      # docker-socket-proxy access logs — it 403'd on GET /volumes without
+      # this), so VOLUMES has to be on despite none of our containers using
+      # named volumes. Everything else (EXEC, BUILD, SWARM, SECRETS,
+      # SERVICES, PLUGINS, CONFIGS, SESSION, DISTRIBUTION, SYSTEM, AUTH)
+      # stays off.
+      - CONTAINERS=1
+      - NETWORKS=1
+      - IMAGES=1
+      - VOLUMES=1
+      - POST=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - opensmart
+    restart: unless-stopped
+    # No ports published — reachable only from the opensmart network.
+
+networks:
+  opensmart:
+    external: true
+    name: opensmart
