@@ -51,6 +51,11 @@ Commands:
   install                              Install Docker Engine (Debian/Ubuntu only),
                                         build the opensmart/web image, and run
                                         OpenSMART as a container. Requires root.
+  uninstall                            Stop and remove every container OpenSMART
+                                        creates or manages (main app + proxy, and any
+                                        tool containers ever started). Does not remove
+                                        the "opensmart" network, images, or app data.
+                                        Asks for confirmation.
   version                              Show the OpenSMART version (major version plus
                                         the current git commit).
 
@@ -423,6 +428,49 @@ cmd_recreate() {
   printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
 }
 
+cmd_uninstall() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker is not installed; nothing to uninstall.\n' >&2
+    exit 0
+  fi
+
+  printf 'This will stop and remove EVERY container OpenSMART creates or manages —\n'
+  printf 'the main app (%s, %s-docker-proxy) and any tool containers ever started\n' "$CONTAINER_NAME" "$CONTAINER_NAME"
+  printf 'under opensmart/containers/run/ (Suricata, Zeek, Arkime, OpenSearch,\n'
+  printf 'WireGuard, OpenVPN, ...).\n\n'
+  printf 'NOT removed: the "%s" Docker network, container images, and application\n' "$NETWORK_NAME"
+  printf 'data (SQLite DBs, logs) in the bind-mounted app directory.\n\n'
+  read -r -p 'Type UNINSTALL to continue: ' confirmation
+  if [[ "$confirmation" != "UNINSTALL" ]]; then
+    printf 'Uninstall cancelled.\n'
+    exit 0
+  fi
+
+  mkdir -p "$LOG_DIR"
+  local uninstall_log="$LOG_DIR/uninstall.log"
+  printf '\n===== opensmart.sh uninstall started %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$uninstall_log"
+
+  local dir name
+  for dir in "$ROOT_DIR"/opensmart/containers/run/*/; do
+    [[ -f "${dir}docker-compose.yml" ]] || continue
+    name="$(basename "$dir")"
+    printf 'Removing %s... ' "$name"
+    if grep -q 'profiles:' "${dir}docker-compose.yml" 2>/dev/null; then
+      # Only opensmart/containers/run/openvpn/ currently gates its service
+      # behind a "manual" profile (see that file's own comments) — without
+      # --profile manual, `down` won't see/remove it even if it was started.
+      (cd "$dir" && docker compose --profile manual down) >> "$uninstall_log" 2>&1 \
+        && printf 'done\n' || printf 'nothing to remove\n'
+    else
+      (cd "$dir" && docker compose down) >> "$uninstall_log" 2>&1 \
+        && printf 'done\n' || printf 'nothing to remove\n'
+    fi
+  done
+
+  printf '\n✔ OpenSMART containers removed. Full log: %s\n' "$uninstall_log"
+  printf 'Run "sudo ./opensmart.sh install" to set it up again.\n'
+}
+
 # ── install helpers ─────────────────────────────────────────────────────────
 #
 # Terminal output is kept to one line per main step; every command's full
@@ -554,6 +602,14 @@ _install_fix_ownership() {
   _step "Setting file ownership for the container"
   chown -R 1000:1000 "$ROOT_DIR" >> "$INSTALL_LOG" 2>&1 \
     || _step_fail "Failed to set ownership of $ROOT_DIR to uid 1000."
+  # This chown is exactly what makes a later `git pull` (typically run as
+  # root, to fetch updates before `install --recreate`) fail with "detected
+  # dubious ownership" — git refuses to operate in a repo it doesn't own
+  # unless told to trust it explicitly. Register that trust now, as root,
+  # so upgrading via git pull works without the operator hitting this and
+  # having to work it out themselves. Best-effort: does not fail install if
+  # git isn't installed or this isn't a git checkout.
+  command -v git >/dev/null 2>&1 && git config --global --add safe.directory "$ROOT_DIR" >> "$INSTALL_LOG" 2>&1 || true
   printf 'done\n'
 }
 
@@ -660,6 +716,9 @@ case "${1:-}" in
     ;;
   install)
     cmd_install
+    ;;
+  uninstall)
+    cmd_uninstall
     ;;
   reset-admin-password)
     cmd_reset_admin_password

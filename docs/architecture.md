@@ -81,6 +81,15 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   creates a fresh one from the current `opensmart/web` image, then runs the
   integrity check. Skips the confirmation (nothing to remove) if no
   container exists yet.
+- `./opensmart.sh uninstall` asks for confirmation (must type `UNINSTALL`),
+  then runs `docker compose down` in every directory under
+  `opensmart/containers/run/` that has a `docker-compose.yml` — the main app
+  + `docker-socket-proxy`, and any tool container ever started (Suricata,
+  Zeek, Arkime, OpenSearch, WireGuard, OpenVPN; `openvpn` specifically with
+  `--profile manual`, since its service is profile-gated). Deliberately
+  narrow in scope: it does not remove the `opensmart` Docker network,
+  container images, or bind-mounted application data (SQLite DBs, logs) —
+  only containers. Full command output goes to `logs/uninstall.log`.
 - **Integrity check** (shared by `start`'s container path, `restart`, and
   `recreate`): first confirms the container reaches a stable running
   state (same stability logic `install` uses — tolerant of the brief
@@ -101,7 +110,12 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   image from `containers/build/opensmart/Dockerfile`, chowns the bind-mounted
   app directory to uid 1000 (the container's non-root `opensmart` user; a
   root-owned checkout otherwise leaves the container unable to create
-  `.venv`/`node_modules`/the SQLite DBs), and runs it via
+  `.venv`/`node_modules`/the SQLite DBs) — and, since that chown is exactly
+  what makes a later `git pull` (typically run as root, to fetch updates)
+  fail with "detected dubious ownership", also registers the checkout as a
+  `git config --global --add safe.directory` exception in root's gitconfig
+  so upgrading via `git pull` doesn't require the operator to work that out
+  themselves — and runs it via
   `opensmart/containers/run/opensmart/docker-compose.yml` with
   `./opensmart.sh start --bind 0.0.0.0:8000 --prod` as its command. It must
   run as root. **Verified against a real Docker Engine** on a Debian 13 test
