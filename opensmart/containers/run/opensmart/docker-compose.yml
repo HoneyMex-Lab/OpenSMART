@@ -26,6 +26,16 @@ services:
       # toggle) talks to the host Docker daemon through this restricted
       # proxy instead of a raw docker.sock mount.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
+      # uv's package cache defaults to the container's own home directory,
+      # which is NOT bind-mounted — so it's wiped every time the container
+      # is recreated, and a fresh `uv sync` has to re-fetch every backend
+      # package from PyPI from scratch every time, even if it already
+      # succeeded before. Pointing it at a path inside the already
+      # bind-mounted project directory (no separate volume entry needed —
+      # this path is already covered by the mount above) makes successful
+      # downloads persist across container recreations, so a slow/flaky
+      # network on the host only ever has to succeed once.
+      - UV_CACHE_DIR=${OPENSMART_PROJECT_DIR:?}/.uv-cache
     depends_on:
       - docker-socket-proxy
     networks:

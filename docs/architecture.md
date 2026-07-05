@@ -135,8 +135,14 @@ The current tool integrations are placeholders. `GET /api/status` calls `opensma
   3.13 available (not found via uv)` in the pre-start health check).
   Backend *package* installation (`fastapi`, `uvicorn`, etc., still via
   PyPI) is unaffected by this and can still stall on a sufficiently broken
-  network — that part has no code-level fix, since it genuinely needs to
-  fetch those packages the first time. `install` only prints the final "✔ running"
+  network the *first* time — that part has no way around genuinely needing
+  to fetch those packages once. What *is* fixed: `UV_CACHE_DIR` points at
+  `.uv-cache/` inside the already bind-mounted project directory (no
+  separate volume needed) instead of uv's default location in the
+  container's own ephemeral home directory, so a successful download
+  persists on the host and survives container recreation — a flaky network
+  only has to cooperate once, ever, not on every single recreate/reinstall.
+  `install` only prints the final "✔ running"
   banner if it actually confirmed the first-run marker in time; otherwise it
   exits non-zero with a `docker ps`/`docker logs` pointer instead of
   claiming success.
