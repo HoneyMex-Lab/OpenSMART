@@ -13,18 +13,17 @@ from pathlib import Path
 from typing import Any
 
 from . import eve_ingest
-from .config import PROJECT_ROOT
 from .database import get_db, get_network_ids_db, now_iso
 from .eve_ingest import compute_event_hash
 
 logger = logging.getLogger(__name__)
 
-# Host-side path to the eve.json produced by the native (in-container) Suricata
-# stack at opensmart/containers/run/suricata, whose docker-compose.yml
-# bind-mounts ./volumes/data -> /data, with Suricata's entrypoint logging to
-# /data/log. containers/run/ lives inside PROJECT_ROOT (opensmart/), not
-# beside it — see opensmart/containers/run/opensmart/docker-compose.yml.
-NATIVE_SURICATA_EVE_PATH = PROJECT_ROOT / "containers" / "run" / "suricata" / "volumes" / "data" / "log" / "eve.json"
+# Canonical definition lives in eve_ingest (which this module imports), so
+# the API-facing config here and the ingestion engine's shared_config()
+# resolve the native Suricata source identically — they diverged once, and
+# the result was a UI that said "readable" while ingestion skipped on an
+# empty path.
+NATIVE_SURICATA_EVE_PATH = eve_ingest.NATIVE_SURICATA_EVE_PATH
 
 TIMEFRAMES = {
     "1h": timedelta(hours=1),
@@ -92,7 +91,7 @@ def ids_config() -> dict[str, Any]:
     eve_source = str(config.get("eve_source", "external")).strip().lower()
     if eve_source not in ("external", "native"):
         eve_source = "external"
-    eve_json_path = str(NATIVE_SURICATA_EVE_PATH) if eve_source == "native" else str(config.get("eve_json_path", ""))
+    eve_json_path = eve_ingest.resolve_eve_json_path(config)
     return {
         "eve_source": eve_source,
         "eve_json_path": eve_json_path,
