@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 CONTAINERS_ROOT = PROJECT_ROOT / "containers" / "run"
 
 # Compose projects that actually exist under containers/run/ today.
-KNOWN_CONTAINERS = frozenset({"suricata", "zeek", "arkime", "opensearch", "wireguard", "openvpn"})
+KNOWN_CONTAINERS = frozenset({"suricata", "zeek", "arkime", "opensearch", "wireguard", "openvpn", "wazuh"})
 
 # Provisioning X should provision these first (shared infrastructure).
 CONTAINER_DEPENDENCIES: dict[str, list[str]] = {
@@ -35,11 +35,11 @@ CONTAINER_PROFILES: dict[str, str] = {
 # OpenSMART module name -> required container(s), or None if no container
 # template exists for it yet (reported to the caller, not silently skipped).
 MODULE_CONTAINERS: dict[str, list[str] | None] = {
-    "Threat Detection Alerts": None,  # Wazuh — no container template yet
+    "Threat Detection Alerts": ["wazuh"],
     "Network Traffic Monitoring": ["suricata", "zeek"],
     "Network IDS": ["suricata"],
-    "Endpoint": None,  # Wazuh
-    "Vulnerability Management": None,  # Wazuh
+    "Endpoint": ["wazuh"],
+    "Vulnerability Management": ["wazuh"],
     "Honeypot": None,  # T-Pot, not supported yet
     "Access VPN": ["openvpn", "wireguard"],
     "LXC Manager": None,  # not supported yet
@@ -50,11 +50,25 @@ TOOL_CONTAINERS: dict[str, list[str] | None] = {
     "Arkime": ["arkime"],
     "OPNsense": None,  # link-only, not an installable container
     "Proxmox": None,  # link-only, not an installable container
-    "Wazuh": None,  # no container template yet
+    "Wazuh": ["wazuh"],
     "Graylog": None,  # no container template yet
 }
 
 _COMPOSE_TIMEOUT_SECONDS = 300
+
+# wazuh.manager/.indexer/.dashboard mount their mutual-TLS material from
+# here; it's produced by the profile-gated wazuh-certs-generator one-off
+# service (see that compose file's header comment), which has to run
+# successfully exactly once before the three real services can start.
+# admin.pem is the last file that generator writes, so its presence is a
+# reasonable "certs are ready" marker.
+_WAZUH_CERTS_MARKER = CONTAINERS_ROOT / "wazuh" / "volumes" / "data" / "wazuh_indexer_ssl_certs" / "admin.pem"
+
+
+def _ensure_wazuh_certs() -> tuple[bool, str]:
+    if _WAZUH_CERTS_MARKER.is_file():
+        return True, ""
+    return _run_compose("wazuh", "--profile", "certs", "run", "--rm", "wazuh-certs-generator")
 
 
 def _compose_path(container: str) -> Path:
@@ -94,6 +108,10 @@ def start_container(container: str) -> tuple[bool, str]:
         ok, detail = _run_compose(dependency, "up", "-d")
         if not ok:
             return False, f"Dependency '{dependency}' failed: {detail}"
+    if container == "wazuh":
+        ok, detail = _ensure_wazuh_certs()
+        if not ok:
+            return False, f"Certificate generation failed: {detail}"
     return _run_compose(container, "up", "-d")
 
 

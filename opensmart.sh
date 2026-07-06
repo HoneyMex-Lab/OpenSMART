@@ -10,7 +10,7 @@ CONTAINER_NAME="opensmart"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
-STEP_TOTAL=11
+STEP_TOTAL=12
 STEP_NUM=0
 # Tells run_app.sh to refer to *this* script in its own user-facing
 # "run ... to do X" messages, instead of naming itself — keeps messages
@@ -615,6 +615,23 @@ _install_create_network() {
   fi
 }
 
+_install_set_max_map_count() {
+  # Standard requirement for any OpenSearch/Elasticsearch-family container
+  # (mmapfs storage) — the Wazuh indexer (opensmart/containers/run/wazuh/)
+  # needs this just like the existing "opensearch" container does. The
+  # default on most distros (65530) is too low; Wazuh/OpenSearch/Elasticsearch
+  # all document this same fix. Applied unconditionally (harmless if unused)
+  # since provisioning.py runs as uid 1000 inside a container and can't touch
+  # host sysctls itself — only this host-side, root install step can.
+  _step "Setting vm.max_map_count=262144 (required by OpenSearch-family indexers)"
+  {
+    printf 'vm.max_map_count=262144\n' > /etc/sysctl.d/99-opensmart-indexer.conf &&
+    sysctl -w vm.max_map_count=262144
+  } >> "$INSTALL_LOG" 2>&1 \
+    || _step_fail "Failed to set vm.max_map_count."
+  printf 'done\n'
+}
+
 _install_build_image() {
   _step "Building $IMAGE_NAME image (this can take a few minutes)"
   docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/containers/build/opensmart/Dockerfile" "$ROOT_DIR" >> "$INSTALL_LOG" 2>&1 \
@@ -737,6 +754,7 @@ cmd_install() {
   _install_check_distro
   _install_docker_engine
   _install_create_network
+  _install_set_max_map_count
   _install_build_image
   _install_build_native_modules
   _install_fix_ownership
