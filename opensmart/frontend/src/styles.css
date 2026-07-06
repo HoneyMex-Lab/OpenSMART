@@ -708,6 +708,12 @@ th { color: #91a2b5; font-size: .78rem; text-transform: uppercase; letter-spacin
 .status-table-name { font-weight: 600; color: #d0e4f7; }
 .status-table-detail { font-size: .82rem; max-width: 320px; }
 .status-table .badge { padding: 3px 10px; font-size: .72rem; }
+.containers-table td { font-size: .84rem; }
+.containers-table .restart-btn { padding: 6px 12px; font-size: .78rem; display: inline-flex; align-items: center; }
+.warning-toggle { color: #ffd487; font-size: .8rem; display: inline-flex; align-items: center; gap: 2px; }
+.warning-detail-row td { background: rgba(255,196,87,.06); border-bottom: 1px solid rgba(255,196,87,.2); }
+.warning-list { margin: 4px 0; padding-left: 22px; color: #ffd487; font-size: .82rem; display: grid; gap: 4px; }
+.error-text { color: #ffb8b8; }
 .exclusion-list { margin-left: 28px; border-left: 2px solid rgba(255,255,255,.1); padding-left: 16px; display: grid; gap: 10px; margin-top: 6px; }
 .schema-check-banner { padding: 10px 14px; border-radius: 12px; font-size: .83rem; display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
 .schema-check-banner.ok { background: rgba(99,230,190,.1); border: 1px solid rgba(99,230,190,.2); color: #63e6be; }

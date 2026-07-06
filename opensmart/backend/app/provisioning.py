@@ -4,8 +4,11 @@ docker-socket-proxy sidecar (DOCKER_HOST is set in
 containers/run/opensmart/docker-compose.yml) — this process never touches
 docker.sock directly.
 """
+import json
 import logging
+import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import PROJECT_ROOT
@@ -30,6 +33,20 @@ CONTAINER_DEPENDENCIES: dict[str, list[str]] = {
 # checking it.
 CONTAINER_PROFILES: dict[str, str] = {
     "openvpn": "manual",
+}
+
+# Compose project -> the actual container_name(s) its services create.
+# Needed because status has to be read per-container via `docker inspect`
+# (the docker-socket-proxy blocks EXEC, so container state is the richest
+# signal available), and several projects run more than one container.
+CONTAINER_SERVICES: dict[str, list[str]] = {
+    "suricata": ["opensmart-suricata"],
+    "zeek": ["opensmart-zeek"],
+    "arkime": ["opensmart-arkime-capture", "opensmart-arkime-viewer"],
+    "opensearch": ["opensmart-opensearch"],
+    "wireguard": ["opensmart-wireguard"],
+    "openvpn": ["opensmart-openvpn"],
+    "wazuh": ["opensmart-wazuh-manager", "opensmart-wazuh-indexer", "opensmart-wazuh-dashboard"],
 }
 
 # OpenSMART module name -> required container(s), or None if no container
@@ -117,6 +134,137 @@ def start_container(container: str) -> tuple[bool, str]:
 
 def stop_container(container: str) -> tuple[bool, str]:
     return _run_compose(container, "down")
+
+
+def restart_container(container: str) -> tuple[bool, str]:
+    return _run_compose(container, "restart")
+
+
+def _docker_inspect(names: list[str]) -> list[dict]:
+    """Raw `docker inspect` for the given container names. Missing containers
+    are simply absent from the result (inspect exits non-zero for them, but
+    still prints JSON for the ones it found)."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", *names],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    try:
+        return json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+
+
+def _uptime_seconds(started_at: str) -> int | None:
+    # Docker timestamps carry nanosecond precision Python can't parse;
+    # truncate to microseconds.
+    match = re.match(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?\d*(Z|[+-]\d{2}:\d{2})?", started_at)
+    if not match:
+        return None
+    stamp = match.group(1) + ("." + match.group(2) if match.group(2) else "") + "+00:00"
+    try:
+        started = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    return max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+
+
+def container_overview() -> list[dict]:
+    """Per-container detail for every known compose project: running state,
+    image version, uptime, restart count, health, and derived warnings."""
+    overview: list[dict] = []
+    for project in sorted(KNOWN_CONTAINERS):
+        names = CONTAINER_SERVICES.get(project, [])
+        inspected = {c.get("Name", "").lstrip("/"): c for c in _docker_inspect(names)}
+        containers = []
+        for name in names:
+            data = inspected.get(name)
+            if data is None:
+                containers.append({"name": name, "exists": False, "status": "not-created"})
+                continue
+            state = data.get("State", {})
+            status = state.get("Status", "unknown")
+            restart_count = data.get("RestartCount", 0)
+            image = data.get("Config", {}).get("Image", "")
+            uptime = _uptime_seconds(state.get("StartedAt", "")) if status == "running" else None
+            health = (state.get("Health") or {}).get("Status", "")
+            warnings = []
+            if status == "restarting":
+                warnings.append("Container is stuck restarting — check its logs.")
+            if status == "running" and restart_count > 3:
+                warnings.append(f"Restarted {restart_count} times since creation.")
+            if state.get("OOMKilled"):
+                warnings.append("Killed by the kernel OOM killer at least once.")
+            if health and health not in ("healthy", "none"):
+                warnings.append(f"Health check reports: {health}.")
+            if state.get("ExitCode", 0) != 0 and status == "exited":
+                warnings.append(f"Exited with code {state.get('ExitCode')}.")
+            containers.append({
+                "name": name,
+                "exists": True,
+                "status": status,
+                "image": image,
+                "uptime_seconds": uptime,
+                "restart_count": restart_count,
+                "health": health or None,
+                "warnings": warnings,
+            })
+        running = sum(1 for c in containers if c.get("status") == "running")
+        overview.append({
+            "project": project,
+            "containers": containers,
+            "running": running,
+            "total": len(names),
+            "profile": CONTAINER_PROFILES.get(project),
+        })
+    return overview
+
+
+# ── VPN summary (read-only, from bind-mounted files) ──────────────────────────
+#
+# The docker-socket-proxy blocks EXEC on purpose, so peer/cert state is read
+# straight from the files the VPN containers write into their bind-mounted
+# ./volumes/data directories — visible to this process because the whole
+# project tree is mounted at host-parity paths.
+
+_WIREGUARD_CONF = CONTAINERS_ROOT / "wireguard" / "volumes" / "data" / "wg0.conf"
+_OPENVPN_INDEX = CONTAINERS_ROOT / "openvpn" / "volumes" / "data" / "pki" / "index.txt"
+
+
+def vpn_summary() -> dict:
+    wireguard_peers = 0
+    if _WIREGUARD_CONF.is_file():
+        try:
+            wireguard_peers = _WIREGUARD_CONF.read_text().count("[Peer]")
+        except OSError:
+            pass
+    openvpn_valid = 0
+    openvpn_revoked = 0
+    if _OPENVPN_INDEX.is_file():
+        try:
+            for line in _OPENVPN_INDEX.read_text().splitlines():
+                # easy-rsa index.txt: V=valid, R=revoked, E=expired; first
+                # valid entry is the server cert itself, not a user.
+                if line.startswith("V"):
+                    openvpn_valid += 1
+                elif line.startswith("R"):
+                    openvpn_revoked += 1
+        except OSError:
+            pass
+    return {
+        "wireguard": {"configured": _WIREGUARD_CONF.is_file(), "peers": wireguard_peers},
+        "openvpn": {
+            "configured": _OPENVPN_INDEX.is_file(),
+            # Exclude the server certificate from the user count.
+            "valid_certs": max(0, openvpn_valid - 1) if openvpn_valid else 0,
+            "revoked_certs": openvpn_revoked,
+        },
+    }
 
 
 def container_status(container: str) -> dict:

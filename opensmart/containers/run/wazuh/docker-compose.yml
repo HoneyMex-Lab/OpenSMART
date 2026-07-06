@@ -44,6 +44,7 @@ services:
 
   wazuh.manager:
     image: wazuh/wazuh-manager:4.14.6
+    container_name: opensmart-wazuh-manager
     hostname: wazuh.manager
     restart: unless-stopped
     ulimits:
@@ -89,6 +90,7 @@ services:
 
   wazuh.indexer:
     image: wazuh/wazuh-indexer:4.14.6
+    container_name: opensmart-wazuh-indexer
     hostname: wazuh.indexer
     restart: unless-stopped
     ports:
@@ -120,6 +122,7 @@ services:
 
   wazuh.dashboard:
     image: wazuh/wazuh-dashboard:4.14.6
+    container_name: opensmart-wazuh-dashboard
     hostname: wazuh.dashboard
     restart: unless-stopped
     ports:
