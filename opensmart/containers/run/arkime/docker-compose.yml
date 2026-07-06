@@ -1,4 +1,23 @@
 services:
+  # Arkime's image runs its capture/viewer processes as root, which normally
+  # has no trouble writing to a bind-mounted ./volumes/data regardless of its
+  # host-side owner — real root bypasses Unix permission checks. That
+  # assumption broke on a host where the Docker daemon itself runs inside an
+  # unprivileged container (confirmed on the reference host: capture's "root"
+  # resolved to a UID that is NOT actually privileged against the host
+  # filesystem, so `mkdir /data/raw` failed with Permission denied and the
+  # capture container crash-looped — RestartCount in the thousands, exiting
+  # cleanly each time rather than crashing, which is why `restart:
+  # unless-stopped` kept it alive but never working). This one-off container
+  # normalizes /data's permissions before capture/viewer start, so it works
+  # the same way regardless of what "root" actually means on the host.
+  init-data-dir:
+    image: busybox
+    command: ["sh", "-c", "mkdir -p /data/raw && chmod -R 0777 /data"]
+    volumes:
+      - ./volumes/data:/data
+    restart: "no"
+
   # Capture sniffs eth0 -> must use host networking (like Zeek/Suricata).
   capture:
     image: ghcr.io/arkime/arkime/arkime:v6-latest
@@ -15,6 +34,9 @@ services:
     volumes:
       - ./etc/config.ini:/opt/arkime/etc/config.ini
       - ./volumes/data:/data
+    depends_on:
+      init-data-dir:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # Viewer UI on the opensmart network, reaches OpenSearch by service alias.
@@ -32,6 +54,9 @@ services:
       - "8005:8005"
     networks:
       - opensmart
+    depends_on:
+      init-data-dir:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 networks:
