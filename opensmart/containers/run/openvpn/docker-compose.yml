@@ -7,6 +7,15 @@ services:
   #   devices: [ "/dev/net/tun:/dev/net/tun" ]
   # and start with:  docker compose --profile manual up -d
   openvpn:
+    # Built by opensmart.sh (install/recreate) against the real host Docker
+    # daemon, not by the backend's provisioning.py — the docker-socket-proxy
+    # it talks through has BUILD disabled on purpose (see
+    # docs/architecture.md). This build: section is for manual
+    # `docker compose build`/`up --build` use only; it also needs
+    # opensmart/base built first (containers/build/base/).
+    build:
+      context: ../../../../containers/build/openvpn
+      dockerfile: Dockerfile
     image: opensmart/openvpn
     container_name: opensmart-openvpn
     hostname: openvpn

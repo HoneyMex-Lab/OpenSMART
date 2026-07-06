@@ -3,7 +3,8 @@ import sys
 from pathlib import Path
 
 from .config import DB_PATH, LOG_DIR, NETWORK_IDS_DB_PATH, NETWORK_TRAFFIC_DB_PATH
-from .database import generate_password, get_db, init_db, init_network_ids_db, init_network_traffic_db, ph, reset_data_tables, reset_telemetry_data, reset_telemetry_ids, reset_telemetry_network
+from .database import generate_password, get_db, init_db, init_network_ids_db, init_network_traffic_db, reset_data_tables, reset_telemetry_data, reset_telemetry_ids, reset_telemetry_network
+from .security import set_user_password
 
 # Logger for admin tool operations. Messages include source=run_script so they
 # are visually distinct and grep-able in opensmart.log.
@@ -60,9 +61,7 @@ def reset_admin_password() -> str:
         row = db.execute("SELECT id FROM users WHERE username = ? AND role = 'admin'", ("admin",)).fetchone()
         if not row:
             raise RuntimeError("Admin user does not exist")
-        db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (ph.hash(password), row["id"]))
-        db.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
-        db.commit()
+    set_user_password(row["id"], password, require_change=True, invalidate_sessions=True)
     _logger.info("source=run_script action=reset_admin_password username=admin")
     return password
 
@@ -100,9 +99,8 @@ def full_reset() -> str:
     password = generate_password()
     with get_db() as db:
         row = db.execute("SELECT id FROM users WHERE username = ? AND role = 'admin'", ("admin",)).fetchone()
-        if row:
-            db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (ph.hash(password), row["id"]))
-            db.commit()
+    if row:
+        set_user_password(row["id"], password, require_change=True, invalidate_sessions=True)
     _logger.info("source=run_script action=full_reset username=system")
     return password
 

@@ -8,6 +8,7 @@ export type User = {
   email: string;
   enabled?: boolean;
   csrfToken?: string;
+  mustChangePassword?: boolean;
 };
 
 export type Settings = Record<string, string>;
@@ -55,6 +56,7 @@ export type LogonInfo = {
 };
 
 export type NetworkIdsConfig = {
+  eve_source?: string;
   eve_json_path: string;
   initial_ingestion_gb?: string | number;
   summary_refresh_minutes: number;
@@ -212,4 +214,11 @@ export type SchemaCheckResult = {
   ok: boolean;
   missing_tables: string[];
   extra_tables: string[];
+};
+
+export type ProvisionResult = {
+  name: string;
+  ok: boolean;
+  detail: string;
+  containers: { container: string; ok: boolean; detail: string }[];
 };

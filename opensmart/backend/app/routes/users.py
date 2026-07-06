@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..database import get_db, now_iso, rows_to_dicts, write_audit_event
-from ..security import hash_password, require_admin, require_admin_read
+from ..security import hash_password, require_admin, require_admin_read, set_user_password, validate_password_complexity
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=80)
-    password: str = Field(min_length=12, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
     role: str = Field(pattern="^(admin|user)$")
     fullName: str = ""
     email: str = ""
@@ -23,7 +23,7 @@ class UserUpdate(BaseModel):
     fullName: str = ""
     email: str = ""
     enabled: bool = True
-    password: str | None = Field(default=None, min_length=12, max_length=200)
+    password: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 def list_users_response() -> dict:
@@ -43,12 +43,13 @@ def list_users(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
 
 @router.post("")
 def create_user(payload: UserCreate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    validate_password_complexity(payload.password)
     try:
         with get_db() as db:
             db.execute(
                 """
-                INSERT INTO users (username, password_hash, role, full_name, email, enabled, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO users (username, password_hash, role, full_name, email, enabled, must_change_password, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
                 """,
                 (
                     payload.username.strip(),
@@ -71,14 +72,16 @@ def create_user(payload: UserCreate, admin: Annotated[dict, Depends(require_admi
 def update_user(user_id: int, payload: UserUpdate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
     if user_id == admin["id"] and not payload.enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot disable your own account")
+    if payload.password:
+        validate_password_complexity(payload.password)
     with get_db() as db:
         db.execute(
             "UPDATE users SET role = ?, full_name = ?, email = ?, enabled = ? WHERE id = ?",
             (payload.role, payload.fullName, payload.email, 1 if payload.enabled else 0, user_id),
         )
-        if payload.password:
-            db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(payload.password), user_id))
         db.commit()
+    if payload.password:
+        set_user_password(user_id, payload.password, require_change=True, invalidate_sessions=True)
     write_audit_event("user_update", admin["id"], admin["username"], str(user_id), "", "user updated")
     return list_users_response()
 

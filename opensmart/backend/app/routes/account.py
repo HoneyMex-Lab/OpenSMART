@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..database import get_db, rows_to_dicts, write_audit_event
-from ..security import get_current_user, hash_password, require_csrf, verify_password
+from ..security import get_current_user, require_csrf, set_user_password, validate_password_complexity, verify_password
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 
 
 class PasswordPayload(BaseModel):
     currentPassword: str = Field(min_length=1, max_length=200)
-    newPassword: str = Field(min_length=12, max_length=200)
+    newPassword: str = Field(min_length=1, max_length=200)
 
 
 class ProfilePayload(BaseModel):
@@ -25,8 +25,8 @@ def change_password(payload: PasswordPayload, user: Annotated[dict, Depends(requ
         row = db.execute("SELECT password_hash FROM users WHERE id = ?", (user["id"],)).fetchone()
         if not row or not verify_password(payload.currentPassword, row["password_hash"]):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
-        db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(payload.newPassword), user["id"]))
-        db.commit()
+    validate_password_complexity(payload.newPassword)
+    set_user_password(user["id"], payload.newPassword, require_change=False, invalidate_sessions=False)
     write_audit_event("password_change", user["id"], user["username"], "account", "", "password changed")
     return {"ok": True}
 

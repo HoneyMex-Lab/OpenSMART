@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { api, setCsrfToken } from './api';
 import AppShell from './components/AppShell';
+import ForceChangePasswordPage from './components/ForceChangePasswordPage';
 import LoginPage from './components/LoginPage';
 import { t } from './i18n';
+import WizardPage from './pages/WizardPage';
 import type { Settings, User } from './types';
 
 const defaultSettings: Settings = {
@@ -13,6 +15,9 @@ const defaultSettings: Settings = {
   logo_url: '',
   favicon_url: '/assets/branding/favicon.svg',
   developed_by: 'Developed by',
+  // Assume already-set-up until real settings load, so an in-progress fetch
+  // never flashes the first-run Wizard for an already-configured install.
+  wizard_completed: 'true',
 };
 
 export default function App() {
@@ -68,7 +73,14 @@ export default function App() {
     setUser(null);
   }
 
+  async function handlePasswordChanged() {
+    const me = await api.me();
+    setUser({ ...me.user, csrfToken: me.user.csrfToken });
+  }
+
   if (loading) return <div className="loading">{t(settings, 'common.loadingOpenSMART', 'Loading OpenSMART...')}</div>;
   if (!user) return <LoginPage settings={settings} onLogin={handleLogin} />;
+  if (user.mustChangePassword) return <ForceChangePasswordPage settings={settings} onChanged={handlePasswordChanged} />;
+  if (user.role === 'admin' && settings.wizard_completed !== 'true') return <WizardPage settings={settings} setSettings={setSettings} onComplete={loadSettings} />;
   return <AppShell user={user} setUser={setUser} settings={settings} setSettings={setSettings} onLogout={handleLogout} />;
 }

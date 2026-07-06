@@ -336,7 +336,15 @@ run_health_checks() {
   # 2. Python
   if command -v uv >/dev/null 2>&1; then
     local _py_ver
-    _py_ver="$(uv run --project "$ROOT_DIR/backend" --python "$BACKEND_PYTHON" python --version 2>/dev/null || true)"
+    # --no-project: this only needs to confirm the interpreter itself is
+    # available. Passing --project here (as before) made uv resolve and sync
+    # the whole backend dependency set just to print a version string, so a
+    # flaky network on first install could hang or fail this check even
+    # though Python 3.13 was present the whole time (confirmed on the test
+    # server: `uv python list` found it instantly, but this check hung for
+    # minutes). The real dependency sync still happens further down via
+    # `uv sync`, where a network failure is the correct thing to fail on.
+    _py_ver="$(uv run --no-project --python "$BACKEND_PYTHON" python --version 2>/dev/null || true)"
     if [[ -n "$_py_ver" ]]; then
       _hcheck "Python ${BACKEND_PYTHON} available" ok "$_py_ver" 1
     else

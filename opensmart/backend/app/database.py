@@ -98,6 +98,11 @@ DEFAULT_SETTINGS = {
     "notification_platform_webhook_error": "",
     "notification_platform_event_health_alerts": "false",
     "notification_platform_event_internal_feeds": "false",
+    "password_policy": "strict",
+    # Existing/upgraded installs default to "true" (already set up); only a
+    # genuinely fresh install (bootstrap_admin() below) sets this to "false"
+    # so the first-run Wizard doesn't retroactively appear after an upgrade.
+    "wizard_completed": "true",
 }
 
 
@@ -657,6 +662,10 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 db.execute(f"ALTER TABLE sessions ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
             except sqlite3.OperationalError:
                 pass
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         for key, value in DEFAULT_SETTINGS.items():
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
         db.execute("UPDATE settings SET value = ? WHERE key = 'platform_version' AND value = 'v0.2'", (APP_VERSION,))
@@ -739,10 +748,14 @@ def bootstrap_admin() -> None:
         password = generate_password()
         db.execute(
             """
-            INSERT INTO users (username, password_hash, role, full_name, email, enabled, created_at)
-            VALUES (?, ?, 'admin', 'OpenSMART Administrator', '', 1, ?)
+            INSERT INTO users (username, password_hash, role, full_name, email, enabled, must_change_password, created_at)
+            VALUES (?, ?, 'admin', 'OpenSMART Administrator', '', 1, 1, ?)
             """,
             ("admin", ph.hash(password), now_iso()),
+        )
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('wizard_completed', 'false') "
+            "ON CONFLICT(key) DO UPDATE SET value = 'false'"
         )
         db.commit()
     print("OpenSMART initial admin account created", flush=True)

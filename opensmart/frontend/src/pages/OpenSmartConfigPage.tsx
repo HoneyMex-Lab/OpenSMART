@@ -70,6 +70,57 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (checked: b
   );
 }
 
+function SuricataControl() {
+  const [running, setRunning] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  function refresh() {
+    api.provisionStatus('suricata').then((result) => setRunning(result.running)).catch(() => setRunning(null));
+  }
+
+  useEffect(() => { refresh(); }, []);
+
+  async function start() {
+    setBusy(true);
+    setMessage('');
+    try {
+      const result = await api.provisionStart('suricata', 'container');
+      setMessage(result.ok ? 'Suricata container started.' : result.detail || 'Failed to start Suricata container.');
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to start Suricata container.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stop() {
+    setBusy(true);
+    setMessage('');
+    try {
+      const result = await api.provisionStop('suricata');
+      setMessage(result.ok ? 'Suricata container stopped.' : result.detail || 'Failed to stop Suricata container.');
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to stop Suricata container.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="checkbox-row">
+      <span className={`badge ${running ? 'ok-dim' : 'muted'}`}>{running === null ? 'Unknown' : running ? 'Running' : 'Stopped'}</span>
+      <span>
+        <button type="button" className="text-button" disabled={busy || running === true} onClick={start}>Start</button>
+        {' '}<button type="button" className="text-button" disabled={busy || running === false} onClick={stop}>Stop</button>
+        {message && <small className="muted">{message}</small>}
+      </span>
+    </div>
+  );
+}
+
 export default function OpenSmartConfigPage({ modules, onModulesUpdate }: { modules: OpenSmartModule[]; onModulesUpdate: (modules: OpenSmartModule[]) => void }) {
   const [draft, setDraft] = useState<OpenSmartModule[]>(modules);
   const [visibleJson, setVisibleJson] = useState<Record<number, boolean>>({});
@@ -128,8 +179,16 @@ export default function OpenSmartConfigPage({ modules, onModulesUpdate }: { modu
             </div>
             {module.name === 'Network IDS' && (
               <>
+                <div className="traffic-source-card">
+                  <h3>eve.json source</h3>
+                  <label className="radio-option"><input type="radio" name={`ids-source-${module.id}`} checked={(config.eve_source || 'external') === 'external'} onChange={() => updateConfig(module.id, 'eve_source', 'external')} /><span><strong>External file</strong><small className="muted">Point at an eve.json produced by a Suricata instance you manage yourself.</small></span></label>
+                  <label className="radio-option"><input type="radio" name={`ids-source-${module.id}`} checked={config.eve_source === 'native'} onChange={() => updateConfig(module.id, 'eve_source', 'native')} /><span><strong>Native Suricata (in-container)</strong><small className="muted">Use the bundled Suricata container's eve.json.</small></span></label>
+                  {config.eve_source === 'native' && <SuricataControl />}
+                </div>
                 <div className="config-field-table">
-                  <label><span>eve.json path</span><input placeholder="/var/log/suricata/eve.json" value={config.eve_json_path || ''} onChange={(event) => updateConfig(module.id, 'eve_json_path', event.target.value)} /></label>
+                  {(config.eve_source || 'external') === 'external'
+                    ? <label><span>eve.json path</span><input placeholder="/var/log/suricata/eve.json" value={config.eve_json_path || ''} onChange={(event) => updateConfig(module.id, 'eve_json_path', event.target.value)} /></label>
+                    : <label><span>eve.json path (managed)</span><input value="opensmart/containers/run/suricata/volumes/data/log/eve.json" disabled /></label>}
                   <label><span>Summary refresh minutes</span><input type="number" min="1" value={config.summary_refresh_minutes || '5'} onChange={(event) => updateConfig(module.id, 'summary_refresh_minutes', event.target.value)} /></label>
                   <label><span>Initial ingestion size</span><input type="number" min="0" step="0.1" value={config.initial_ingestion_gb ?? '2'} onChange={(event) => updateConfig(module.id, 'initial_ingestion_gb', event.target.value)} /></label>
                   <p className="config-field-hint">Value is in GB. 0 ingests the full file initially and may take a long time on large eve.json files.</p>

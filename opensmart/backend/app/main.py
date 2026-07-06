@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import APP_VERSION, BUILD_VERSION, FRONTEND_DIST_DIR, FRONTEND_ORIGIN, resolve_log_path
 from .database import get_db, init_db, init_network_ids_db, init_network_traffic_db
 from . import retention as _retention
-from .routes import account, audit, auth, modules, network_ids, network_traffic, opensmart_modules, settings, status, tools, users
+from .routes import account, audit, auth, modules, network_ids, network_traffic, opensmart_modules, provisioning, settings, status, tools, users
 
 app = FastAPI(title="OpenSMART API")
 
@@ -160,6 +160,7 @@ app.include_router(network_traffic.router)
 app.include_router(status.router)
 app.include_router(users.router)
 app.include_router(audit.router)
+app.include_router(provisioning.router)
 
 # Serve the built frontend (opensmart/frontend/dist) if it exists — used in
 # production/container mode where the app runs on a single port. Mounted

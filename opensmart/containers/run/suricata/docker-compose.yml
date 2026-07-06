@@ -1,0 +1,22 @@
+services:
+  suricata:
+    # Built by opensmart.sh (install/recreate) against the real host Docker
+    # daemon, not by the backend's provisioning.py — the docker-socket-proxy
+    # it talks through has BUILD disabled on purpose (see
+    # docs/architecture.md). This build: section is for manual
+    # `docker compose build`/`up --build` use only; it also needs
+    # opensmart/base built first (containers/build/base/).
+    build:
+      context: ../../../../containers/build/suricata
+      dockerfile: Dockerfile
+    image: opensmart/suricata
+    container_name: opensmart-suricata
+    hostname: suricata
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    volumes:
+      - ./volumes/data:/data
+    restart: unless-stopped

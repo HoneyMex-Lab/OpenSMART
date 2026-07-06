@@ -5,6 +5,13 @@ import type { Settings } from '../types';
 
 const platformFields = ['platform_title', 'platform_version', 'sensor_name', 'platform_language', 'developed_by', 'failed_login_limit', 'lockout_minutes', 'tool_base_path'];
 
+const passwordPolicyOptions: { value: string; label: string }[] = [
+  { value: 'strict', label: 'Strict (12+ chars, upper/lower/digit/symbol)' },
+  { value: 'moderate', label: 'Moderate (10+ chars, 3 of 4 character classes)' },
+  { value: 'low', label: 'Low (8+ chars, no complexity requirement)' },
+  { value: 'disabled', label: 'Disabled (no complexity or length requirement)' },
+];
+
 const metricFields: { key: string; label: string }[] = [
   { key: 'dashboard_ids_alerts_critical', label: 'Threat Detection: critical alerts (24h)' },
   { key: 'dashboard_ids_alerts_high', label: 'Threat Detection: high alerts (24h)' },
@@ -128,6 +135,24 @@ export default function AdminConfigPage({ settings, setSettings }: { settings: S
           </div>
         </article>
       </div>
+
+      <article className="card">
+        <h2>Password Policy</h2>
+        <p className="muted">Applies to new user passwords, admin-triggered resets, and self-service password changes.</p>
+        <div className="stack-form">
+          <label>
+            Complexity profile
+            <select value={draft.password_policy || 'strict'} onChange={(event) => setDraft({ ...draft, password_policy: event.target.value })}>
+              {passwordPolicyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+        </div>
+        {(draft.password_policy === 'low' || draft.password_policy === 'disabled') && (
+          <div className="error-box" role="alert">
+            Warning: this profile significantly weakens account security. Passwords will be easier to guess or brute-force. Only use this if you understand the risk.
+          </div>
+        )}
+      </article>
 
       <article className="card">
         <div className="section-actions">

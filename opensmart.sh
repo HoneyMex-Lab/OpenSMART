@@ -10,7 +10,7 @@ CONTAINER_NAME="opensmart"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
-STEP_TOTAL=9
+STEP_TOTAL=12
 STEP_NUM=0
 # Tells run_app.sh to refer to *this* script in its own user-facing
 # "run ... to do X" messages, instead of naming itself — keeps messages
@@ -19,6 +19,14 @@ STEP_NUM=0
 # inherits it automatically; the docker-exec path passes it explicitly
 # since docker exec starts a fresh environment, not inheriting the host's.
 export RUN_APP_INVOKE_AS="./opensmart.sh"
+# Host-path parity for the opensmart container's bind mount (see
+# opensmart/containers/run/opensmart/docker-compose.yml): the repo root is
+# mounted at this same absolute path inside the container, instead of a
+# fixed /opt path. The container's CMD (./opensmart.sh) needs the repo root
+# specifically, not just opensmart/, since that's where opensmart.sh lives;
+# mounting the whole repo root also makes sibling-container bind mounts
+# under opensmart/containers/run/*/ resolve against real host paths.
+export OPENSMART_PROJECT_DIR="$ROOT_DIR"
 
 usage() {
   cat <<'EOF'
@@ -37,12 +45,18 @@ Commands:
                                         application inside it is responding.
   restart                              Restart the existing OpenSMART container and
                                         check its integrity afterward.
-  recreate                             Delete the existing OpenSMART container and
-                                        create a new one from the current image, then
+  recreate                             Rebuild the opensmart/web image from the current
+                                        source, delete the existing OpenSMART container,
+                                        and create a new one from the rebuilt image, then
                                         check its integrity. Asks for confirmation.
   install                              Install Docker Engine (Debian/Ubuntu only),
                                         build the opensmart/web image, and run
                                         OpenSMART as a container. Requires root.
+  uninstall                            Stop and remove every container OpenSMART
+                                        creates or manages (main app + proxy, and any
+                                        tool containers ever started). Does not remove
+                                        the "opensmart" network, images, or app data.
+                                        Asks for confirmation.
   version                              Show the OpenSMART version (major version plus
                                         the current git commit).
 
@@ -113,8 +127,14 @@ cmd_start() {
   # If the "opensmart" container already exists, this is a container-managed
   # deployment: (re)start the existing container and verify it rather than
   # running the app directly on the host. --bind/--prod don't apply here —
-  # the container's bind address is fixed by its docker-compose.yml.
-  if command -v docker >/dev/null 2>&1 && _container_exists; then
+  # the container's bind address is fixed by its docker-compose.yml. This
+  # detection only makes sense on the HOST: since the container itself now
+  # also has a `docker` CLI (for sibling-container provisioning, reaching
+  # the Docker API through docker-socket-proxy), running this script *inside*
+  # the opensmart container would otherwise see itself as "an existing
+  # container" and loop trying to manage itself instead of actually starting
+  # the app — /.dockerenv is the standard signal that we're inside one.
+  if [[ ! -f /.dockerenv ]] && command -v docker >/dev/null 2>&1 && _container_exists; then
     if [[ -n "$bind" || "$prod" -eq 1 ]]; then
       printf 'Note: an "%s" container already exists; --bind/--prod are ignored (the\n' "$CONTAINER_NAME"
       printf 'container always runs in --prod mode on the port published by its\n'
@@ -193,7 +213,7 @@ _app_health() {
 # with "the input device is not a TTY" for piped/scripted invocations.
 
 _run_app_passthrough() {
-  if command -v docker >/dev/null 2>&1 && _container_exists; then
+  if [[ ! -f /.dockerenv ]] && command -v docker >/dev/null 2>&1 && _container_exists; then
     local -a exec_flags=(-i)
     if [[ -t 0 ]]; then
       exec_flags+=(-t)
@@ -279,7 +299,7 @@ _start_existing_container() {
     printf 'OpenSMART container is already running.\n'
   else
     printf 'Starting the OpenSMART container...\n'
-    if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose start); then
+    if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose start); then
       printf '✘ Failed to start the OpenSMART container.\n' >&2
       exit 1
     fi
@@ -345,9 +365,9 @@ cmd_stop() {
   fi
 
   printf 'Stopping OpenSMART container...\n'
-  if (cd "$ROOT_DIR/containers/run/opensmart" && docker compose stop); then
+  if (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose stop); then
     printf '✔ OpenSMART container stopped.\n'
-    printf 'Restart with: (cd containers/run/opensmart && docker compose start)\n'
+    printf 'Restart with: (cd opensmart/containers/run/opensmart && docker compose start)\n'
   else
     printf '✘ Failed to stop the OpenSMART container.\n' >&2
     exit 1
@@ -366,7 +386,7 @@ cmd_restart() {
   fi
 
   printf 'Restarting the OpenSMART container...\n'
-  if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose restart); then
+  if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose restart); then
     printf '✘ Failed to restart the OpenSMART container.\n' >&2
     exit 1
   fi
@@ -381,10 +401,11 @@ cmd_recreate() {
   fi
 
   if _container_exists; then
-    printf 'This will stop and remove the existing "%s" container, then create a new\n' "$CONTAINER_NAME"
-    printf 'one from the current %s image. The app'"'"'s own data (SQLite DBs, logs,\n' "$IMAGE_NAME"
-    printf 'venvs, node_modules) lives in the bind-mounted app directory and is not\n'
-    printf 'affected — only the container itself is discarded and recreated.\n\n'
+    printf 'This will rebuild the %s image from the current source and Dockerfile,\n' "$IMAGE_NAME"
+    printf 'then stop and remove the existing "%s" container and create a new one\n' "$CONTAINER_NAME"
+    printf 'from it. The app'"'"'s own data (SQLite DBs, logs, venvs, node_modules)\n'
+    printf 'lives in the bind-mounted app directory and is not affected — only the\n'
+    printf 'container and image are discarded and recreated.\n\n'
     read -r -p 'Type RECREATE to continue: ' confirmation
     if [[ "$confirmation" != "RECREATE" ]]; then
       printf 'Recreate cancelled.\n'
@@ -392,21 +413,92 @@ cmd_recreate() {
     fi
 
     printf 'Removing existing container...\n'
-    if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose rm -f -s); then
+    if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose rm -f -s); then
       printf '✘ Failed to remove the existing container.\n' >&2
       exit 1
     fi
   else
-    printf 'No existing "%s" container found; creating a new one.\n' "$CONTAINER_NAME"
+    printf 'No existing "%s" container found; building and creating a new one.\n' "$CONTAINER_NAME"
+  fi
+
+  # Always rebuild first — recreate's whole point is "give me a fresh
+  # instance from what's actually in the checkout right now". Without this,
+  # `recreate` silently reused whatever image was already tagged
+  # "$IMAGE_NAME" on the host, even after `git pull` brought in Dockerfile
+  # changes (confirmed on the reference host: a fix landed in the Dockerfile but
+  # a plain `recreate` kept running the pre-fix image until an explicit
+  # rebuild). `docker build` still uses normal layer caching, so this is
+  # fast when nothing actually changed.
+  printf 'Rebuilding the %s image from the current source...\n' "$IMAGE_NAME"
+  if ! docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/containers/build/opensmart/Dockerfile" "$ROOT_DIR"; then
+    printf '✘ Failed to rebuild the %s image.\n' "$IMAGE_NAME" >&2
+    exit 1
+  fi
+
+  # Same reasoning as above: keep the native module images (Suricata, Zeek,
+  # WireGuard, OpenVPN) in sync with the current checkout rather than
+  # silently reusing whatever was tagged opensmart/base|suricata|zeek|
+  # wireguard|openvpn from a previous install.
+  printf 'Rebuilding native module images (base, Suricata, Zeek, WireGuard, OpenVPN)...\n'
+  if ! _build_native_module_image base \
+    || ! _build_native_module_image suricata \
+    || ! _build_native_module_image zeek \
+    || ! _build_native_module_image wireguard \
+    || ! _build_native_module_image openvpn; then
+    printf '✘ Failed to rebuild native module images.\n' >&2
+    exit 1
   fi
 
   printf 'Creating the OpenSMART container...\n'
-  if ! (cd "$ROOT_DIR/containers/run/opensmart" && docker compose up -d); then
+  if ! (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose up -d); then
     printf '✘ Failed to create the OpenSMART container.\n' >&2
     exit 1
   fi
   _check_integrity || exit 1
   printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
+}
+
+cmd_uninstall() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker is not installed; nothing to uninstall.\n' >&2
+    exit 0
+  fi
+
+  printf 'This will stop and remove EVERY container OpenSMART creates or manages —\n'
+  printf 'the main app (%s, %s-docker-proxy) and any tool containers ever started\n' "$CONTAINER_NAME" "$CONTAINER_NAME"
+  printf 'under opensmart/containers/run/ (Suricata, Zeek, Arkime, OpenSearch,\n'
+  printf 'WireGuard, OpenVPN, ...).\n\n'
+  printf 'NOT removed: the "%s" Docker network, container images, and application\n' "$NETWORK_NAME"
+  printf 'data (SQLite DBs, logs) in the bind-mounted app directory.\n\n'
+  read -r -p 'Type UNINSTALL to continue: ' confirmation
+  if [[ "$confirmation" != "UNINSTALL" ]]; then
+    printf 'Uninstall cancelled.\n'
+    exit 0
+  fi
+
+  mkdir -p "$LOG_DIR"
+  local uninstall_log="$LOG_DIR/uninstall.log"
+  printf '\n===== opensmart.sh uninstall started %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$uninstall_log"
+
+  local dir name
+  for dir in "$ROOT_DIR"/opensmart/containers/run/*/; do
+    [[ -f "${dir}docker-compose.yml" ]] || continue
+    name="$(basename "$dir")"
+    printf 'Removing %s... ' "$name"
+    if grep -q 'profiles:' "${dir}docker-compose.yml" 2>/dev/null; then
+      # Only opensmart/containers/run/openvpn/ currently gates its service
+      # behind a "manual" profile (see that file's own comments) — without
+      # --profile manual, `down` won't see/remove it even if it was started.
+      (cd "$dir" && docker compose --profile manual down) >> "$uninstall_log" 2>&1 \
+        && printf 'done\n' || printf 'nothing to remove\n'
+    else
+      (cd "$dir" && docker compose down) >> "$uninstall_log" 2>&1 \
+        && printf 'done\n' || printf 'nothing to remove\n'
+    fi
+  done
+
+  printf '\n✔ OpenSMART containers removed. Full log: %s\n' "$uninstall_log"
+  printf 'Run "sudo ./opensmart.sh install" to set it up again.\n'
 }
 
 # ── install helpers ─────────────────────────────────────────────────────────
@@ -438,6 +530,28 @@ _install_require_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
     _step_fail "opensmart.sh install must be run as root. Try: sudo ./opensmart.sh install"
   fi
+  printf 'ok\n'
+}
+
+_install_check_path_traversable() {
+  # The container runs as a non-root user (uid 1000) and needs every ancestor
+  # directory of the bind-mounted checkout to be traversable (the "other"
+  # execute bit) for it to reach anything inside — chowning the checkout
+  # itself (see _install_fix_ownership) doesn't help if a directory ABOVE it
+  # blocks traversal. Installing under /root (mode 700, root-only) is the
+  # common way to hit this: the container starts, but its own entrypoint
+  # gets "Permission denied" trying to exec anything inside the mount,
+  # crash-looping with no indication of why. Confirmed twice against a real
+  # Docker Engine before this check was added.
+  _step "Checking the install path is reachable by the container's non-root user"
+  local dir="$ROOT_DIR" perms
+  while [[ "$dir" != "/" && -n "$dir" ]]; do
+    perms="$(stat -c '%A' "$dir" 2>/dev/null)" || break
+    if [[ "${perms:9:1}" != "x" ]]; then
+      _step_fail "\"$dir\" is not traversable by the container's non-root user (permissions: $perms). The container will start but crash-loop with \"Permission denied\" trying to run anything inside the bind mount. This usually means installing under /root (mode 700, root-only). Move this checkout to a world-readable location (e.g. /opt, /srv, or a regular user's home directory) and re-run install from there."
+    fi
+    dir="$(dirname "$dir")"
+  done
   printf 'ok\n'
 }
 
@@ -501,10 +615,60 @@ _install_create_network() {
   fi
 }
 
+_install_set_max_map_count() {
+  # Standard requirement for any OpenSearch/Elasticsearch-family container
+  # (mmapfs storage) — the Wazuh indexer (opensmart/containers/run/wazuh/)
+  # needs this just like the existing "opensearch" container does. The
+  # default on most distros (65530) is too low; Wazuh/OpenSearch/Elasticsearch
+  # all document this same fix. Applied unconditionally (harmless if unused)
+  # since provisioning.py runs as uid 1000 inside a container and can't touch
+  # host sysctls itself — only this host-side, root install step can.
+  _step "Setting vm.max_map_count=262144 (required by OpenSearch-family indexers)"
+  {
+    printf 'vm.max_map_count=262144\n' > /etc/sysctl.d/99-opensmart-indexer.conf &&
+    sysctl -w vm.max_map_count=262144
+  } >> "$INSTALL_LOG" 2>&1 \
+    || _step_fail "Failed to set vm.max_map_count."
+  printf 'done\n'
+}
+
 _install_build_image() {
   _step "Building $IMAGE_NAME image (this can take a few minutes)"
   docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/containers/build/opensmart/Dockerfile" "$ROOT_DIR" >> "$INSTALL_LOG" 2>&1 \
     || _step_fail "Failed to build the $IMAGE_NAME image."
+  printf 'done\n'
+}
+
+# Builds one native module image (opensmart/<name>) from
+# containers/build/<name>/Dockerfile, using that directory itself as the
+# build context (these Dockerfiles COPY, if anything, only files that live
+# alongside them — see containers/build/openvpn/Dockerfile).
+_build_native_module_image() {
+  local name="$1"
+  docker build -t "opensmart/$name" -f "$ROOT_DIR/containers/build/$name/Dockerfile" "$ROOT_DIR/containers/build/$name"
+}
+
+_install_build_native_modules() {
+  # Suricata, Zeek, WireGuard, and OpenVPN
+  # (opensmart/containers/run/{suricata,zeek,wireguard,openvpn}/) ship as
+  # Dockerfile templates, not pre-built/pullable images, so something has to
+  # build them. That can't be the backend's own provisioning.py: it talks to
+  # the host Docker daemon through the docker-socket-proxy sidecar, whose
+  # allowlist deliberately excludes BUILD (see docs/architecture.md's
+  # security section) — letting the app container build arbitrary images on
+  # the host is exactly the privilege that proxy exists to withhold. So this
+  # runs here instead, host-side, against the real daemon, once per
+  # install/recreate; provisioning.py only ever starts/stops images that
+  # already exist. All four build FROM opensmart/base, so it's built first.
+  _step "Building native module images (base, Suricata, Zeek, WireGuard, OpenVPN)"
+  {
+    _build_native_module_image base &&
+    _build_native_module_image suricata &&
+    _build_native_module_image zeek &&
+    _build_native_module_image wireguard &&
+    _build_native_module_image openvpn
+  } >> "$INSTALL_LOG" 2>&1 \
+    || _step_fail "Failed to build native module images (base/Suricata/Zeek/WireGuard/OpenVPN)."
   printf 'done\n'
 }
 
@@ -518,12 +682,20 @@ _install_fix_ownership() {
   _step "Setting file ownership for the container"
   chown -R 1000:1000 "$ROOT_DIR" >> "$INSTALL_LOG" 2>&1 \
     || _step_fail "Failed to set ownership of $ROOT_DIR to uid 1000."
+  # This chown is exactly what makes a later `git pull` (typically run as
+  # root, to fetch updates before `install --recreate`) fail with "detected
+  # dubious ownership" — git refuses to operate in a repo it doesn't own
+  # unless told to trust it explicitly. Register that trust now, as root,
+  # so upgrading via git pull works without the operator hitting this and
+  # having to work it out themselves. Best-effort: does not fail install if
+  # git isn't installed or this isn't a git checkout.
+  command -v git >/dev/null 2>&1 && git config --global --add safe.directory "$ROOT_DIR" >> "$INSTALL_LOG" 2>&1 || true
   printf 'done\n'
 }
 
 _install_run_container() {
   _step "Starting the $CONTAINER_NAME container"
-  (cd "$ROOT_DIR/containers/run/opensmart" && docker compose up -d) >> "$INSTALL_LOG" 2>&1 \
+  (cd "$ROOT_DIR/opensmart/containers/run/opensmart" && docker compose up -d) >> "$INSTALL_LOG" 2>&1 \
     || _step_fail "Failed to start the $CONTAINER_NAME container."
   printf 'done\n'
 }
@@ -570,6 +742,7 @@ _install_show_password() {
   } >> "$INSTALL_LOG"
   printf '\nCould not find the initial admin password in container logs within 5 minutes.\n' >&2
   printf 'See %s (or: docker logs %s) for details.\n' "$INSTALL_LOG" "$CONTAINER_NAME" >&2
+  return 1
 }
 
 cmd_install() {
@@ -577,15 +750,33 @@ cmd_install() {
   _log_init
   printf 'Full installer log: %s\n\n' "$INSTALL_LOG"
   _install_require_root
+  _install_check_path_traversable
   _install_check_distro
   _install_docker_engine
   _install_create_network
+  _install_set_max_map_count
   _install_build_image
+  _install_build_native_modules
   _install_fix_ownership
   _install_run_container
   _install_wait_running
-  _install_show_password
-  printf '✔ OpenSMART is running at http://0.0.0.0:8000\n'
+  # A container that reaches a "stable" running state above can still crash
+  # again shortly after — that check only confirms it wasn't caught
+  # crash-looping during a short observation window, not that it will stay
+  # up forever (e.g. a cold-start dependency sync that keeps failing on a
+  # slow/unreliable network can crash-loop for much longer than that
+  # window). Only print the unconditional success banner if the
+  # first-run-password wait actually confirmed the app came up; otherwise
+  # say so plainly instead of claiming success right after a timeout warning.
+  if _install_show_password; then
+    printf '✔ OpenSMART is running at http://0.0.0.0:8000\n'
+  else
+    printf '⚠ Install finished, but readiness could not be confirmed within 5 minutes.\n' >&2
+    printf 'The container may still be starting (e.g. a slow network stalling the\n' >&2
+    printf 'first-run dependency sync) or may be crash-looping. Check: docker ps,\n' >&2
+    printf 'docker logs %s, and %s\n' "$CONTAINER_NAME" "$INSTALL_LOG" >&2
+    exit 1
+  fi
 }
 
 case "${1:-}" in
@@ -607,6 +798,9 @@ case "${1:-}" in
     ;;
   install)
     cmd_install
+    ;;
+  uninstall)
+    cmd_uninstall
     ;;
   reset-admin-password)
     cmd_reset_admin_password

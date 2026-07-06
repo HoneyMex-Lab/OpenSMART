@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User } from './types';
+import type { AuditEvent, DataInfo, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User } from './types';
 
 let csrfToken = '';
 
@@ -70,4 +70,7 @@ export const api = {
   resourcesHistory: (timeframe: string) => request<{ points: ResourcePoint[]; timeframe: string }>(`/api/status/resources/history?timeframe=${timeframe}`),
   dataInfo: () => request<DataInfo>('/api/status/data-info'),
   schemaCheck: () => request<SchemaCheckResult>('/api/status/schema-check'),
+  provisionStart: (name: string, kind: 'container' | 'module' | 'tool') => request<ProvisionResult>('/api/provisioning/start', { method: 'POST', body: JSON.stringify({ name, kind }) }),
+  provisionStop: (name: string) => request<ProvisionResult>('/api/provisioning/stop', { method: 'POST', body: JSON.stringify({ name, kind: 'container' }) }),
+  provisionStatus: (container: string) => request<{ container: string; running: boolean; detail: string }>(`/api/provisioning/status/${container}`),
 };

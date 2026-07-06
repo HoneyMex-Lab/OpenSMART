@@ -1,0 +1,152 @@
+# Adapted from the official Wazuh single-node deployment
+# (github.com/wazuh/wazuh-docker, tag v4.14.6, single-node/). Two deliberate
+# deviations from that upstream reference, both to match this project's own
+# constraints:
+#
+# 1. Named Docker volumes (wazuh_etc, wazuh-indexer-data, ...) are replaced
+#    with bind mounts under ./volumes/data/ — named volumes live under
+#    Docker's own data root (typically /var/lib/docker/volumes/), outside
+#    this project's directory, which this project's containers must never do
+#    (see docs/architecture.md).
+# 2. The separate generate-indexer-certs.yml is folded into this file as a
+#    profile-gated one-off service (wazuh-certs-generator) instead of a
+#    second compose file — same pattern already used by
+#    opensmart/containers/run/openvpn/'s PKI generation.
+#
+# Everything else (images, env vars, ports, ulimits, config file contents
+# under ./config/) is vendored as close to verbatim as possible from
+# upstream. Default credentials (INDEXER_PASSWORD, API_PASSWORD,
+# DASHBOARD_PASSWORD, and the bcrypt hash in
+# config/wazuh_indexer/internal_users.yml) are Wazuh's own well-known demo
+# values — change them via Wazuh's documented wazuh-passwords-tool before
+# exposing this to any untrusted network; see docs/security.md.
+#
+# First-time setup (provisioning.py's start_container("wazuh") does this
+# automatically before the first `up -d` — see _ensure_wazuh_certs()):
+#   docker compose --profile certs run --rm wazuh-certs-generator
+#
+# Also requires the host to have vm.max_map_count >= 262144 (standard
+# OpenSearch/Elasticsearch requirement for the indexer) — set by
+# opensmart.sh install, see _install_set_max_map_count().
+services:
+  wazuh-certs-generator:
+    image: wazuh/wazuh-certs-generator:0.0.4
+    hostname: wazuh-certs-generator
+    profiles:
+      - certs
+    environment:
+      - CERT_TOOL_VERSION=4.14
+    volumes:
+      - ./volumes/data/wazuh_indexer_ssl_certs/:/certificates/
+      - ./config/certs.yml:/config/certs.yml
+    networks:
+      - opensmart
+
+  wazuh.manager:
+    image: wazuh/wazuh-manager:4.14.6
+    hostname: wazuh.manager
+    restart: unless-stopped
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 655360
+        hard: 655360
+    ports:
+      - "1514:1514"
+      - "1515:1515"
+      - "514:514/udp"
+      - "55000:55000"
+    environment:
+      - INDEXER_URL=https://wazuh.indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=SecretPassword
+      - FILEBEAT_SSL_VERIFICATION_MODE=full
+      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
+      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
+      - SSL_KEY=/etc/ssl/filebeat.key
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=MyS3cr37P450r.*-
+    volumes:
+      - ./volumes/data/manager/api_configuration:/var/ossec/api/configuration
+      - ./volumes/data/manager/etc:/var/ossec/etc
+      - ./volumes/data/manager/logs:/var/ossec/logs
+      - ./volumes/data/manager/queue:/var/ossec/queue
+      - ./volumes/data/manager/var_multigroups:/var/ossec/var/multigroups
+      - ./volumes/data/manager/integrations:/var/ossec/integrations
+      - ./volumes/data/manager/active_response:/var/ossec/active-response/bin
+      - ./volumes/data/manager/agentless:/var/ossec/agentless
+      - ./volumes/data/manager/wodles:/var/ossec/wodles
+      - ./volumes/data/manager/filebeat_etc:/etc/filebeat
+      - ./volumes/data/manager/filebeat_var:/var/lib/filebeat
+      - ./volumes/data/wazuh_indexer_ssl_certs/root-ca-manager.pem:/etc/ssl/root-ca.pem
+      - ./volumes/data/wazuh_indexer_ssl_certs/wazuh.manager.pem:/etc/ssl/filebeat.pem
+      - ./volumes/data/wazuh_indexer_ssl_certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key
+      - ./config/wazuh_cluster/wazuh_manager.conf:/wazuh-config-mount/etc/ossec.conf
+    networks:
+      - opensmart
+
+  wazuh.indexer:
+    image: wazuh/wazuh-indexer:4.14.6
+    hostname: wazuh.indexer
+    restart: unless-stopped
+    ports:
+      # Remapped from upstream's 9200:9200 — the "opensearch" container
+      # (opensmart/containers/run/opensearch/) already claims 9200 on this
+      # host for Arkime; Wazuh ships its own separate indexer, not sharing
+      # that one.
+      - "9201:9200"
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./volumes/data/indexer:/var/lib/wazuh-indexer
+      - ./volumes/data/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-indexer/config/certs/root-ca.pem
+      - ./volumes/data/wazuh_indexer_ssl_certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/config/certs/wazuh.indexer.key
+      - ./volumes/data/wazuh_indexer_ssl_certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/config/certs/wazuh.indexer.pem
+      - ./volumes/data/wazuh_indexer_ssl_certs/admin.pem:/usr/share/wazuh-indexer/config/certs/admin.pem
+      - ./volumes/data/wazuh_indexer_ssl_certs/admin-key.pem:/usr/share/wazuh-indexer/config/certs/admin-key.pem
+      - ./config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/config/opensearch.yml
+      - ./config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml
+    networks:
+      - opensmart
+
+  wazuh.dashboard:
+    image: wazuh/wazuh-dashboard:4.14.6
+    hostname: wazuh.dashboard
+    restart: unless-stopped
+    ports:
+      - "443:5601"
+    environment:
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=SecretPassword
+      - WAZUH_API_URL=https://wazuh.manager
+      - DASHBOARD_USERNAME=kibanaserver
+      - DASHBOARD_PASSWORD=kibanaserver
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=MyS3cr37P450r.*-
+    volumes:
+      - ./volumes/data/wazuh_indexer_ssl_certs/wazuh.dashboard.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard.pem
+      - ./volumes/data/wazuh_indexer_ssl_certs/wazuh.dashboard-key.pem:/usr/share/wazuh-dashboard/certs/wazuh-dashboard-key.pem
+      - ./volumes/data/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-dashboard/certs/root-ca.pem
+      - ./config/wazuh_dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+      - ./config/wazuh_dashboard/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+      - ./volumes/data/dashboard/config:/usr/share/wazuh-dashboard/data/wazuh/config
+      - ./volumes/data/dashboard/custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
+    depends_on:
+      - wazuh.indexer
+      - wazuh.manager
+    networks:
+      - opensmart
+
+networks:
+  opensmart:
+    external: true
+    name: opensmart

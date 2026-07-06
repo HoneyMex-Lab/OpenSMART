@@ -13,10 +13,18 @@ from pathlib import Path
 from typing import Any
 
 from . import eve_ingest
+from .config import PROJECT_ROOT
 from .database import get_db, get_network_ids_db, now_iso
 from .eve_ingest import compute_event_hash
 
 logger = logging.getLogger(__name__)
+
+# Host-side path to the eve.json produced by the native (in-container) Suricata
+# stack at opensmart/containers/run/suricata, whose docker-compose.yml
+# bind-mounts ./volumes/data -> /data, with Suricata's entrypoint logging to
+# /data/log. containers/run/ lives inside PROJECT_ROOT (opensmart/), not
+# beside it — see opensmart/containers/run/opensmart/docker-compose.yml.
+NATIVE_SURICATA_EVE_PATH = PROJECT_ROOT / "containers" / "run" / "suricata" / "volumes" / "data" / "log" / "eve.json"
 
 TIMEFRAMES = {
     "1h": timedelta(hours=1),
@@ -81,8 +89,13 @@ def ids_config() -> dict[str, Any]:
     with get_db() as db:
         row = db.execute("SELECT config FROM opensmart_modules WHERE name = 'Network IDS'").fetchone()
     config = json.loads(row["config"] or "{}") if row else {}
+    eve_source = str(config.get("eve_source", "external")).strip().lower()
+    if eve_source not in ("external", "native"):
+        eve_source = "external"
+    eve_json_path = str(NATIVE_SURICATA_EVE_PATH) if eve_source == "native" else str(config.get("eve_json_path", ""))
     return {
-        "eve_json_path": str(config.get("eve_json_path", "")),
+        "eve_source": eve_source,
+        "eve_json_path": eve_json_path,
         "summary_refresh_minutes": int(config.get("summary_refresh_minutes", 5) or 5),
         "initial_ingestion_gb": str(config.get("initial_ingestion_gb", "2")),
         "default_top_n": int(config.get("default_top_n", 10) or 10),
@@ -118,11 +131,17 @@ def config_status() -> dict[str, Any]:
     ok = bool(path and path.is_file())
     state = read_state(config["eve_json_path"])
     first_ingestion_required = eve_ingest.ids_first_ingestion_required(config["eve_json_path"], eve_ingest.shared_config())
+    if ok:
+        detail = "eve.json is readable"
+    elif config["eve_source"] == "native":
+        detail = "Native Suricata container is not running yet, so eve.json does not exist."
+    else:
+        detail = "Configure a readable local eve.json path for Network IDS."
     return {
         **config,
         "configured": bool(config["eve_json_path"]),
         "readable": ok,
-        "detail": "eve.json is readable" if ok else "Configure a readable local eve.json path for Network IDS.",
+        "detail": detail,
         "first_ingestion_required": first_ingestion_required,
         **state,
     }

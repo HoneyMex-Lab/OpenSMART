@@ -74,14 +74,21 @@ containers/OpenSMART-Standalone/**/*.pcap
 containers/OpenSMART-Standalone/**/*.db
 containers/OpenSMART-Standalone/**/*.sqlite*
 
-# containers/run generated runtime artifacts (same convention as OpenSMART-Standalone)
-containers/run/**/volumes/data/**
-!containers/run/**/volumes/data/.gitkeep
-containers/run/**/*.ovpn
-containers/run/**/*.key
-containers/run/**/*.crt
-containers/run/**/*.pem
-containers/run/**/*.log
-containers/run/**/*.pcap
-containers/run/**/*.db
-containers/run/**/*.sqlite*
+# opensmart/containers/run generated runtime artifacts (same convention as
+# OpenSMART-Standalone). Moved here from repo-root containers/run/ on
+# 2026-07-05 — keep this in sync with that path.
+opensmart/containers/run/**/volumes/data/**
+!opensmart/containers/run/**/volumes/data/.gitkeep
+opensmart/containers/run/**/*.ovpn
+opensmart/containers/run/**/*.key
+opensmart/containers/run/**/*.crt
+opensmart/containers/run/**/*.pem
+opensmart/containers/run/**/*.log
+opensmart/containers/run/**/*.pcap
+opensmart/containers/run/**/*.db
+opensmart/containers/run/**/*.sqlite*
+
+# Persistent uv package cache for the opensmart container (see
+# opensmart/containers/run/opensmart/docker-compose.yml) — lives inside the
+# bind-mounted project directory so it survives container recreation.
+/.uv-cache/

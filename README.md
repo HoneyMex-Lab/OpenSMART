@@ -65,12 +65,13 @@ The current implementation is a working v0.3 prototype with local user managemen
 │   │   ├── dev_backend.sh
 │   │   ├── dev_frontend.sh
 │   │   └── reset_telemetry_db.sh
-│   └── demo/
+│   ├── demo/
+│   └── containers/
+│       └── run/
+│           └── opensmart/
 ├── containers/
 │   ├── OpenSMART-Standalone/
-│   ├── build/
-│   │   └── opensmart/
-│   └── run/
+│   └── build/
 │       └── opensmart/
 ├── docs/
 ├── logs/
@@ -82,10 +83,15 @@ The current implementation is a working v0.3 prototype with local user managemen
   network-sensor stack, run manually and independently of `opensmart.sh`.
 - `containers/build/`: per-tool Dockerfiles used by `opensmart.sh install`
   (`base`, `suricata`, `zeek`, `wireguard`, `openvpn`, `opensmart`; official
-  upstream images like OpenSearch/Arkime/nginx have none).
-- `containers/run/`: one directory per tool with its own `docker-compose.yml`
-  and a bind-mounted `volumes/data/` (`opensearch`, `arkime`, `suricata`,
-  `zeek`, `wireguard`, `openvpn`, `nginx`, `opensmart`).
+  upstream images like OpenSearch/Arkime/nginx have none). Stays at the repo
+  root — these are build-time templates, not a running instance.
+- `opensmart/containers/run/`: one directory per tool with its own
+  `docker-compose.yml` and a bind-mounted `volumes/data/` (`opensearch`,
+  `arkime`, `suricata`, `zeek`, `wireguard`, `openvpn`, `nginx`, `opensmart`).
+  Lives inside `opensmart/` (not the repo root) so the backend's
+  provisioning module (`app/provisioning.py`) can start/stop these sibling
+  containers via `docker compose` with bind-mount paths that resolve
+  correctly against the host — see docs/architecture.md.
 
 ## Requirements
 

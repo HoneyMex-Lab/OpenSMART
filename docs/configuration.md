@@ -36,7 +36,9 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | `developed_by` | `Developed by` | Sidebar footer text. |
 | `failed_login_limit` | `5` | Failed login count before lockout. |
 | `lockout_minutes` | `15` | Lockout duration after too many failed attempts. |
-| `tool_base_path` | `/opt/opensmart/tools` | Placeholder path for future local tool integrations. |
+| `password_policy` | `strict` | Password complexity profile: `strict` / `moderate` / `low` / `disabled`. See `docs/security.md`. |
+| `wizard_completed` | `true` (`false` only on a genuinely fresh install) | Whether the first-run Wizard has been completed. Gates the Wizard redirect in `App.tsx`. |
+| `tool_base_path` | (none — set to a real path on the host) | Placeholder path for future local tool integrations. |
 | `tool_url_opnsense` | empty | Internal iframe URL for OPNsense. |
 | `tool_url_ntop` | empty | Internal iframe URL for NTOP. |
 | `tool_url_arkime` | empty | Internal iframe URL for Arkime. |
@@ -69,9 +71,13 @@ A tool status is derived automatically. Disabled tools show instructions instead
 
 Disabled modules show enable/configuration instructions. Network IDS and Network Traffic Monitoring render live ingestion/analysis pages when enabled and configured. Other enabled modules currently show placeholder content.
 
-Network IDS configuration includes the local Suricata `eve.json` path, initial ingestion size, summary refresh interval, analysis/detail page sizes, critical alert tracking, retention options, and optional GeoIP MMDB path for the attack map.
+Network IDS configuration includes an `eve.json` source toggle (`external`: a path you manage yourself, the default; or `native`: the bundled Suricata container, with a live Start/Stop control and an automatically-derived path — see `docs/technical-overview.md`), initial ingestion size, summary refresh interval, analysis/detail page sizes, critical alert tracking, retention options, and optional GeoIP MMDB path for the attack map.
 
 Network Traffic Monitoring configuration includes source selection, shared Suricata `eve.json` support, future Zeek JSON path configuration, protocol indexing toggles, excluded event types, and retention options.
+
+## First-Run Wizard
+
+Shown automatically after the bootstrap admin's forced password change on a fresh install (`wizard_completed` setting is `false`); reachable manually afterward from `Settings > Wizard`. Five steps: update acknowledgment, optional logo upload, enable OpenSMART modules, enable Tools, and Finish (attempts to provision containers for whatever got enabled, reporting a per-item result). See `docs/technical-overview.md` for the provisioning flow.
 
 ## Notifications
 
