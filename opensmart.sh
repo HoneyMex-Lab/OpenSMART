@@ -623,13 +623,41 @@ _install_set_max_map_count() {
   # all document this same fix. Applied unconditionally (harmless if unused)
   # since provisioning.py runs as uid 1000 inside a container and can't touch
   # host sysctls itself — only this host-side, root install step can.
-  _step "Setting vm.max_map_count=262144 (required by OpenSearch-family indexers)"
-  {
-    printf 'vm.max_map_count=262144\n' > /etc/sysctl.d/99-opensmart-indexer.conf &&
-    sysctl -w vm.max_map_count=262144
-  } >> "$INSTALL_LOG" 2>&1 \
-    || _step_fail "Failed to set vm.max_map_count."
-  printf 'done\n'
+  local required=262144
+  local current
+  current="$(cat /proc/sys/vm/max_map_count 2>/dev/null || echo 0)"
+
+  _step "Setting vm.max_map_count=$required (required by OpenSearch-family indexers)"
+
+  if [[ "$current" -ge "$required" ]]; then
+    printf 'already %s, skipping\n' "$current"
+    return
+  fi
+
+  if {
+    printf 'vm.max_map_count=%s\n' "$required" > /etc/sysctl.d/99-opensmart-indexer.conf &&
+    sysctl -w "vm.max_map_count=$required"
+  } >> "$INSTALL_LOG" 2>&1; then
+    printf 'done\n'
+    return
+  fi
+
+  # sysctl -w can fail with "permission denied" specifically when this host
+  # is itself an unprivileged LXC container: vm.max_map_count isn't
+  # namespaced, so writes to it are blocked from inside the container
+  # regardless of root, even though /etc/sysctl.d writes still succeed.
+  # That's a host-level (Proxmox) setting, not something this install step
+  # can reach — so warn instead of hard-failing the whole install.
+  if [[ "$(systemd-detect-virt 2>/dev/null)" == "lxc" ]]; then
+    printf 'skipped (unprivileged LXC)\n'
+    printf '  ⚠ Could not set vm.max_map_count from inside this LXC container (current: %s, required: %s).\n' "$current" "$required" >&2
+    printf '  Run this on the Proxmox/LXC host itself, not inside the container:\n' >&2
+    printf '    echo "vm.max_map_count=%s" > /etc/sysctl.d/99-opensmart-indexer.conf && sysctl -w vm.max_map_count=%s\n' "$required" "$required" >&2
+    printf '  OpenSearch/Wazuh indexers will fail to start until this is set.\n' >&2
+    return
+  fi
+
+  _step_fail "Failed to set vm.max_map_count."
 }
 
 _install_build_image() {
