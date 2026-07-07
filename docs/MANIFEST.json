@@ -46,7 +46,7 @@
       "frontend/": "React + Vite app (opensmart/frontend/src/), package.json, package-lock.json.",
       "scripts/": "App launcher scripts: run_app.sh, dev_backend.sh, dev_frontend.sh, reset_telemetry_db.sh.",
       "demo/": "Sample dashboard-seeding JSON, manually copy-pasted into Settings; not auto-imported.",
-      "containers/run/": "Moved here from the repo-root containers/run/ on 2026-07-05, so the app container's host-path-parity mount (see deployment.phases phase 4) covers it. Per-tool docker-compose.yml + bind-mounted volumes/data/ (never named Docker volumes): opensearch, arkime, suricata, zeek, wireguard, openvpn, nginx, opensmart. Started/stopped by backend/app/provisioning.py through the docker-socket-proxy sidecar, not by the operator directly."
+      "containers/run/": "Moved here from the repo-root containers/run/ on 2026-07-05, so the app container's host-path-parity mount (see deployment.phases phase 4) covers it. Per-tool docker-compose.yml + bind-mounted volumes/data/ (never named Docker volumes): opensearch, arkime, suricata, zeek, wireguard, openvpn, wazuh, opensmart, plus vpn/<instance>/ compose projects generated at runtime by backend/app/vpn.py. nginx/ is the tools front-door reverse proxy (serves the app + tool aliases /arkime /wazuh /proxmox /opnsense from one origin on :8080; started by opensmart.sh _start_front_proxy). Started/stopped by backend/app/provisioning.py (and vpn.py) through the docker-socket-proxy sidecar, not by the operator directly."
     },
     "containers/": {
       "description": "Docker deployment tooling. Renamed from Containers/ to containers/ on 2026-07-04. Only build/ and OpenSMART-Standalone/ live here now — run/ moved to opensmart/containers/run/ (see the opensmart/ entry above).",
@@ -251,6 +251,8 @@
     "Frontend dependency versions use broad ('latest') ranges; package-lock.json is tracked for reproducibility",
     "No container template exists yet for Graylog — the tool reports 'no template available' when provisioning is attempted",
     "OpenVPN instances need /dev/net/tun on the Docker host (LXC hosts must pass it through); starting one without it fails with a clear daemon error surfaced in the UI",
+    "The /proxmox and /opnsense front-door aliases are best-effort: those apps have no native base-path support, so subpath proxying can break consoles/websockets/absolute assets. Use direct url:port mode for full fidelity. Arkime and Wazuh aliases are reliable (they support base paths).",
+    "Front-door tool aliases (relative paths like /arkime/) only resolve when OpenSMART is reached through the proxy port (default :8080); accessed directly on :8000 they 404 — use direct url:port mode there.",
     "Wazuh containers ship with upstream demo credentials (flagged in their compose file) — rotate before real use",
     "The Wazuh-backed modules (Threat Detection Alerts, Endpoint, Vulnerability Management) provision and monitor the containers but do not yet ingest Wazuh data into OpenSMART pages",
     "WireGuard peer changes restart the instance (wg-quick re-reads its config only on start)"

@@ -114,6 +114,8 @@ The VPN module (`app/vpn.py`) extends the same model: instance and user names ar
 
 Tool URLs are configured by admins and loaded into iframes only after a user clicks a tool card. Only configure trusted internal URLs. Browser framing can fail if the target tool sends restrictive `X-Frame-Options` or `Content-Security-Policy` headers.
 
+The tools front-door proxy (`opensmart/containers/run/nginx/`, see `docs/architecture.md`) deliberately strips `X-Frame-Options` and `Content-Security-Policy` from the proxied tool responses so those UIs can embed in the OpenSMART iframe. That removes the tools' own clickjacking protection for the proxied path — acceptable here because the proxy serves them same-origin behind OpenSMART's own authenticated console, but it is a conscious trade-off: only expose the proxy port to trusted networks, and prefer direct url:port mode (new-tab, headers intact) for tools reached over untrusted paths. The proxy talks to the Wazuh/Proxmox/OPNsense HTTPS upstreams with certificate verification disabled (internal, self-signed) — a same-network integration convenience, not a substitute for real TLS trust to those hosts.
+
 ## Audit Visibility
 
 Audit entries are stored in SQLite. Normal users can view their own logon events. Admin users can view the last 100 relevant logons and configuration/user changes.
