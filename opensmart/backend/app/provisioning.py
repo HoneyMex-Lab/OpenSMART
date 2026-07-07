@@ -156,15 +156,35 @@ def _run_compose(container: str, *args: str, extra_env: dict[str, str] | None = 
     return True, output[-2000:]
 
 
+def _setting(key: str) -> str:
+    from .database import get_db
+    with get_db() as db:
+        row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return (row["value"] if row else "").strip()
+
+
 def _monitor_interfaces_env() -> dict[str, str]:
     """CAPTURE_IFACES for the suricata compose file, from the
     monitor_interfaces setting (comma-separated, chosen in the Wizard).
     Falls back to eth0 via the compose file's own default when unset."""
-    from .database import get_db
-    with get_db() as db:
-        row = db.execute("SELECT value FROM settings WHERE key = 'monitor_interfaces'").fetchone()
-    value = (row["value"] if row else "").strip().strip(",")
+    value = _setting("monitor_interfaces").strip(",")
     return {"CAPTURE_IFACES": value} if value else {}
+
+
+def _proxy_hostname_env() -> dict[str, str]:
+    """OPENSMART_HOSTNAME for the nginx front-door, from the proxy_hostname
+    setting (chosen in the Wizard's Basics step). Drives the proxy's
+    server_name and the self-signed certificate SAN — the compose file's
+    init-certs one-off re-issues the certificate when it changes. Process
+    environment beats the compose .env file, so this wins over any
+    host-side default when set."""
+    value = _setting("proxy_hostname")
+    # The value is expanded by a shell inside the init-certs one-off (cert
+    # subject/SAN), so only RFC-hostname characters may pass — anything else
+    # is dropped, falling back to the compose default.
+    if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", value or ""):
+        return {}
+    return {"OPENSMART_HOSTNAME": value}
 
 
 def start_container(container: str) -> tuple[bool, str]:
@@ -176,7 +196,11 @@ def start_container(container: str) -> tuple[bool, str]:
         ok, detail = _ensure_wazuh_certs()
         if not ok:
             return False, f"Certificate generation failed: {detail}"
-    extra_env = _monitor_interfaces_env() if container == "suricata" else None
+    extra_env = None
+    if container == "suricata":
+        extra_env = _monitor_interfaces_env()
+    elif container == "nginx":
+        extra_env = _proxy_hostname_env()
     return _run_compose(container, "up", "-d", extra_env=extra_env)
 
 

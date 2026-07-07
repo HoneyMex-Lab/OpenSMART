@@ -35,6 +35,7 @@ PUBLIC_KEYS = {
     "password_policy",
     "wizard_completed",
     "monitor_interfaces",
+    "proxy_hostname",
     "theme",
     "tool_base_path",
     "tool_url_opnsense",

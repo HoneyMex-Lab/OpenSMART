@@ -92,3 +92,7 @@ opensmart/containers/run/**/*.sqlite*
 # opensmart/containers/run/opensmart/docker-compose.yml) — lives inside the
 # bind-mounted project directory so it survives container recreation.
 /.uv-cache/
+
+# Front-door proxy self-signed certificate (generated at runtime by the
+# nginx init-certs one-off service)
+opensmart/containers/run/nginx/certs/

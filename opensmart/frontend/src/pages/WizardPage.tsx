@@ -83,6 +83,7 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   const [step, setStep] = useState<StepKey>('basics');
   const [visited, setVisited] = useState<Set<StepKey>>(new Set(['basics']));
   const [appName, setAppName] = useState(settings.platform_title || 'OpenSMART');
+  const [proxyHostname, setProxyHostname] = useState(settings.proxy_hostname || window.location.hostname);
   const [logoDraft, setLogoDraft] = useState(settings.logo_url || '');
   const [interfaces, setInterfaces] = useState<HostInterface[] | null>(null);
   const [ifaceError, setIfaceError] = useState('');
@@ -229,6 +230,7 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
       { id: 'save-tools', phase: 'Configuration', label: 'Save tool configuration', state: 'pending', detail: '' },
       ...provisionModules.map((m): RunItem => ({ id: `module:${m.name}`, phase: 'Services', label: `${m.name} (${(MODULE_BACKING[m.name] || []).map((c) => PROJECT_LABELS[c] ?? c).join(', ')})`, state: 'pending', detail: '' })),
       ...provisionTools.map((t): RunItem => ({ id: `tool:${t.name}`, phase: 'Services', label: `${t.name} (${(TOOL_BACKING[t.name] || []).map((c) => PROJECT_LABELS[c] ?? c).join(', ')})`, state: 'pending', detail: '' })),
+      { id: 'container:nginx', phase: 'Services', label: `Front-door proxy (nginx, ${proxyHostname.trim() || host})`, state: 'pending', detail: '' },
       ...(vpnEnabled ? [{ id: 'info:vpn', phase: 'Services', label: 'Access VPN', state: 'info' as RunState, detail: `${vpnType === 'openvpn' ? 'OpenVPN' : 'WireGuard'} selected — create VPN instances and users from the Access VPN module after setup.` }] : []),
       ...infoModules.map((m): RunItem => ({ id: `info:module:${m.name}`, phase: 'Services', label: m.name, state: 'info', detail: NOT_IMPLEMENTED.has(m.name) ? 'Placeholder module — no services to start yet.' : 'No local services required.' })),
       ...infoTools.map((t): RunItem => ({ id: `info:tool:${t.name}`, phase: 'Services', label: t.name, state: 'info', detail: 'External tool — opens embedded once its URL is set in Configuration → Tools.' })),
@@ -239,6 +241,7 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
     const nextSettings: Settings = {
       ...settings,
       platform_title: appName.trim() || 'OpenSMART',
+      proxy_hostname: proxyHostname.trim(),
       logo_url: logoDraft,
       monitor_interfaces: effectiveIfaces.join(','),
     };
@@ -285,6 +288,21 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
         } catch (error) {
           updateItem(id, { state: 'error', detail: error instanceof Error ? error.message : 'Provisioning request failed.' });
         }
+      }
+
+      // (Re)start the front-door proxy so it picks up the hostname just
+      // saved — its init step re-issues the self-signed certificate for it.
+      updateItem('container:nginx', { state: 'running' });
+      try {
+        const proxyResult = await api.provisionStart('nginx', 'container');
+        updateItem('container:nginx', {
+          state: proxyResult.ok ? 'ok' : 'warning',
+          detail: proxyResult.ok
+            ? `Serving https://${proxyHostname.trim() || host}/ with a self-signed certificate (accept the browser warning once).`
+            : proxyResult.detail || 'Proxy failed to start — tool aliases will be unavailable; the app itself is unaffected.',
+        });
+      } catch (error) {
+        updateItem('container:nginx', { state: 'warning', detail: error instanceof Error ? error.message : 'Proxy failed to start — tool aliases will be unavailable.' });
       }
 
       updateItem('finalize', { state: 'running' });
@@ -350,6 +368,11 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
           <label className="wizard-field">
             Application name
             <input type="text" value={appName} maxLength={60} onChange={(event) => setAppName(event.target.value)} placeholder="OpenSMART" />
+          </label>
+          <label className="wizard-field">
+            Hostname (reverse-proxy access)
+            <input type="text" value={proxyHostname} maxLength={253} pattern="[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?" title="letters, digits, dots and dashes" onChange={(event) => setProxyHostname(event.target.value)} placeholder={window.location.hostname} />
+            <small className="muted">The name users will reach OpenSMART with (e.g. opensmart.example.local). Used as the front-door proxy&apos;s server name and its self-signed certificate&apos;s subject — the certificate is re-issued automatically when this changes.</small>
           </label>
           <div className="logo-upload-grid">
             <label>

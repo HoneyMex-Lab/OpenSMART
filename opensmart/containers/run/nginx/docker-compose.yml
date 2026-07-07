@@ -1,31 +1,74 @@
 # OpenSMART front-door reverse proxy — serves the app and the external-tool
 # path aliases (/arkime, /wazuh, /proxmox, /opnsense) from one origin so the
-# Tools page can embed them in iframes. See templates/default.conf.template
-# for the routing and the same-origin/iframe rationale.
+# Tools page can embed them in iframes, with HTTPS (self-signed, issued for
+# OPENSMART_HOSTNAME by init-certs below). See
+# templates/default.conf.template for routing, redirect behavior and the
+# same-origin/iframe rationale.
 #
-# Access OpenSMART through this port (default 8080) to use the tool aliases;
-# the app's own :8000 remains available for direct url:port tool access.
+# Access OpenSMART through this proxy (https://<hostname>/, aliases at
+# /arkime etc.); the app's own :8000 remains available for direct url:port
+# use (`./opensmart.sh start --bind`).
+#
+# Host-tunable via environment or a .env file next to this compose file:
+#   OPENSMART_PROXY_MODE   http|https (written by `opensmart.sh start
+#                          --reverse-proxy <mode>`; https default). In https
+#                          mode plain HTTP 301-redirects to HTTPS.
+#   OPENSMART_HOSTNAME     server_name + certificate SAN. The backend passes
+#                          the Wizard's proxy_hostname setting here when it
+#                          (re)starts this project; init-certs re-issues the
+#                          certificate automatically when it changes.
+#   OPENSMART_PROXY_BIND / OPENSMART_PROXY_HTTP_PORT /
+#   OPENSMART_PROXY_HTTPS_PORT   published address/ports (0.0.0.0:80/443).
+#   PROXMOX_UPSTREAM / OPNSENSE_UPSTREAM   external tool addresses for the
+#                          best-effort aliases (unresolvable defaults: those
+#                          two aliases 502 until configured).
 services:
+  # Issues the self-signed TLS certificate (ECDSA P-256, 10y) for
+  # OPENSMART_HOSTNAME into ./certs before nginx starts, and re-issues it
+  # whenever the hostname changes (tracked in ./certs/hostname). One-off,
+  # same idiom as arkime/wazuh's init containers.
+  init-certs:
+    image: nginx:1.27
+    entrypoint: ["sh", "-c"]
+    environment:
+      - OPENSMART_HOSTNAME=${OPENSMART_HOSTNAME:-opensmart}
+    command:
+      - |
+        set -e
+        HN="$${OPENSMART_HOSTNAME:-opensmart}"
+        if [ ! -f /certs/server.crt ] || [ "$$(cat /certs/hostname 2>/dev/null)" != "$$HN" ]; then
+          echo "Issuing self-signed certificate for $$HN"
+          openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+            -keyout /certs/server.key -out /certs/server.crt -days 3650 \
+            -subj "/CN=$$HN" \
+            -addext "subjectAltName=DNS:$$HN,DNS:localhost,IP:127.0.0.1"
+          printf '%s' "$$HN" > /certs/hostname
+          chmod 600 /certs/server.key
+        fi
+    volumes:
+      - ./certs:/certs
+    restart: "no"
+
   nginx:
     image: nginx:1.27
     container_name: opensmart-nginx
     hostname: nginx
     environment:
-      # External tool upstreams (Proxmox/OPNsense have no native base-path
-      # support — best-effort, see the template). Point these at the real
-      # hosts via a .env file next to this compose, e.g.:
-      #   PROXMOX_UPSTREAM=https://10.0.0.10:8006
-      #   OPNSENSE_UPSTREAM=https://10.0.0.1
-      # Left unresolvable by default, so those two aliases return 502 until
-      # configured while the rest of the proxy works normally.
+      - OPENSMART_PROXY_MODE=${OPENSMART_PROXY_MODE:-https}
+      - OPENSMART_HOSTNAME=${OPENSMART_HOSTNAME:-opensmart}
       - PROXMOX_UPSTREAM=${PROXMOX_UPSTREAM:-https://proxmox.invalid}
       - OPNSENSE_UPSTREAM=${OPNSENSE_UPSTREAM:-https://opnsense.invalid}
     volumes:
       # The official image runs envsubst over /etc/nginx/templates/*.template
       # into /etc/nginx/conf.d/ at startup.
       - ./templates:/etc/nginx/templates:ro
+      - ./certs:/etc/nginx/certs:ro
     ports:
-      - "${OPENSMART_PROXY_BIND:-0.0.0.0}:8080:80"
+      - "${OPENSMART_PROXY_BIND:-0.0.0.0}:${OPENSMART_PROXY_HTTP_PORT:-80}:80"
+      - "${OPENSMART_PROXY_BIND:-0.0.0.0}:${OPENSMART_PROXY_HTTPS_PORT:-443}:443"
+    depends_on:
+      init-certs:
+        condition: service_completed_successfully
     networks:
       - opensmart
     restart: unless-stopped
