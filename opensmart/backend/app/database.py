@@ -47,6 +47,7 @@ DEFAULT_SETTINGS = {
     "platform_build": BUILD_VERSION,
     "sensor_name": default_sensor_name(),
     "platform_language": "en",
+    "theme": "dark",
     "logo_url": "",
     "favicon_url": "/assets/branding/favicon.svg",
     "footer_logo_primary": "",

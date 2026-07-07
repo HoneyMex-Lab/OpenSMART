@@ -59,6 +59,12 @@ export default function App() {
     link.href = href;
   }, [settings.favicon_url]);
 
+  useEffect(() => {
+    const theme = settings.theme || 'dark';
+    if (theme === 'dark') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+  }, [settings.theme]);
+
   async function handleLogin(username: string, password: string) {
     const { user } = await api.login(username, password);
     const me = await api.me();
