@@ -742,8 +742,17 @@ _install_show_password() {
   # npm-run-build the frontend inside the container before the app logs the
   # first-run marker — that routinely takes a couple of minutes on a cold
   # cache, well past a short window. Poll for up to 5 minutes.
+  #
+  # bootstrap_admin() (opensmart/backend/app/database.py) only ever prints
+  # FIRST_RUN_MARKER when no admin user exists yet — install/--recreate
+  # against a host with a persisted DB (an admin already exists) never logs
+  # it at all. Without a second success path this loop used to burn the
+  # full 5 minutes and report a false "timed out" even though the container
+  # had come up fine seconds in — so on every attempt this also polls
+  # /api/health directly (same check as _wait_healthy) and treats a healthy
+  # response with no marker as "already provisioned," not a failure.
   _step "Waiting for OpenSMART to become ready (first run can take a few minutes)"
-  local attempt logs pw
+  local attempt logs pw port
   for attempt in $(seq 1 150); do
     logs="$(docker logs "$CONTAINER_NAME" 2>&1 || true)"
     if grep -q "$FIRST_RUN_MARKER" <<<"$logs"; then
@@ -762,13 +771,23 @@ _install_show_password() {
       printf '************************************************************\n\n'
       return 0
     fi
+    port="$(_container_host_port)"
+    if [[ -n "$port" ]] && curl -sf --max-time 3 "http://localhost:${port}/api/health" 2>/dev/null | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+      printf 'ready (existing install)\n'
+      {
+        printf '[%s] app healthy without a first-run marker — an admin account already exists.\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+      } >> "$INSTALL_LOG"
+      printf '\nOpenSMART is up. An admin account already exists on this install, so no new\n'
+      printf 'password was generated. Log in with your existing credentials.\n\n'
+      return 0
+    fi
     sleep 2
   done
   printf 'timed out\n'
   {
     printf '[%s] container log at timeout:\n%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$logs"
   } >> "$INSTALL_LOG"
-  printf '\nCould not find the initial admin password in container logs within 5 minutes.\n' >&2
+  printf '\nOpenSMART did not become ready (no first-run marker and /api/health never responded) within 5 minutes.\n' >&2
   printf 'See %s (or: docker logs %s) for details.\n' "$INSTALL_LOG" "$CONTAINER_NAME" >&2
   return 1
 }
