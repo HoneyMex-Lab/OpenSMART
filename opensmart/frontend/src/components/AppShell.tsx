@@ -58,10 +58,12 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
     const url = settings[toolUrlKeys[tool.name] || ''] || '';
     if (!url) return <StatusMessage title={title} status="Warning" detail="This tool is enabled but no internal URL is configured. Add the URL in Configuration > Tools Config." />;
     const openLink = <a className="tool-open-btn" href={url} target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>;
-    // Tools that block iframe embedding (see ToolDefinition.embeddable) only
-    // ever render a blank/error area inside the frame, so show a launch card
-    // instead of a broken iframe.
-    if (definition?.embeddable === false) {
+    // A relative URL ("/arkime/") is served by OpenSMART's own front-door
+    // proxy, i.e. same origin as this page — so it always embeds (the proxy
+    // strips the tool's framing headers). Only absolute cross-origin URLs
+    // for tools flagged embeddable:false fall back to the launch card.
+    const isAlias = url.startsWith('/');
+    if (!isAlias && definition?.embeddable === false) {
       return (
         <section className="tool-view">
           <div className="section-actions"><h2>{title}</h2><p className="muted">{url}</p></div>

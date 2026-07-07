@@ -1000,6 +1000,11 @@ button:disabled { opacity: .65; cursor: wait; }
 .tool-launch-card { display: grid; justify-items: center; text-align: center; gap: 14px; max-width: 560px; margin: 0 auto; padding: 40px 32px; }
 .tool-launch-card .muted { max-width: 440px; }
 .tool-launch-logo { width: 72px; height: 72px; object-fit: contain; border-radius: 18px; }
+.tool-access-mode { display: grid; gap: 8px; margin: 4px 0 2px; }
+.access-mode-choices { display: inline-flex; gap: 8px; }
+.access-mode-choices button { border-radius: 12px; padding: 8px 14px; font-weight: 700; background: var(--c-rgba-255-255-255-07); color: var(--c-b9c7d8); border: 1px solid var(--c-rgba-255-255-255-14); }
+.access-mode-choices button.active { background: linear-gradient(135deg, var(--c-58d7ff), var(--c-6878ff)); color: var(--c-061018); border-color: transparent; }
+.access-mode-hint { margin: 0; font-size: .82rem; max-width: 560px; }
 .empty-state { min-height: 420px; display: grid; place-items: center; border: 1px dashed var(--c-rgba-255-255-255-2); border-radius: 22px; color: var(--c-9aaabc); background: var(--c-rgba-0-0-0-18); }
 .detail-heading { display: flex; gap: 18px; align-items: center; margin-top: 20px; }
 .two-column, .admin-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 18px; }

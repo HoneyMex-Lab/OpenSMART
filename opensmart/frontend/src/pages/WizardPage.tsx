@@ -35,9 +35,13 @@ const MODULE_CONFIG_DEFAULTS: Record<string, Record<string, string>> = {
 
 // Locally-provisioned tools get a working iframe URL prefilled (only when
 // the URL setting is still empty).
+// Locally-provisioned tools default to their front-door proxy alias
+// (same-origin path) so they embed in the Tools iframe out of the box when
+// OpenSMART is reached via the proxy. Switch a tool to a direct url:port in
+// Configuration > Tools if you don't run behind the proxy.
 const DEFAULT_TOOL_URLS: Record<string, (host: string) => string> = {
-  Wazuh: (host) => `https://${host}/`,
-  Arkime: (host) => `http://${host}:8005/`,
+  Wazuh: () => '/wazuh/',
+  Arkime: () => '/arkime/',
 };
 
 type RunState = 'pending' | 'running' | 'ok' | 'warning' | 'error' | 'info';
