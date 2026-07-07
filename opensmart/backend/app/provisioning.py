@@ -84,10 +84,41 @@ _COMPOSE_TIMEOUT_SECONDS = 300
 _WAZUH_CERTS_MARKER = CONTAINERS_ROOT / "wazuh" / "volumes" / "data" / "wazuh_indexer_ssl_certs" / "admin.pem"
 
 
+def _fix_wazuh_certs_permissions() -> None:
+    """The certs-generator one-off container's root maps to a different
+    host UID than the backend (same unprivileged-nesting issue as arkime's
+    init-data-dir and vpn.py's OpenVPN/WireGuard chmod fixes), so its
+    output is created unreadable here (observed: dir mode 700, file mode
+    400/440, various owning UIDs) without this."""
+    try:
+        subprocess.run(
+            ["docker", "run", "--rm", "-v", f"{_WAZUH_CERTS_MARKER.parent}:/certs", "busybox", "chmod", "-R", "a+rX", "/certs"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        logger.warning("wazuh certs permission fix failed: %s", error)
+
+
 def _ensure_wazuh_certs() -> tuple[bool, str]:
-    if _WAZUH_CERTS_MARKER.is_file():
+    try:
+        ready = _WAZUH_CERTS_MARKER.is_file()
+    except PermissionError:
+        # Certs from a prior run, unreadable due to the UID mapping above —
+        # fix permissions in place rather than regenerating.
+        _fix_wazuh_certs_permissions()
+        try:
+            ready = _WAZUH_CERTS_MARKER.is_file()
+        except PermissionError:
+            ready = False
+    if ready:
         return True, ""
-    return _run_compose("wazuh", "--profile", "certs", "run", "--rm", "wazuh-certs-generator")
+    ok, detail = _run_compose("wazuh", "--profile", "certs", "run", "--rm", "wazuh-certs-generator")
+    if ok:
+        _fix_wazuh_certs_permissions()
+    return ok, detail
 
 
 def _compose_path(container: str) -> Path:

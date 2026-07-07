@@ -49,8 +49,15 @@ services:
     restart: unless-stopped
     ulimits:
       memlock:
-        soft: -1
-        hard: -1
+        # Overridable per host (env or a .env file next to this compose
+        # file): unprivileged LXC/nested-Docker hosts cap the container's
+        # own memlock ceiling (see `ulimit -l` on the host), so requesting
+        # unlimited (-1) fails with "operation not permitted" (OCI rlimit
+        # type 8) instead of just clamping. bootstrap.memory_lock is not
+        # enabled in this project's indexer config, so a finite value is
+        # safe either way.
+        soft: ${WAZUH_MEMLOCK_LIMIT:--1}
+        hard: ${WAZUH_MEMLOCK_LIMIT:--1}
       nofile:
         soft: 655360
         hard: 655360
@@ -103,8 +110,10 @@ services:
       - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
     ulimits:
       memlock:
-        soft: -1
-        hard: -1
+        # See wazuh.manager's memlock comment above for why this is
+        # overridable rather than hardcoded to unlimited.
+        soft: ${WAZUH_MEMLOCK_LIMIT:--1}
+        hard: ${WAZUH_MEMLOCK_LIMIT:--1}
       nofile:
         soft: 65536
         hard: 65536
