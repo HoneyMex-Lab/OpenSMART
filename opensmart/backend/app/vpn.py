@@ -171,10 +171,20 @@ def _write_compose(name: str, vpn_type: str, port: int) -> None:
     path.write_text(compose)
 
 
+# The one-off containers' root maps to a different host UID than the backend
+# (unprivileged nesting, same story as arkime's init-data-dir service), so
+# after every PKI mutation the run re-opens /data so BOTH sides keep working:
+# the backend edits server.conf/templates and reads index.txt/client configs,
+# the server container reads the key material. The host-side path above the
+# bind mount stays root-only.
+_OPENVPN_CHMOD = "chmod -R a+rwX /data"
+
+
 def _init_openvpn(name: str, subnet: str, port: int, auth_mode: str, ldap_config: dict) -> None:
     data = _data_dir(name)
     data.mkdir(parents=True, exist_ok=True)
-    ok, detail = _docker_run("opensmart/openvpn", "/opt/opensmart/gen-pki.sh", data)
+    data.chmod(0o777)
+    ok, detail = _docker_run("opensmart/openvpn", f"/opt/opensmart/gen-pki.sh && {_OPENVPN_CHMOD}", data)
     if not ok:
         raise VpnError(f"PKI generation failed: {detail}")
     server_conf = data / "server.conf"
@@ -224,19 +234,36 @@ def _write_ldap_conf(path: Path, ldap_config: dict) -> None:
     path.chmod(0o600)
 
 
-def _init_wireguard(name: str, subnet: str) -> None:
-    data = _data_dir(name)
-    data.mkdir(parents=True, exist_ok=True)
-    ok, detail = _docker_run(
+def _wg_keypair(data: Path) -> tuple[str, str]:
+    """Generate a WireGuard keypair via a one-off container, returned on
+    stdout rather than written to files: the one-off container's root maps
+    to a different host UID than the backend (unprivileged nesting), so
+    files it creates with restrictive modes are unreadable here."""
+    ok, output = _docker_run(
         "opensmart/wireguard",
-        "umask 077; wg genkey | tee /data/server_private.key | wg pubkey > /data/server_public.key",
+        "priv=$(wg genkey); printf '%s\\n' \"$priv\"; printf '%s' \"$priv\" | wg pubkey",
         data,
     )
     if not ok:
-        raise VpnError(f"WireGuard key generation failed: {detail}")
-    private_key = (data / "server_private.key").read_text().strip()
+        raise VpnError(f"WireGuard key generation failed: {output}")
+    lines = output.splitlines()
+    if len(lines) < 2:
+        raise VpnError("Unexpected key generation output.")
+    return lines[0].strip(), lines[1].strip()
+
+
+def _init_wireguard(name: str, subnet: str) -> None:
+    data = _data_dir(name)
+    data.mkdir(parents=True, exist_ok=True)
+    data.chmod(0o777)  # the wireguard container's root is a different host UID
+    private_key, public_key = _wg_keypair(data)
+    for filename, key in (("server_private.key", private_key), ("server_public.key", public_key)):
+        path = data / filename
+        path.write_text(key + "\n")
+        path.chmod(0o600)
     base = _subnet_base(subnet)
-    (data / "wg0.conf").write_text(
+    conf = data / "wg0.conf"
+    conf.write_text(
         "[Interface]\n"
         f"Address = {base}.1/24\n"
         f"ListenPort = {_WIREGUARD_SERVICE_PORT}\n"
@@ -244,7 +271,9 @@ def _init_wireguard(name: str, subnet: str) -> None:
         "PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE\n"
         "PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE\n"
     )
-    (data / "wg0.conf").chmod(0o600)
+    # Must stay readable by the wireguard container's (differently-mapped)
+    # root. The host-side directory tree above it is root-only.
+    conf.chmod(0o644)
 
 
 def list_instances() -> list[dict]:
@@ -401,7 +430,7 @@ def create_user(name: str, username: str, server_host: str) -> dict:
     if instance["vpn_type"] == "openvpn":
         ok, detail = _docker_run(
             "opensmart/openvpn",
-            f"/opt/opensmart/make-client.sh {username} {server_host}",
+            f"/opt/opensmart/make-client.sh {username} {server_host} && {_OPENVPN_CHMOD}",
             _data_dir(name),
         )
         if not ok:
@@ -423,17 +452,7 @@ def _create_wireguard_peer(instance: dict, username: str, server_host: str) -> N
     host_id = next((n for n in range(2, 255) if n not in used), None)
     if host_id is None:
         raise VpnError("No free peer addresses left in this instance's subnet.")
-    ok, output = _docker_run(
-        "opensmart/wireguard",
-        "priv=$(wg genkey); printf '%s\\n' \"$priv\"; printf '%s' \"$priv\" | wg pubkey",
-        data,
-    )
-    if not ok:
-        raise VpnError(f"Peer key generation failed: {output}")
-    lines = output.splitlines()
-    if len(lines) < 2:
-        raise VpnError("Unexpected key generation output.")
-    client_private, client_public = lines[0].strip(), lines[1].strip()
+    client_private, client_public = _wg_keypair(data)
     server_public = (data / "server_public.key").read_text().strip()
     conf += (
         f"\n{_PEER_BEGIN}{username}\n"
@@ -469,7 +488,7 @@ def revoke_user(name: str, username: str) -> None:
         ok, detail = _docker_run(
             "opensmart/openvpn",
             "export EASYRSA_PKI=/data/pki EASYRSA_BATCH=1; EASY=/usr/share/easy-rsa/easyrsa; "
-            f'"$EASY" revoke {username} && "$EASY" gen-crl',
+            f'"$EASY" revoke {username} && "$EASY" gen-crl && {_OPENVPN_CHMOD}',
             _data_dir(name),
         )
         if not ok:
