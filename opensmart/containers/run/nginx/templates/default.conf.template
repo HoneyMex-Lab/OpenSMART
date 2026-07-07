@@ -1,0 +1,136 @@
+# OpenSMART front-door reverse proxy.
+#
+# nginx serves BOTH the OpenSMART app (at /) and the external tools under
+# path aliases (/arkime/, /wazuh/, /proxmox/, /opnsense/) from a SINGLE
+# origin. Same-origin is what makes tool iframes work: OpenSMART's Tools
+# page embeds e.g. /arkime/ which is this same host:port, so the browser's
+# same-origin policy is satisfied and (with the framing headers stripped
+# below) the tool renders inside OpenSMART instead of being blocked.
+#
+# Processed by the official nginx image's envsubst step at container start
+# (see 20-envsubst-on-templates.sh). Only variables that are defined in the
+# environment are substituted, so nginx runtime variables ($host, $uri,
+# $http_upgrade, ...) are preserved untouched — only ${PROXMOX_UPSTREAM}
+# and ${OPNSENSE_UPSTREAM} (set in this compose file / its .env) get
+# replaced.
+#
+# All upstreams are referenced through variables + a resolver so nginx
+# resolves them at request time via Docker's embedded DNS. That means nginx
+# starts (and keeps serving the app + whatever tools ARE up) even when a
+# given tool container is stopped or an external tool address is wrong — an
+# unavailable upstream yields a 502 for that one alias instead of taking the
+# whole proxy down at startup.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    # Docker's embedded DNS. valid= keeps resolution fresh as containers
+    # come and go; ipv6=off avoids AAAA lookups for names that only have A.
+    resolver 127.0.0.11 valid=30s ipv6=off;
+
+    # Large uploads (PCAP, evidence) and slow tool pages.
+    client_max_body_size 0;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+
+    # ---- OpenSMART application ------------------------------------------
+    location / {
+        set $upstream_app "http://opensmart:8000";
+        proxy_pass $upstream_app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+
+    # ---- Arkime (webBasePath=/arkime/) ----------------------------------
+    # Arkime is configured to know it lives under /arkime/ (see
+    # containers/run/arkime/etc/config.ini), so it emits correct absolute
+    # links and we simply forward the prefix through as-is.
+    location /arkime/ {
+        set $upstream_arkime "http://arkime-viewer:8005";
+        proxy_pass $upstream_arkime$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        # Let it embed in the OpenSMART iframe (same origin now).
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Content-Security-Policy;
+    }
+
+    # ---- Wazuh dashboard (server.basePath=/wazuh) -----------------------
+    # The dashboard serves HTTPS on 5601 with a self-signed cert; we talk to
+    # it over TLS without verifying (internal network) and it is configured
+    # with server.basePath=/wazuh + rewriteBasePath (see
+    # containers/run/wazuh/config/wazuh_dashboard/opensearch_dashboards.yml).
+    location /wazuh/ {
+        set $upstream_wazuh "https://wazuh.dashboard:5601";
+        proxy_pass $upstream_wazuh$request_uri;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Content-Security-Policy;
+    }
+
+    # ---- Proxmox VE (external, best-effort) -----------------------------
+    # Proxmox has NO native base-path support — it hardcodes /. We strip the
+    # /proxmox/ prefix and forward to the external host from PROXMOX_UPSTREAM
+    # (set in this compose file / .env, e.g. https://10.0.0.10:8006). Root
+    # UI, login and most API calls work; the noVNC/xterm.js consoles and
+    # some absolute-path assets may not, because the app assumes it owns /.
+    # For full fidelity use direct url:port mode for Proxmox instead.
+    location /proxmox/ {
+        rewrite ^/proxmox/(.*)$ /$1 break;
+        set $upstream_proxmox "${PROXMOX_UPSTREAM}";
+        proxy_pass $upstream_proxmox;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Content-Security-Policy;
+    }
+
+    # ---- OPNsense (external, best-effort) -------------------------------
+    # Same caveat as Proxmox: OPNsense's UI assumes it is served from /.
+    # Prefix-stripped pass-through from OPNSENSE_UPSTREAM; direct url:port
+    # mode is the reliable option for full functionality.
+    location /opnsense/ {
+        rewrite ^/opnsense/(.*)$ /$1 break;
+        set $upstream_opnsense "${OPNSENSE_UPSTREAM}";
+        proxy_pass $upstream_opnsense;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Content-Security-Policy;
+    }
+}

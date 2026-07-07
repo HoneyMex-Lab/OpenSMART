@@ -274,6 +274,23 @@ _wait_healthy() {
   return 1
 }
 
+_start_front_proxy() {
+  # Bring up (or reconcile) the nginx front-door that serves the app and the
+  # tool path aliases (/arkime, /wazuh, ...) from one origin. Best-effort:
+  # the tool aliases are optional, so a proxy that fails to start must never
+  # fail install/start of the core app — it just logs and moves on. Any
+  # PROXMOX_UPSTREAM/OPNSENSE_UPSTREAM set in the environment (or a .env next
+  # to the proxy's compose file) is inherited automatically.
+  local dir="$ROOT_DIR/opensmart/containers/run/nginx"
+  [[ -f "$dir/docker-compose.yml" ]] || return 0
+  printf 'Starting the tools front-door proxy (nginx)... '
+  if (cd "$dir" && docker compose up -d) >/dev/null 2>&1; then
+    printf 'done\n'
+  else
+    printf 'skipped (proxy unavailable; tool aliases will be off, app unaffected)\n'
+  fi
+}
+
 _check_integrity() {
   printf 'Checking container stability... '
   if _wait_stable; then
@@ -308,6 +325,7 @@ _start_existing_container() {
     fi
   fi
   _check_integrity || exit 1
+  _start_front_proxy
   printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
 }
 
@@ -458,6 +476,7 @@ cmd_recreate() {
     exit 1
   fi
   _check_integrity || exit 1
+  _start_front_proxy
   printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
 }
 
@@ -890,7 +909,9 @@ cmd_install() {
   # first-run-password wait actually confirmed the app came up; otherwise
   # say so plainly instead of claiming success right after a timeout warning.
   if _install_show_password; then
+    _start_front_proxy
     printf '✔ OpenSMART is running at http://0.0.0.0:8000\n'
+    printf '  Tool aliases (Arkime/Wazuh/...) are served via the front-door proxy at http://0.0.0.0:8080\n'
   else
     printf '⚠ Install finished, but readiness could not be confirmed within 5 minutes.\n' >&2
     printf 'The container may still be starting (e.g. a slow network stalling the\n' >&2

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 CONTAINERS_ROOT = PROJECT_ROOT / "containers" / "run"
 
 # Compose projects that actually exist under containers/run/ today.
-KNOWN_CONTAINERS = frozenset({"suricata", "zeek", "arkime", "opensearch", "wireguard", "openvpn", "wazuh"})
+KNOWN_CONTAINERS = frozenset({"suricata", "zeek", "arkime", "opensearch", "wireguard", "openvpn", "wazuh", "nginx"})
 
 # Provisioning X should provision these first (shared infrastructure).
 CONTAINER_DEPENDENCIES: dict[str, list[str]] = {
@@ -49,6 +49,7 @@ CONTAINER_SERVICES: dict[str, list[str]] = {
     "wireguard": ["opensmart-wireguard"],
     "openvpn": ["opensmart-openvpn"],
     "wazuh": ["opensmart-wazuh-manager", "opensmart-wazuh-indexer", "opensmart-wazuh-dashboard"],
+    "nginx": ["opensmart-nginx"],
 }
 
 # OpenSMART module name -> required container(s), or None if no container

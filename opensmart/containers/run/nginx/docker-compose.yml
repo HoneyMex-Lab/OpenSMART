@@ -1,12 +1,31 @@
+# OpenSMART front-door reverse proxy — serves the app and the external-tool
+# path aliases (/arkime, /wazuh, /proxmox, /opnsense) from one origin so the
+# Tools page can embed them in iframes. See templates/default.conf.template
+# for the routing and the same-origin/iframe rationale.
+#
+# Access OpenSMART through this port (default 8080) to use the tool aliases;
+# the app's own :8000 remains available for direct url:port tool access.
 services:
   nginx:
     image: nginx:1.27
     container_name: opensmart-nginx
     hostname: nginx
+    environment:
+      # External tool upstreams (Proxmox/OPNsense have no native base-path
+      # support — best-effort, see the template). Point these at the real
+      # hosts via a .env file next to this compose, e.g.:
+      #   PROXMOX_UPSTREAM=https://10.0.0.10:8006
+      #   OPNSENSE_UPSTREAM=https://10.0.0.1
+      # Left unresolvable by default, so those two aliases return 502 until
+      # configured while the rest of the proxy works normally.
+      - PROXMOX_UPSTREAM=${PROXMOX_UPSTREAM:-https://proxmox.invalid}
+      - OPNSENSE_UPSTREAM=${OPNSENSE_UPSTREAM:-https://opnsense.invalid}
     volumes:
-      - ./volumes/data:/data
+      # The official image runs envsubst over /etc/nginx/templates/*.template
+      # into /etc/nginx/conf.d/ at startup.
+      - ./templates:/etc/nginx/templates:ro
     ports:
-      - "8080:80"
+      - "${OPENSMART_PROXY_BIND:-0.0.0.0}:8080:80"
     networks:
       - opensmart
     restart: unless-stopped
