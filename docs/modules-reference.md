@@ -11,8 +11,8 @@ Two separate catalogs exist in the app and the database: **OpenSMART Modules** (
 ### Threat Detection Alerts
 
 - **Purpose:** Summary/triage view of threat detection alerts.
-- **Status:** Placeholder content — not yet wired to a real data source.
-- **Container backing:** None yet. Intended to be backed by Wazuh, which has no container template in this repo yet (`containers/build/` has no Wazuh Dockerfile). Enabling this module and attempting to provision it reports "no container template available yet" rather than silently doing nothing.
+- **Status:** Page content is still placeholder, but the module is now backed by real containers: provisioning it starts the Wazuh stack, and the Status page reports its real container state.
+- **Container backing:** Wazuh (`opensmart/containers/run/wazuh/` — official wazuh-docker v4.14.6 images: manager, indexer on host port 9201, dashboard on 443, plus a one-shot cert generator). Data from Wazuh is not yet ingested into this page.
 - **Config keys:** None specific yet.
 
 ### Network Traffic Monitoring
@@ -48,15 +48,15 @@ Two separate catalogs exist in the app and the database: **OpenSMART Modules** (
 ### Endpoint
 
 - **Purpose:** Endpoint monitoring.
-- **Status:** Placeholder content.
-- **Container backing:** None yet — intended for Wazuh, same "no template available" situation as Threat Detection Alerts.
+- **Status:** Page content is still placeholder; backed by the Wazuh containers (same as Threat Detection Alerts).
+- **Container backing:** Wazuh (`opensmart/containers/run/wazuh/`).
 - **Config keys:** None specific yet.
 
 ### Vulnerability Management
 
 - **Purpose:** Vulnerability tracking.
-- **Status:** Placeholder content.
-- **Container backing:** None yet — intended for Wazuh, same "no template available" situation.
+- **Status:** Page content is still placeholder; backed by the Wazuh containers (same as Threat Detection Alerts).
+- **Container backing:** Wazuh (`opensmart/containers/run/wazuh/`).
 - **Config keys:** None specific yet.
 
 ### Honeypot
@@ -68,10 +68,10 @@ Two separate catalogs exist in the app and the database: **OpenSMART Modules** (
 
 ### Access VPN
 
-- **Purpose:** Remote access via VPN.
-- **Status:** Placeholder UI; the underlying containers exist and are independently functional but aren't wired into a management UI yet.
-- **Container backing:** WireGuard (`opensmart/containers/run/wireguard/`) and OpenVPN (`opensmart/containers/run/openvpn/`). Provisioning this module starts both. Note: OpenVPN's compose service is behind a `manual` profile and needs `/dev/net/tun` on the host to actually run — see the comments in `opensmart/containers/run/openvpn/docker-compose.yml`.
-- **Config keys:** None specific yet.
+- **Purpose:** Remote access via VPN — a full management UI for OpenVPN/WireGuard server instances.
+- **Status:** Live — `VpnPage.tsx` backed by `backend/app/vpn.py` and `/api/vpn/*`. Create instances (type, UDP port, auth mode), start/stop/restart/delete them, and manage users per instance: create (downloadable client config), see certificate expiry, revoke (OpenVPN CRL / WireGuard peer removal).
+- **Container backing:** Generated per-instance compose projects under `opensmart/containers/run/vpn/<name>/` using the `opensmart/openvpn` and `opensmart/wireguard` images. Each instance gets its own UDP host port and a unique `10.<n>.0.0/24` subnet. OpenVPN instances need `/dev/net/tun` on the Docker host (LXC hosts must pass it through); starting one without it fails with the daemon error shown in the UI. The legacy single `openvpn`/`wireguard` compose projects remain for manual use.
+- **Config keys** (module row): `vpn_type` — default VPN type chosen in the Wizard (`openvpn` default, `wireguard`). Per-instance settings (port, subnet, `auth_mode` `certs`/`ldap`, LDAP details) live in the `vpn_instances` table, not the module config. LDAP auth (OpenVPN only) uses the openvpn-auth-ldap plugin — added to the image, so run `./opensmart.sh install` (or rebuild) to pick it up.
 
 ### LXC Manager
 

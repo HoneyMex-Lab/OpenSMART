@@ -15,11 +15,10 @@ When OpenSMART is first installed, it creates one administrator account and prin
 1. **You must choose your own password.** The one you were given was generated for you, not chosen by you, so OpenSMART requires you to replace it before doing anything else. You'll see a dedicated "Change your password" screen — there's no way to skip it or use the app in the background with the old password.
 
 2. **A short setup wizard runs.** Once your new password is set, OpenSMART walks you through initial setup:
-   - Confirm you're running the latest version (or update first).
-   - Optionally upload your organization's logo.
-   - Choose which security modules you want to use.
-   - Choose which external tools you want linked.
-   - Finish — OpenSMART attempts to start whatever you enabled.
+   - Name the app and optionally upload your organization's logo.
+   - Pick which of the machine's network connections OpenSMART should watch (it detects them for you).
+   - Review which security modules and external tools to use — a sensible working set is pre-selected, and if something you enable needs something else, OpenSMART turns that on too and tells you.
+   - Provision — OpenSMART starts everything you enabled, showing live progress and finishing with a clear summary of anything that needs attention.
 
    This wizard only appears once, on a brand-new install. If you're joining a system someone else already set up, you won't see it — you'll go straight to your normal login.
 
@@ -45,8 +44,11 @@ Whenever an administrator resets someone's password (including their own, via th
 **Modules** are capabilities built into OpenSMART itself. Today:
 
 - **Network IDS** and **Network Traffic Monitoring** are fully working — they show real alerts and traffic data once configured.
-- **Threat Detection Alerts**, **Endpoint**, **Vulnerability Management**, and **Access VPN** currently show placeholder screens; the underlying pieces are still being built out.
+- **Access VPN** is fully working too — create VPN servers (OpenVPN or WireGuard), add people, hand them a config file to connect with, and revoke access when needed.
+- **Threat Detection Alerts**, **Endpoint**, and **Vulnerability Management** start and monitor their underlying system (Wazuh) but their own screens are still being built out.
 - **Honeypot** and **LXC Manager** aren't available yet.
+
+You can also pick the look of the interface under **Settings → Web Interface**: a dark theme (default), a light "Classic" theme, or a green-on-black "Matrix" theme. The **Status** page shows the real, live state of everything OpenSMART runs — what's up, for how long, and any warnings — with a Restart button per component.
 
 **Tools** are links to separate products, shown as an embedded window inside OpenSMART once your administrator points them at the right address: **Arkime**, **OPNsense**, **Proxmox**, **Wazuh**, **Graylog**. Some of these (like Arkime) can also be started directly by OpenSMART, described next; others (like OPNsense, a firewall) are always something you run and manage yourself — OpenSMART only links to it.
 

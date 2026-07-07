@@ -20,14 +20,14 @@ This is the sequence a brand-new install actually goes through, and it's worth s
 
 1. **Login** with the password printed at first boot.
 2. **Forced password change.** That password was *set for* the admin, not chosen by them, so `mustChangePassword` is true. The server blocks every mutating endpoint except "change my password" and "log out" (`423 Locked`) until they pick a new one that satisfies the active complexity policy (`strict` by default). This isn't just a UI gate — hitting the API directly hits the same block.
-3. **First-Run Wizard.** Once the password is changed, if this is a genuinely fresh install (no prior admin existed), the frontend redirects into a 5-step wizard: acknowledge the running version, optionally upload a logo, enable OpenSMART modules, enable Tools, then Finish — which attempts to provision containers for whatever got enabled and reports what happened per item. Existing/upgraded installs never see this (the flag defaults to already-done).
+3. **First-Run Wizard.** Once the password is changed, if this is a genuinely fresh install (no prior admin existed), the frontend redirects into a 4-step wizard: name the app and optionally upload a logo; pick which host network interfaces to monitor (detected live from the Docker host); review Modules & Tools with recommended defaults pre-selected (dependencies auto-enable with visible notices); then Provision — a sequential runner with phases and a progress bar that starts the services behind the selection and ends with an info/warning/error summary. Existing/upgraded installs never see this (the flag defaults to already-done).
 4. **Normal use.** Same login flow applies to every subsequent user, but steps 2–3 only fire when their specific conditions are true (a fresh password, or an incomplete install) — most logins skip straight to the app.
 
 See `docs/security.md` for the exact enforcement mechanism and `docs/modules-reference.md`/`docs/configuration.md` for what each Wizard step configures.
 
 ## Container Provisioning
 
-Some OpenSMART modules and tools are backed by real infrastructure — Suricata for the Network IDS module, Zeek for Network Traffic Monitoring, Arkime (plus its OpenSearch dependency) as a tool, WireGuard/OpenVPN for Access VPN. Enabling one of these in the UI (via the Wizard or a module's own config page) needs *something* to actually start that infrastructure. That "something" is the backend itself — but the backend runs inside its own container, and giving a container unrestricted control over the host's Docker daemon is close to giving it root on the host. The rest of this section is how that risk is bounded.
+Some OpenSMART modules and tools are backed by real infrastructure — Suricata for the Network IDS module, Zeek for Network Traffic Monitoring, Arkime (plus its OpenSearch dependency) and Wazuh as tools, WireGuard/OpenVPN instances for Access VPN. Enabling one of these in the UI (via the Wizard or a module's own config page) needs *something* to actually start that infrastructure. That "something" is the backend itself — but the backend runs inside its own container, and giving a container unrestricted control over the host's Docker daemon is close to giving it root on the host. The rest of this section is how that risk is bounded.
 
 ### The flow
 
@@ -81,4 +81,4 @@ The core idea: **the app container never touches `docker.sock` directly.** Inste
 
 ## Modules, Tools, and What's Actually Live
 
-Not everything in the UI is fully wired up yet — see `docs/modules-reference.md` for the honest per-item status. Network IDS and Network Traffic Monitoring have real ingestion/analysis behind them; several other modules are placeholder pages; Wazuh and Graylog have no container template yet at all, so enabling them reports "no template available" rather than pretending to work.
+Not everything in the UI is fully wired up yet — see `docs/modules-reference.md` for the honest per-item status. Network IDS, Network Traffic Monitoring and Access VPN have real functionality behind them; the Status page shows real container-derived state for everything provisioned; placeholder pages remain only for Honeypot, LXC Manager, Graylog and NTOP (Graylog also has no container template, so enabling it reports "no template available" rather than pretending to work). The Wazuh-backed module pages (Threat Detection Alerts, Endpoint, Vulnerability Management) provision and monitor real Wazuh containers but don't ingest Wazuh data yet.

@@ -352,7 +352,7 @@ Requires admin and CSRF. Updates OpenSMART module enablement and JSON config.
 
 ## Provisioning Endpoints
 
-Start/stop the sibling tool containers (Suricata, Zeek, Arkime, OpenSearch, WireGuard, OpenVPN) backing enabled modules/tools, via a restricted Docker socket proxy — see `docs/technical-overview.md` for the full flow and security model.
+Start/stop/restart the sibling tool containers (Suricata, Zeek, Arkime, OpenSearch, WireGuard, OpenVPN, Wazuh) backing enabled modules/tools, via a restricted Docker socket proxy — see `docs/technical-overview.md` for the full flow and security model.
 
 ### `POST /api/provisioning/start`
 
@@ -377,7 +377,7 @@ Response:
 }
 ```
 
-If the module/tool has no container template yet (Wazuh-backed modules, Graylog), `ok` is `false` and `detail` says so explicitly rather than the call silently doing nothing.
+If the module/tool has no container template yet (Graylog), `ok` is `false` and `detail` says so explicitly rather than the call silently doing nothing.
 
 ### `POST /api/provisioning/stop`
 
@@ -389,6 +389,10 @@ Request:
 {"name": "suricata", "kind": "container"}
 ```
 
+### `POST /api/provisioning/restart`
+
+Requires admin and CSRF. Only accepts `kind: "container"`. Runs `docker compose restart` on the project; audited as `provisioning_restart`.
+
 ### `GET /api/provisioning/status/{container}`
 
 Requires admin (read).
@@ -399,7 +403,97 @@ Response:
 {"container": "suricata", "running": true, "detail": ""}
 ```
 
-All three endpoints validate `container`/`name` against a fixed allowlist of container directories that actually exist under `opensmart/containers/run/` — never an arbitrary path — and are audit-logged (`provisioning_start`/`provisioning_stop`).
+### `GET /api/provisioning/overview`
+
+Requires admin (read). Drives the Status page: per-project container details derived from `docker inspect` plus a VPN summary.
+
+Response shape:
+
+```json
+{
+  "projects": [
+    {
+      "project": "suricata",
+      "containers": [
+        {"name": "opensmart-suricata", "exists": true, "status": "running", "image": "opensmart/suricata", "uptime_seconds": 5432, "restart_count": 0, "health": null, "warnings": []}
+      ],
+      "running": 1,
+      "total": 1,
+      "profile": null
+    }
+  ],
+  "vpn": {
+    "wireguard": {"configured": true, "peers": 2},
+    "openvpn": {"configured": true, "valid_certs": 3, "revoked_certs": 1}
+  }
+}
+```
+
+### `GET /api/provisioning/host-interfaces`
+
+Requires admin (read). Enumerates the Docker host's network interfaces via a one-off busybox container on the host network (result cached 60 s). Used by the Wizard's Network step.
+
+Response:
+
+```json
+{"interfaces": [{"name": "eth0", "up": true, "mtu": 1500, "virtual": false}]}
+```
+
+The mutating endpoints validate `container`/`name` against a fixed allowlist of container directories that actually exist under `opensmart/containers/run/` — never an arbitrary path — and are audit-logged (`provisioning_start`/`provisioning_stop`).
+
+## VPN Endpoints
+
+Manage OpenVPN/WireGuard server instances (the Access VPN module). All endpoints require admin; mutations require CSRF and are audit-logged (`vpn_instance_*`, `vpn_user_*`). Instance names match `^[a-z0-9][a-z0-9-]{0,29}$`, user names `^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$`.
+
+### `GET /api/vpn/instances`
+
+Response:
+
+```json
+{"instances": [{"id": 1, "name": "office", "vpn_type": "openvpn", "port": 1194, "subnet": "10.60.0.0/24", "auth_mode": "certs", "created_at": "...", "running": true, "status": "running", "uptime_seconds": 120, "users": 3}]}
+```
+
+### `POST /api/vpn/instances`
+
+Creates the instance: registers it, generates its compose project under `opensmart/containers/run/vpn/<name>/`, and produces its key material (easy-rsa PKI for OpenVPN, wg keypair for WireGuard). Does not start it.
+
+```json
+{"name": "office", "vpn_type": "openvpn", "port": 1194, "auth_mode": "certs", "ldap_config": {}}
+```
+
+`auth_mode: "ldap"` (OpenVPN only) additionally validates credentials against LDAP/Samba AD; `ldap_config` then needs at least `url` and `base_dn` (optional: `bind_dn`, `bind_password`, `search_filter`).
+
+### `DELETE /api/vpn/instances/{name}`
+
+Stops the instance and destroys its directory (certificates, keys, client configs) and registration.
+
+### `POST /api/vpn/instances/{name}/start|stop|restart`
+
+Compose lifecycle for the instance. OpenVPN instances need `/dev/net/tun` on the Docker host; without it `ok` is `false` with the daemon error in `detail`.
+
+### `GET /api/vpn/instances/{name}/users`
+
+```json
+{"users": [{"name": "alice", "status": "valid", "expires_at": "2028-10-09T09:44:32+00:00", "has_config": true}]}
+```
+
+`status` is `valid`/`revoked`/`expired` from easy-rsa's `index.txt` for OpenVPN; WireGuard peers are always `valid` while present.
+
+### `POST /api/vpn/instances/{name}/users`
+
+```json
+{"username": "alice", "server_host": "vpn.example.com"}
+```
+
+Issues a client cert (OpenVPN) or peer (WireGuard, next free address in the instance subnet; the instance restarts if running) and writes a downloadable client config pointing at `server_host:<instance port>`.
+
+### `POST /api/vpn/instances/{name}/users/{username}/revoke`
+
+OpenVPN: `easyrsa revoke` + CRL regeneration (the running server re-reads the CRL per handshake — no restart). WireGuard: removes the peer block and restarts if running. The client config file is deleted either way.
+
+### `GET /api/vpn/instances/{name}/users/{username}/config`
+
+Returns the client config (`.ovpn`/`.conf`) as a `text/plain` attachment. Admin + CSRF (the `X-CSRF-Token` header is required even though this is a GET).
 
 ## Audit Endpoint
 

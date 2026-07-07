@@ -38,6 +38,8 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | `lockout_minutes` | `15` | Lockout duration after too many failed attempts. |
 | `password_policy` | `strict` | Password complexity profile: `strict` / `moderate` / `low` / `disabled`. See `docs/security.md`. |
 | `wizard_completed` | `true` (`false` only on a genuinely fresh install) | Whether the first-run Wizard has been completed. Gates the Wizard redirect in `App.tsx`. |
+| `theme` | `dark` | UI theme: `dark` / `classic` (light) / `matrix`. Exposed pre-login so the login page renders themed. |
+| `monitor_interfaces` | empty | Comma-separated host NICs to capture on, chosen in the Wizard's Network step. Injected into Suricata as `CAPTURE_IFACES` on start (falls back to `eth0` when unset). |
 | `tool_base_path` | (none — set to a real path on the host) | Placeholder path for future local tool integrations. |
 | `tool_url_opnsense` | empty | Internal iframe URL for OPNsense. |
 | `tool_url_ntop` | empty | Internal iframe URL for NTOP. |
@@ -77,7 +79,7 @@ Network Traffic Monitoring configuration includes source selection, shared Suric
 
 ## First-Run Wizard
 
-Shown automatically after the bootstrap admin's forced password change on a fresh install (`wizard_completed` setting is `false`); reachable manually afterward from `Settings > Wizard`. Five steps: update acknowledgment, optional logo upload, enable OpenSMART modules, enable Tools, and Finish (attempts to provision containers for whatever got enabled, reporting a per-item result). See `docs/technical-overview.md` for the provisioning flow.
+Shown automatically after the bootstrap admin's forced password change on a fresh install (`wizard_completed` setting is `false`); reachable manually afterward from `Settings > Wizard`. Four steps: Basics (app name + optional logo), Network (pick the host NICs to monitor — persisted as `monitor_interfaces`), Modules & Tools (recommended defaults pre-selected; enabling a Wazuh-backed module auto-enables the Wazuh tool with a visible notice; VPN type selector), and Provision (sequential runner with phases, a progress bar, per-service results and a final info/warning/error summary). See `docs/architecture.md` ("First-Run Wizard") for details.
 
 ## Notifications
 
