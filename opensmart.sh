@@ -54,8 +54,11 @@ Commands:
                                         OpenSMART as a container. Requires root.
   uninstall                            Stop and remove every container OpenSMART
                                         creates or manages (main app + proxy, and any
-                                        tool containers ever started). Does not remove
-                                        the "opensmart" network, images, or app data.
+                                        tool containers ever started). Prompts to
+                                        choose containers-only (keeps the "opensmart"
+                                        network, images, and app data) or full
+                                        removal (also permanently deletes app data:
+                                        databases, logs, PCAPs, indices, VPN certs).
                                         Asks for confirmation.
   version                              Show the OpenSMART version (major version plus
                                         the current git commit).
@@ -458,29 +461,11 @@ cmd_recreate() {
   printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
 }
 
-cmd_uninstall() {
-  if ! command -v docker >/dev/null 2>&1; then
-    printf 'Docker is not installed; nothing to uninstall.\n' >&2
-    exit 0
-  fi
-
-  printf 'This will stop and remove EVERY container OpenSMART creates or manages —\n'
-  printf 'the main app (%s, %s-docker-proxy) and any tool containers ever started\n' "$CONTAINER_NAME" "$CONTAINER_NAME"
-  printf 'under opensmart/containers/run/ (Suricata, Zeek, Arkime, OpenSearch,\n'
-  printf 'WireGuard, OpenVPN, ...).\n\n'
-  printf 'NOT removed: the "%s" Docker network, container images, and application\n' "$NETWORK_NAME"
-  printf 'data (SQLite DBs, logs) in the bind-mounted app directory.\n\n'
-  read -r -p 'Type UNINSTALL to continue: ' confirmation
-  if [[ "$confirmation" != "UNINSTALL" ]]; then
-    printf 'Uninstall cancelled.\n'
-    exit 0
-  fi
-
-  mkdir -p "$LOG_DIR"
-  local uninstall_log="$LOG_DIR/uninstall.log"
-  printf '\n===== opensmart.sh uninstall started %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$uninstall_log"
-
-  local dir name
+_uninstall_remove_containers() {
+  # $1: log file to append docker compose output to.
+  local log="$1" dir name
+  # Depth 1: opensmart/containers/run/<tool>/docker-compose.yml (Suricata,
+  # Zeek, Arkime, OpenSearch, WireGuard, OpenVPN, Wazuh, the main app, ...).
   for dir in "$ROOT_DIR"/opensmart/containers/run/*/; do
     [[ -f "${dir}docker-compose.yml" ]] || continue
     name="$(basename "$dir")"
@@ -489,16 +474,105 @@ cmd_uninstall() {
       # Only opensmart/containers/run/openvpn/ currently gates its service
       # behind a "manual" profile (see that file's own comments) — without
       # --profile manual, `down` won't see/remove it even if it was started.
-      (cd "$dir" && docker compose --profile manual down) >> "$uninstall_log" 2>&1 \
+      (cd "$dir" && docker compose --profile manual down) >> "$log" 2>&1 \
         && printf 'done\n' || printf 'nothing to remove\n'
     else
-      (cd "$dir" && docker compose down) >> "$uninstall_log" 2>&1 \
+      (cd "$dir" && docker compose down) >> "$log" 2>&1 \
         && printf 'done\n' || printf 'nothing to remove\n'
     fi
   done
+  # Depth 2: opensmart/containers/run/vpn/<instance>/docker-compose.yml —
+  # generated per-instance by the VPN module (backend/app/vpn.py), one
+  # level deeper than every other tool, so the loop above never sees them.
+  for dir in "$ROOT_DIR"/opensmart/containers/run/vpn/*/; do
+    [[ -f "${dir}docker-compose.yml" ]] || continue
+    name="vpn/$(basename "$dir")"
+    printf 'Removing %s... ' "$name"
+    (cd "$dir" && docker compose down) >> "$log" 2>&1 \
+      && printf 'done\n' || printf 'nothing to remove\n'
+  done
+}
 
-  printf '\n✔ OpenSMART containers removed. Full log: %s\n' "$uninstall_log"
-  printf 'Run "sudo ./opensmart.sh install" to set it up again.\n'
+_uninstall_purge_data() {
+  # $1: log file. Deletes every bind-mounted volumes/data/ (PCAPs,
+  # OpenSearch/Wazuh indices, VPN certs and keys, capture logs), the
+  # generated VPN instance directories themselves (matching vpn.py's own
+  # delete_instance()), and the main app's SQLite databases — everything a
+  # fresh install would otherwise find already sitting there and reuse.
+  local log="$1" dir
+  printf 'Deleting application data... '
+  {
+    for dir in "$ROOT_DIR"/opensmart/containers/run/*/volumes/data; do
+      [[ -d "$dir" ]] && rm -rf "$dir"
+    done
+    [[ -d "$ROOT_DIR/opensmart/containers/run/vpn" ]] && rm -rf "$ROOT_DIR/opensmart/containers/run/vpn"
+    rm -f "$ROOT_DIR"/opensmart/backend/opensmart*.db "$ROOT_DIR"/opensmart/backend/opensmart*.db-shm "$ROOT_DIR"/opensmart/backend/opensmart*.db-wal
+  } >> "$log" 2>&1
+  printf 'done\n'
+}
+
+cmd_uninstall() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker is not installed; nothing to uninstall.\n' >&2
+    exit 0
+  fi
+
+  printf 'OpenSMART uninstall — choose how much to remove:\n\n'
+  printf '  1) Containers only\n'
+  printf '     Stops and removes EVERY container OpenSMART creates or manages —\n'
+  printf '     the main app (%s, %s-docker-proxy) and any tool containers ever\n' "$CONTAINER_NAME" "$CONTAINER_NAME"
+  printf '     started under opensmart/containers/run/ (Suricata, Zeek, Arkime,\n'
+  printf '     OpenSearch, WireGuard, OpenVPN, Wazuh, VPN module instances, ...).\n'
+  printf '     Kept: the "%s" Docker network, container images, and all\n' "$NETWORK_NAME"
+  printf '     application data (SQLite databases, logs, PCAPs, indices,\n'
+  printf '     certificates). Reinstalling later picks up right where you left off.\n\n'
+  printf '  2) Full removal — containers AND all data\n'
+  printf '     Everything in option 1, PLUS permanently deletes every tool'"'"'s\n'
+  printf '     bind-mounted volumes/data/ (PCAPs, OpenSearch/Wazuh indices, VPN\n'
+  printf '     certs and keys, capture logs), every generated VPN instance, the\n'
+  printf '     main app'"'"'s SQLite databases, and logs/. THIS CANNOT BE UNDONE.\n\n'
+
+  local choice
+  read -r -p 'Choose an option [1/2, anything else cancels]: ' choice
+  case "$choice" in
+    1) ;;
+    2) ;;
+    *) printf 'Uninstall cancelled.\n'; exit 0 ;;
+  esac
+
+  if [[ "$choice" == "1" ]]; then
+    read -r -p 'Type UNINSTALL to continue: ' confirmation
+    if [[ "$confirmation" != "UNINSTALL" ]]; then
+      printf 'Uninstall cancelled.\n'
+      exit 0
+    fi
+  else
+    printf '\nThis permanently destroys application data — PCAPs, security alerts,\n'
+    printf 'indices, VPN certificates/keys, and the app'"'"'s own databases. There is no\n'
+    printf 'undo and no backup is taken.\n\n'
+    read -r -p 'Type DELETE ALL DATA to continue: ' confirmation
+    if [[ "$confirmation" != "DELETE ALL DATA" ]]; then
+      printf 'Uninstall cancelled.\n'
+      exit 0
+    fi
+  fi
+
+  mkdir -p "$LOG_DIR"
+  local uninstall_log="$LOG_DIR/uninstall.log"
+  printf '\n===== opensmart.sh uninstall started %s (option %s) =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$choice" >> "$uninstall_log"
+
+  _uninstall_remove_containers "$uninstall_log"
+
+  if [[ "$choice" == "1" ]]; then
+    printf '\n✔ OpenSMART containers removed. Full log: %s\n' "$uninstall_log"
+    printf 'Run "sudo ./opensmart.sh install" to set it up again.\n'
+  else
+    _uninstall_purge_data "$uninstall_log"
+    printf '\n===== opensmart.sh uninstall finished %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$uninstall_log"
+    rm -rf "$LOG_DIR"
+    printf '\n✔ OpenSMART containers and all application data removed.\n'
+    printf 'Run "sudo ./opensmart.sh install" to set it up again from scratch.\n'
+  fi
 }
 
 # ── install helpers ─────────────────────────────────────────────────────────
