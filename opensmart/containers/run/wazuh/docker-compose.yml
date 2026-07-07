@@ -127,7 +127,11 @@ services:
       # that one.
       - "9201:9200"
     environment:
-      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      # Overridable per host (env or a .env file next to this compose
+      # file) — same rationale as opensmart/containers/run/opensearch/'s
+      # own heap override: a fixed 1g can be too much alongside the rest
+      # of the stack on a small host.
+      - "OPENSEARCH_JAVA_OPTS=${WAZUH_INDEXER_JAVA_OPTS:--Xms1g -Xmx1g}"
     ulimits:
       memlock:
         # See wazuh.manager's memlock comment above for why this is
