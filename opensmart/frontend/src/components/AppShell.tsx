@@ -52,11 +52,33 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
       : pageTitles[page] || page.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' ');
 
   function renderTool(tool: ToolConfig) {
-    const title = toolDefinitions[tool.name]?.title || tool.name;
+    const definition = toolDefinitions[tool.name];
+    const title = definition?.title || tool.name;
     if (!tool.enabled) return <StatusMessage title={title} status="Disabled" detail="Enable this tool in Configuration > Tools Config before loading its workspace." />;
     const url = settings[toolUrlKeys[tool.name] || ''] || '';
     if (!url) return <StatusMessage title={title} status="Warning" detail="This tool is enabled but no internal URL is configured. Add the URL in Configuration > Tools Config." />;
-    return <section className="tool-view"><div className="section-actions"><h2>{title}</h2><p className="muted">{url}</p></div><iframe title={title} src={url} className="tool-iframe" /></section>;
+    const openLink = <a className="tool-open-btn" href={url} target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>;
+    // Tools that block iframe embedding (see ToolDefinition.embeddable) only
+    // ever render a blank/error area inside the frame, so show a launch card
+    // instead of a broken iframe.
+    if (definition?.embeddable === false) {
+      return (
+        <section className="tool-view">
+          <div className="section-actions"><h2>{title}</h2><p className="muted">{url}</p></div>
+          <div className="card hero-card tool-launch-card">
+            {definition.logo && <img src={definition.logo} alt="" className="tool-launch-logo" />}
+            <h2>{title}</h2>
+            <p className="muted">
+              This tool blocks being embedded inside another page (a standard security
+              protection), so it opens in a new browser tab. If it uses a self-signed
+              certificate, accept the certificate warning there once.
+            </p>
+            {openLink}
+          </div>
+        </section>
+      );
+    }
+    return <section className="tool-view"><div className="section-actions"><h2>{title}</h2><div className="tool-actions"><span className="muted">{url}</span>{openLink}</div></div><iframe title={title} src={url} className="tool-iframe" /></section>;
   }
 
   function renderModule(module: OpenSmartModule) {
