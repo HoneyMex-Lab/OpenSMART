@@ -1,12 +1,32 @@
+import logging
+import threading
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from .. import provisioning
 from ..database import get_db, rows_to_dicts, write_audit_event
 from ..security import get_current_user, require_csrf, set_user_password, validate_password_complexity, verify_password
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/account", tags=["account"])
+
+
+def _sync_tool_passwords(password: str) -> None:
+    """Keep tool credentials we provision in step with the admin password.
+    Best-effort and off the request path: runs in a background thread so a
+    slow/failed sync never delays or fails the user's password change. Only
+    Arkime today (the one tool whose admin we create); other tools manage
+    their own credentials."""
+    def _run() -> None:
+        ok, detail = provisioning.sync_arkime_password(password)
+        if ok:
+            logger.info("Arkime admin password synced to the OpenSMART admin password.")
+        else:
+            logger.warning("Arkime admin password sync skipped/failed: %s", detail[:300])
+    threading.Thread(target=_run, daemon=True).start()
 
 
 class PasswordPayload(BaseModel):
@@ -28,6 +48,10 @@ def change_password(payload: PasswordPayload, user: Annotated[dict, Depends(requ
     validate_password_complexity(payload.newPassword)
     set_user_password(user["id"], payload.newPassword, require_change=False, invalidate_sessions=False)
     write_audit_event("password_change", user["id"], user["username"], "account", "", "password changed")
+    # Admins share a single sign-in password with the tools OpenSMART
+    # provisions (Arkime today), so a changed admin password propagates there.
+    if user["role"] == "admin":
+        _sync_tool_passwords(payload.newPassword)
     return {"ok": True}
 
 

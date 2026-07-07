@@ -325,6 +325,51 @@ def host_interfaces() -> list[dict]:
     return interfaces
 
 
+# ── Arkime admin password sync ────────────────────────────────────────────────
+
+_ARKIME_IMAGE = "ghcr.io/arkime/arkime/arkime:v6-latest"
+_ARKIME_CONFIG = CONTAINERS_ROOT / "arkime" / "etc" / "config.ini"
+
+
+def sync_arkime_password(password: str, *, username: str = "admin") -> tuple[bool, str]:
+    """Set Arkime's admin user password via a one-off container running the
+    image's own addUser.js (upsert — updates the password when the user
+    exists). Used to keep the Arkime tool credential in step with the
+    OpenSMART admin password. Best-effort: callers treat failure as
+    non-fatal (Arkime may not be provisioned/running yet).
+
+    The password is passed through the environment, never interpolated into
+    the shell command, so it can't break quoting or inject anything.
+    """
+    if not _ARKIME_CONFIG.is_file():
+        return False, "Arkime is not provisioned (no config.ini)."
+    script = 'cd /opt/arkime/viewer && exec /opt/arkime/bin/node addUser.js "$0" "OpenSMART Admin" "$ARKIME_NEW_PASSWORD" --admin'
+    try:
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "--network", "opensmart",
+                "-e", "ARKIME__elasticsearch=http://opensearch:9200",
+                "-e", f"ARKIME_NEW_PASSWORD={password}",
+                "-v", f"{_ARKIME_CONFIG}:/opt/arkime/etc/config.ini",
+                "--entrypoint", "bash",
+                _ARKIME_IMAGE, "-c", script, username,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            shell=False,
+        )
+    except FileNotFoundError:
+        return False, "docker CLI is not available in this environment."
+    except subprocess.TimeoutExpired:
+        return False, "Timed out setting the Arkime password."
+    output = (result.stderr or result.stdout or "").strip()
+    if result.returncode != 0:
+        logger.warning("arkime password sync failed: %s", output[:1000])
+        return False, output[-1000:]
+    return True, output[-1000:]
+
+
 # ── VPN summary (read-only, from bind-mounted files) ──────────────────────────
 #
 # The docker-socket-proxy blocks EXEC on purpose, so peer/cert state is read
