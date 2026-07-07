@@ -6,8 +6,10 @@ docker.sock directly.
 """
 import json
 import logging
+import os
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -94,12 +96,13 @@ def _compose_path(container: str) -> Path:
     return CONTAINERS_ROOT / container / "docker-compose.yml"
 
 
-def _run_compose(container: str, *args: str) -> tuple[bool, str]:
+def _run_compose(container: str, *args: str, extra_env: dict[str, str] | None = None) -> tuple[bool, str]:
     path = _compose_path(container)
     if not path.is_file():
         return False, f"No docker-compose.yml found for '{container}' at {path}"
     profile = CONTAINER_PROFILES.get(container)
     profile_args = ["--profile", profile] if profile else []
+    env = {**os.environ, **extra_env} if extra_env else None
     try:
         result = subprocess.run(
             ["docker", "compose", "-f", str(path), *profile_args, *args],
@@ -108,6 +111,7 @@ def _run_compose(container: str, *args: str) -> tuple[bool, str]:
             text=True,
             timeout=_COMPOSE_TIMEOUT_SECONDS,
             shell=False,
+            env=env,
         )
     except FileNotFoundError:
         return False, "docker CLI is not available in this environment."
@@ -120,6 +124,17 @@ def _run_compose(container: str, *args: str) -> tuple[bool, str]:
     return True, output[-2000:]
 
 
+def _monitor_interfaces_env() -> dict[str, str]:
+    """CAPTURE_IFACES for the suricata compose file, from the
+    monitor_interfaces setting (comma-separated, chosen in the Wizard).
+    Falls back to eth0 via the compose file's own default when unset."""
+    from .database import get_db
+    with get_db() as db:
+        row = db.execute("SELECT value FROM settings WHERE key = 'monitor_interfaces'").fetchone()
+    value = (row["value"] if row else "").strip().strip(",")
+    return {"CAPTURE_IFACES": value} if value else {}
+
+
 def start_container(container: str) -> tuple[bool, str]:
     for dependency in CONTAINER_DEPENDENCIES.get(container, []):
         ok, detail = _run_compose(dependency, "up", "-d")
@@ -129,7 +144,8 @@ def start_container(container: str) -> tuple[bool, str]:
         ok, detail = _ensure_wazuh_certs()
         if not ok:
             return False, f"Certificate generation failed: {detail}"
-    return _run_compose(container, "up", "-d")
+    extra_env = _monitor_interfaces_env() if container == "suricata" else None
+    return _run_compose(container, "up", "-d", extra_env=extra_env)
 
 
 def stop_container(container: str) -> tuple[bool, str]:
@@ -223,6 +239,58 @@ def container_overview() -> list[dict]:
             "profile": CONTAINER_PROFILES.get(project),
         })
     return overview
+
+
+# ── Host network interfaces ───────────────────────────────────────────────────
+#
+# This process runs on a bridge network, so its own netns only has eth0/lo —
+# the host's capture-capable NICs (span/mirror ports) are invisible to it.
+# Enumerate them by running a one-off busybox container with host networking
+# through the docker-socket-proxy (CONTAINERS+POST are allowlisted; EXEC
+# stays blocked — this creates a new container rather than entering one).
+
+_HOST_IFACES_CACHE: tuple[float, list[dict]] = (0.0, [])
+_HOST_IFACES_TTL_SECONDS = 60
+
+
+def host_interfaces() -> list[dict]:
+    global _HOST_IFACES_CACHE
+    cached_at, cached = _HOST_IFACES_CACHE
+    if cached and time.time() - cached_at < _HOST_IFACES_TTL_SECONDS:
+        return cached
+    try:
+        result = subprocess.run(
+            ["docker", "run", "--rm", "--network", "host", "busybox", "ip", "-o", "link", "show"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return cached
+    if result.returncode != 0:
+        logger.warning("host interface enumeration failed: %s", (result.stderr or "")[:500])
+        return cached
+    interfaces: list[dict] = []
+    # busybox `ip -o link show` lines: "2: eth0: <BROADCAST,MULTICAST,UP,...> mtu 1300 ..."
+    for line in result.stdout.splitlines():
+        match = re.match(r"\d+:\s+([^:@]+)(?:@\S+)?:\s+<([^>]*)>\s+mtu\s+(\d+)", line)
+        if not match:
+            continue
+        name, flags, mtu = match.group(1).strip(), match.group(2).split(","), int(match.group(3))
+        if name == "lo":
+            continue
+        interfaces.append({
+            "name": name,
+            "up": "UP" in flags,
+            "mtu": mtu,
+            # veth/br/docker interfaces are usually container plumbing, not
+            # span/mirror candidates — flagged so the UI can de-emphasize them.
+            "virtual": bool(re.match(r"^(veth|br-|docker|virbr|tap|tun|wg)", name)),
+        })
+    if interfaces:
+        _HOST_IFACES_CACHE = (time.time(), interfaces)
+    return interfaces
 
 
 # ── VPN summary (read-only, from bind-mounted files) ──────────────────────────
