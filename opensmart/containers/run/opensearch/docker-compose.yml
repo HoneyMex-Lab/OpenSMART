@@ -8,7 +8,10 @@ services:
       - DISABLE_SECURITY_PLUGIN=true
       - DISABLE_INSTALL_DEMO_CONFIG=true
       - bootstrap.memory_lock=false
-      - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g"
+      # Overridable per host (env or a .env file next to this compose file):
+      # small hosts should lower this — a 2g heap on a 4g host running the
+      # full stack OOM-loops the container.
+      - "OPENSEARCH_JAVA_OPTS=${OPENSEARCH_JAVA_OPTS:--Xms2g -Xmx2g}"
       - path.data=/data
       - http.compression=false
     ulimits:
