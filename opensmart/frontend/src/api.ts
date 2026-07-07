@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User } from './types';
+import type { AuditEvent, DataInfo, HostInterface, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User } from './types';
 
 let csrfToken = '';
 
@@ -75,4 +75,5 @@ export const api = {
   provisionStatus: (container: string) => request<{ container: string; running: boolean; detail: string }>(`/api/provisioning/status/${container}`),
   provisionOverview: () => request<ProvisioningOverview>('/api/provisioning/overview'),
   provisionRestart: (name: string) => request<{ name: string; ok: boolean; detail: string }>('/api/provisioning/restart', { method: 'POST', body: JSON.stringify({ name, kind: 'container' }) }),
+  hostInterfaces: () => request<{ interfaces: HostInterface[] }>('/api/provisioning/host-interfaces'),
 };

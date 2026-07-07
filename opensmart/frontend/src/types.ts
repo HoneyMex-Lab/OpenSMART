@@ -251,3 +251,10 @@ export type ProvisioningOverview = {
   projects: ProjectOverview[];
   vpn: VpnSummary;
 };
+
+export type HostInterface = {
+  name: string;
+  up: boolean;
+  mtu: number;
+  virtual: boolean;
+};

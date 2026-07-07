@@ -2,41 +2,15 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, RefreshCw, RotateCcw } from 'lucide-react';
 import { api } from '../api';
 import type { ContainerDetail, DataInfo, ProjectOverview, ProvisioningOverview, ResourcePoint, ResourceStatus, SchemaCheckResult, StatusItem } from '../types';
+import { MODULE_BACKING, NOT_IMPLEMENTED, PROJECT_LABELS, TOOL_BACKING } from './backing';
 
 const TIMEFRAMES = ['1h', '8h', '1d', '3d', '7d', '1w', '1m'];
-
-// Which compose project(s) back each module/tool. Anything not listed here
-// and not in NOT_IMPLEMENTED falls back to the URL-probe status row.
-const MODULE_BACKING: Record<string, string[]> = {
-  'Network Traffic Monitoring': ['suricata', 'zeek'],
-  'Network IDS': ['suricata'],
-  'Threat Detection Alerts': ['wazuh'],
-  'Endpoint': ['wazuh'],
-  'Vulnerability Management': ['wazuh'],
-  'Access VPN': ['openvpn', 'wireguard'],
-};
-const TOOL_BACKING: Record<string, string[]> = {
-  Arkime: ['arkime'],
-  Wazuh: ['wazuh'],
-};
-// Placeholders stay ONLY for these — everything else shows real state.
-const NOT_IMPLEMENTED = new Set(['Honeypot', 'LXC Manager', 'Graylog', 'NTOP']);
 
 const MODULE_NAMES = new Set([
   'Threat Detection Alerts', 'Network Traffic Monitoring', 'Network IDS',
   'Endpoint', 'Vulnerability Management', 'Honeypot', 'Access VPN', 'LXC Manager',
 ]);
 const TOOL_NAMES = new Set(['OPNsense', 'NTOP', 'Arkime', 'Proxmox', 'Wazuh', 'Graylog']);
-
-const PROJECT_LABELS: Record<string, string> = {
-  suricata: 'Suricata IDS',
-  zeek: 'Zeek NSM',
-  arkime: 'Arkime',
-  opensearch: 'OpenSearch',
-  wireguard: 'WireGuard VPN',
-  openvpn: 'OpenVPN',
-  wazuh: 'Wazuh SIEM',
-};
 
 export default function StatusPage() {
   const [items, setItems] = useState<StatusItem[]>([]);
