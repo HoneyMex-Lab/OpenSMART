@@ -5,6 +5,7 @@ import AccountPage from '../pages/AccountPage';
 import AuditPage from '../pages/AuditPage';
 import SettingsPage from '../pages/SettingsPage';
 import NetworkIdsPage from '../pages/NetworkIdsPage';
+import VpnPage from '../pages/VpnPage';
 import NetworkTrafficPage from '../pages/NetworkTrafficPage';
 import StatusPage from '../pages/StatusPage';
 import SummaryPage from '../pages/SummaryPage';
@@ -62,6 +63,7 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
     if (!module.enabled) return <StatusMessage title={module.name} status="Disabled" detail="Enable and configure this OpenSMART module in Configuration > OpenSMART Config." />;
     if (module.name === 'Network Traffic Monitoring') return <NetworkTrafficPage settings={settings} />;
     if (module.name === 'Network IDS') return <NetworkIdsPage />;
+    if (module.name === 'Access VPN') return <VpnPage />;
     const logo = modulesLogo(module.name);
     return <section className="card hero-card"><div className="detail-heading"><img src={logo} alt="" /><div><p className="status-label"><i className="status-dot enabled" /> enabled</p><h2>{module.name}</h2><p className="muted">Placeholder content for this OpenSMART module. Future releases can render live metrics, alerts, charts, and drill-down tables here.</p></div></div></section>;
   }

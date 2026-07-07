@@ -655,6 +655,17 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 disk_percent REAL NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_resource_snapshots_time ON resource_snapshots (sampled_at);
+
+            CREATE TABLE IF NOT EXISTS vpn_instances (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                vpn_type TEXT NOT NULL CHECK(vpn_type IN ('openvpn', 'wireguard')),
+                port INTEGER NOT NULL UNIQUE,
+                subnet TEXT NOT NULL,
+                auth_mode TEXT NOT NULL DEFAULT 'certs' CHECK(auth_mode IN ('certs', 'ldap')),
+                ldap_config TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
             """
         )
         db.execute("PRAGMA journal_mode = WAL")

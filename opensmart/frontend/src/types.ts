@@ -258,3 +258,24 @@ export type HostInterface = {
   mtu: number;
   virtual: boolean;
 };
+
+export type VpnInstance = {
+  id: number;
+  name: string;
+  vpn_type: 'openvpn' | 'wireguard';
+  port: number;
+  subnet: string;
+  auth_mode: 'certs' | 'ldap';
+  created_at: string;
+  running: boolean;
+  status: string;
+  uptime_seconds: number | null;
+  users: number;
+};
+
+export type VpnUser = {
+  name: string;
+  status: string;
+  expires_at: string;
+  has_config: boolean;
+};
