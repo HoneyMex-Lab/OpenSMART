@@ -154,9 +154,10 @@ def _write_compose(name: str, vpn_type: str, port: int, instance_id: int) -> Non
     network_mode: host
     cap_add:
       - NET_ADMIN
-    sysctls:
-      - net.ipv4.ip_forward=1
-      - net.ipv4.conf.all.src_valid_mark=1
+    # No sysctls: section — Docker rejects per-container sysctls together
+    # with host networking (they'd mutate the host namespace). Not needed
+    # anyway: the Docker daemon itself enables net.ipv4.ip_forward on the
+    # host, and src_valid_mark only matters for fwmark'd client configs.
     # The image's default entrypoint (wg-up.sh) is single-instance: it owns
     # a fixed wg0 and port 51820. Instances bring up their own uniquely-named
     # interface from the config the backend generated instead.
