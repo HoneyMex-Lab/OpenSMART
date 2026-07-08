@@ -10,7 +10,7 @@ CONTAINER_NAME="opensmart"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
-STEP_TOTAL=12
+STEP_TOTAL=13
 STEP_NUM=0
 # Tells run_app.sh to refer to *this* script in its own user-facing
 # "run ... to do X" messages, instead of naming itself — keeps messages
@@ -812,6 +812,33 @@ _install_set_max_map_count() {
   _step_fail "Failed to set vm.max_map_count."
 }
 
+_install_ensure_tun_device() {
+  # OpenVPN instances (backend/app/vpn.py) need /dev/net/tun on the Docker
+  # host. Bare-metal/VM hosts have it; unprivileged LXC hosts usually don't,
+  # and creating it needs the LXC's device cgroup to allow c 10:200 — a
+  # Proxmox-host-side setting we can't change from in here. Best-effort:
+  # create it where permitted, warn with the exact host-side fix otherwise
+  # (WireGuard instances don't need it, so this never fails the install).
+  _step "Ensuring /dev/net/tun exists (needed by OpenVPN instances)"
+  if [[ -c /dev/net/tun ]]; then
+    printf 'already present\n'
+    return
+  fi
+  if mkdir -p /dev/net && mknod /dev/net/tun c 10 200 2>/dev/null && chmod 666 /dev/net/tun; then
+    printf 'created\n'
+    printf '  Note: created at runtime — on an LXC this does not survive a reboot unless\n'
+    printf '  the container config binds it (see the instructions below for permanence).\n'
+    return
+  fi
+  printf 'skipped (not permitted)\n'
+  printf '  ⚠ Could not create /dev/net/tun from inside this container/host.\n' >&2
+  printf '  On a Proxmox LXC, add to /etc/pve/lxc/<VMID>.conf on the Proxmox host:\n' >&2
+  printf '    lxc.cgroup2.devices.allow: c 10:200 rwm\n' >&2
+  printf '    lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file\n' >&2
+  printf '  then restart the LXC. Until then OpenVPN instances fail to start\n' >&2
+  printf '  (clear error in the UI); WireGuard instances are unaffected.\n' >&2
+}
+
 _install_build_image() {
   _step "Building $IMAGE_NAME image (this can take a few minutes)"
   docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/containers/build/opensmart/Dockerfile" "$ROOT_DIR" >> "$INSTALL_LOG" 2>&1 \
@@ -954,6 +981,7 @@ cmd_install() {
   _install_docker_engine
   _install_create_network
   _install_set_max_map_count
+  _install_ensure_tun_device
   _install_build_image
   _install_build_native_modules
   _install_fix_ownership
