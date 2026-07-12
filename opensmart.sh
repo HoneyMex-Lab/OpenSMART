@@ -813,6 +813,39 @@ _install_replace_existing_deployment() {
   printf '✔ Existing deployment removed. Continuing with a clean install...\n\n'
 }
 
+_install_confirm_proceed() {
+  # A general pre-flight gate, separate from _install_check_existing_
+  # deployment's own more specific prompt (which only fires when something
+  # is already there) — this one always asks, even on a genuinely clean
+  # host, since install does real host-level work before the operator sees
+  # any of the numbered steps. Not step-numbered itself (parallels how
+  # _install_check_existing_deployment's own interactive follow-up isn't
+  # separately numbered from its stepped "found"/"none found" line).
+  #
+  # Non-interactive-safe: closed/empty stdin (read returns immediately)
+  # defaults to "yes" — unattended/scripted installs (cloud-init, CI, a
+  # fresh-VM setup script) must keep working exactly as before this gate
+  # existed, matching the same philosophy as every other default in this
+  # installer (see _install_check_existing_deployment, _start_front_proxy).
+  printf 'This will set up OpenSMART on this host:\n'
+  printf '  - Install Docker Engine if not already present (Debian/Ubuntu only)\n'
+  printf '  - Apply host-level settings the bundled tools need (vm.max_map_count,\n'
+  printf '    a /dev/net/tun device, ulimits for Wazuh)\n'
+  printf '  - Build the OpenSMART images and run it as a set of Docker containers\n'
+  printf '  - Bring up the front-door reverse proxy (self-signed HTTPS by default)\n\n'
+  local confirmation
+  read -r -p 'Continue with the install? [Y/n]: ' confirmation
+  confirmation="${confirmation:-y}"
+  case "$confirmation" in
+    y|Y|yes|YES|Yes) ;;
+    *)
+      printf 'Install cancelled.\n'
+      exit 0
+      ;;
+  esac
+  printf '\n'
+}
+
 _install_check_existing_deployment() {
   # First thing install does (after confirming root) — before touching
   # anything, including installing Docker itself. Detects a deployment left
@@ -1283,6 +1316,7 @@ cmd_install() {
   _log_init
   printf 'Full installer log: %s\n\n' "$INSTALL_LOG"
   _install_require_root
+  _install_confirm_proceed
   _install_check_existing_deployment
   _install_check_path_traversable
   _install_check_host_resources

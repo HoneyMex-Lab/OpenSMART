@@ -171,19 +171,55 @@ def _monitor_interfaces_env() -> dict[str, str]:
     return {"CAPTURE_IFACES": value} if value else {}
 
 
+_NGINX_ENV_FILE = CONTAINERS_ROOT / "nginx" / ".env"
+
+
+def _set_env_kv(file: Path, key: str, value: str) -> None:
+    """Update-or-append KEY=VALUE in an env file without touching other
+    keys. Python mirror of opensmart.sh's own _set_env_kv — used so both
+    sides agree on the same persisted value (see _proxy_hostname_env)."""
+    file.parent.mkdir(parents=True, exist_ok=True)
+    lines = file.read_text().splitlines() if file.is_file() else []
+    prefix = f"{key}="
+    new_line = f"{key}={value}"
+    for i, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[i] = new_line
+            break
+    else:
+        lines.append(new_line)
+    file.write_text("\n".join(lines) + "\n")
+
+
 def _proxy_hostname_env() -> dict[str, str]:
     """OPENSMART_HOSTNAME for the nginx front-door, from the proxy_hostname
     setting (chosen in the Wizard's Basics step). Drives the proxy's
     server_name and the self-signed certificate SAN — the compose file's
-    init-certs one-off re-issues the certificate when it changes. Process
-    environment beats the compose .env file, so this wins over any
-    host-side default when set."""
+    init-certs one-off re-issues the certificate when it changes.
+
+    Also PERSISTS the value into the proxy's own .env (not just passed as a
+    transient subprocess env var) — confirmed live: without this, this
+    function's value and opensmart.sh's own bare `docker compose up -d`
+    (which never passes this override, e.g. from _start_front_proxy on
+    `start`/`recreate`) disagreed about the "current" OPENSMART_HOSTNAME,
+    so Docker Compose detected a config diff and RECREATED nginx on every
+    single call that alternated between the two paths — self-referentially
+    killing whatever request was itself proxied through nginx, which is
+    exactly what the Wizard's own provisioning request is (nginx is both
+    the target being provisioned and the transport carrying the request
+    that provisions it). Persisting here makes both paths converge on the
+    same value, so nginx only actually recreates when the hostname
+    genuinely changes."""
     value = _setting("proxy_hostname")
     # The value is expanded by a shell inside the init-certs one-off (cert
     # subject/SAN), so only RFC-hostname characters may pass — anything else
     # is dropped, falling back to the compose default.
     if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", value or ""):
         return {}
+    try:
+        _set_env_kv(_NGINX_ENV_FILE, "OPENSMART_HOSTNAME", value)
+    except OSError as error:
+        logger.warning("failed to persist OPENSMART_HOSTNAME into %s: %s", _NGINX_ENV_FILE, error)
     return {"OPENSMART_HOSTNAME": value}
 
 
