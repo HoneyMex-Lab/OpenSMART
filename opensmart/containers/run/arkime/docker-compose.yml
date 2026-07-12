@@ -74,7 +74,9 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Viewer UI on the opensmart network, reaches OpenSearch by service alias.
+  # Viewer UI, reaches OpenSearch by service alias. No direct port publish —
+  # see viewer-redirect below, which is what actually owns host port 8005
+  # now (needed for webBasePath's bare-root behavior, see redirect.conf).
   viewer:
     image: ghcr.io/arkime/arkime/arkime:v6-latest
     container_name: opensmart-arkime-viewer
@@ -85,13 +87,27 @@ services:
     volumes:
       - ./etc/config.ini:/opt/arkime/etc/config.ini
       - ./volumes/data:/data
-    ports:
-      - "8005:8005"
     networks:
       - opensmart
     depends_on:
       init-data-dir:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Owns the published host port; redirects the bare root to /arkime/ and
+  # passes everything else straight through to viewer. See redirect.conf.
+  viewer-redirect:
+    image: nginx:1.27
+    container_name: opensmart-arkime-viewer-redirect
+    hostname: arkime-viewer-redirect
+    volumes:
+      - ./redirect.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8005:8005"
+    networks:
+      - opensmart
+    depends_on:
+      - viewer
     restart: unless-stopped
 
 networks:

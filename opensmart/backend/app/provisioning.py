@@ -44,7 +44,7 @@ CONTAINER_PROFILES: dict[str, str] = {
 CONTAINER_SERVICES: dict[str, list[str]] = {
     "suricata": ["opensmart-suricata"],
     "zeek": ["opensmart-zeek"],
-    "arkime": ["opensmart-arkime-capture", "opensmart-arkime-viewer"],
+    "arkime": ["opensmart-arkime-capture", "opensmart-arkime-viewer", "opensmart-arkime-viewer-redirect"],
     "opensearch": ["opensmart-opensearch"],
     "wireguard": ["opensmart-wireguard"],
     "openvpn": ["opensmart-openvpn"],
