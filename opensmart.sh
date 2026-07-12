@@ -10,7 +10,7 @@ CONTAINER_NAME="opensmart"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
-STEP_TOTAL=13
+STEP_TOTAL=15
 STEP_NUM=0
 # Tells run_app.sh to refer to *this* script in its own user-facing
 # "run ... to do X" messages, instead of naming itself — keeps messages
@@ -707,6 +707,64 @@ _install_check_path_traversable() {
   printf 'ok\n'
 }
 
+_install_check_host_resources() {
+  # Informational only — never fails the install; OpenSMART's core app runs
+  # fine on modest hardware. This is specifically about the OPTIONAL tool
+  # stack: Wazuh (manager+indexer+dashboard) and Arkime's own OpenSearch
+  # dependency each run a JVM-based OpenSearch-family indexer, which is
+  # what actually needs real resources — confirmed firsthand on this
+  # project's reference host: both together OOM-loop repeatedly below ~8GB RAM,
+  # and PCAP/index storage fills a tight disk fast.
+  #
+  # Two recommended tiers (kept in sync by hand with
+  # opensmart/backend/app/provisioning.py's HOST_RESOURCE_TIERS — same
+  # numbers, same reasoning, comment there points back here):
+  #   "core"  (Suricata/Zeek/Network IDS+Traffic/VPN only): 2 CPU, ~4GB RAM, ~10GB disk
+  #   "full"  (adds Wazuh + Arkime/OpenSearch):             4 CPU, ~8GB RAM, ~20GB disk
+  #
+  # The result is written into the OpenSMART app container's own .env
+  # (OPENSMART_RESOURCE_* vars) so the backend can serve it to the Wizard,
+  # which highlights the modules/tools this host's tier can't comfortably
+  # run and leaves them out of the "recommended defaults" pre-selection —
+  # the user can still enable them manually.
+  _step "Checking host resources against recommended tiers"
+  local cpu_count mem_total_mb disk_free_gb tier constrained_tools constrained_modules
+  cpu_count="$(nproc 2>/dev/null || echo 1)"
+  mem_total_mb="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+  disk_free_gb="$(df -BG --output=avail "$ROOT_DIR" 2>/dev/null | tail -1 | tr -dc '0-9')"
+  disk_free_gb="${disk_free_gb:-0}"
+
+  if [[ "$cpu_count" -ge 4 && "$mem_total_mb" -ge 7500 && "$disk_free_gb" -ge 18 ]]; then
+    tier="full"; constrained_tools=""; constrained_modules=""
+  elif [[ "$cpu_count" -ge 2 && "$mem_total_mb" -ge 3800 && "$disk_free_gb" -ge 9 ]]; then
+    tier="core"; constrained_tools="Wazuh,Arkime"; constrained_modules="Threat Detection Alerts,Endpoint,Vulnerability Management"
+  else
+    tier="minimal"; constrained_tools="Wazuh,Arkime"; constrained_modules="Threat Detection Alerts,Endpoint,Vulnerability Management"
+  fi
+
+  printf 'detected: %s CPU, %s MB RAM, %s GB free disk -> tier: %s\n' "$cpu_count" "$mem_total_mb" "$disk_free_gb" "$tier"
+  if [[ "$tier" == "full" ]]; then
+    printf '  ✔ Sufficient for the full default tool set (Suricata, Zeek, Wazuh, Arkime, VPN).\n'
+  else
+    printf '  ⚠ Below the recommended "full" tier (4 CPU / ~8GB RAM / ~20GB disk).\n' >&2
+    printf '  Wazuh and Arkime (both run a JVM-based OpenSearch-family indexer) are the\n' >&2
+    printf '  most likely to be unstable on this host. The Wizard will flag them and leave\n' >&2
+    printf '  them out of the recommended defaults; you can still enable them manually.\n' >&2
+    if [[ "$tier" == "minimal" ]]; then
+      printf '  This host is also below the minimal "core" tier (2 CPU / ~4GB RAM / ~10GB\n' >&2
+      printf '  disk) — expect instability even for Suricata/Zeek/VPN under real traffic.\n' >&2
+    fi
+  fi
+
+  local env_file="$ROOT_DIR/opensmart/containers/run/opensmart/.env"
+  _set_env_kv "$env_file" "OPENSMART_RESOURCE_TIER" "$tier"
+  _set_env_kv "$env_file" "OPENSMART_RESOURCE_CPU" "$cpu_count"
+  _set_env_kv "$env_file" "OPENSMART_RESOURCE_MEM_MB" "$mem_total_mb"
+  _set_env_kv "$env_file" "OPENSMART_RESOURCE_DISK_GB" "$disk_free_gb"
+  _set_env_kv "$env_file" "OPENSMART_RESOURCE_CONSTRAINED_TOOLS" "$constrained_tools"
+  _set_env_kv "$env_file" "OPENSMART_RESOURCE_CONSTRAINED_MODULES" "$constrained_modules"
+}
+
 _install_check_distro() {
   _step "Detecting Linux distribution"
   if [[ ! -r /etc/os-release ]]; then
@@ -837,6 +895,48 @@ _install_ensure_tun_device() {
   printf '    lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file\n' >&2
   printf '  then restart the LXC. Until then OpenVPN instances fail to start\n' >&2
   printf '  (clear error in the UI); WireGuard instances are unaffected.\n' >&2
+}
+
+_install_configure_wazuh_ulimits() {
+  # Wazuh's manager/indexer (containers/run/wazuh/docker-compose.yml)
+  # request unlimited memlock and 655360/65536 open files by default
+  # (overridable via WAZUH_MEMLOCK_LIMIT/WAZUH_MANAGER_NOFILE_LIMIT/
+  # WAZUH_INDEXER_NOFILE_LIMIT in that project's .env). Unprivileged LXC
+  # hosts often cap both below what Wazuh asks for; runc then refuses to
+  # even start the container ("error setting rlimit type 8/7: operation
+  # not permitted"), leaving it stuck at "Created" forever — confirmed on
+  # the reference host: memlock capped at 8MB, nofile hard limit 524288 (below
+  # the manager's 655360 default).
+  #
+  # Unlike vm.max_map_count/tun (namespaced sysctl / device node this
+  # process can't always touch), ulimit ceilings ARE directly readable
+  # here — this shell runs inside the same LXC as the containers it
+  # spawns, so its own `ulimit -H` reflects the real ceiling. So instead
+  # of just warning, clamp Wazuh's requested limits to match reality,
+  # written into containers/run/wazuh/.env (preserving any other keys
+  # already there) — Wazuh starts working immediately instead of needing
+  # someone to manually diagnose and hand-write these overrides.
+  _step "Configuring Wazuh ulimits for this host's capabilities"
+  local env_file="$ROOT_DIR/opensmart/containers/run/wazuh/.env"
+  local memlock_kb nofile_hard wrote=0
+  memlock_kb="$(ulimit -Hl)"
+  if [[ "$memlock_kb" =~ ^[0-9]+$ ]]; then
+    _set_env_kv "$env_file" "WAZUH_MEMLOCK_LIMIT" "$((memlock_kb * 1024))" && wrote=1
+  fi
+  nofile_hard="$(ulimit -Hn)"
+  if [[ "$nofile_hard" =~ ^[0-9]+$ ]]; then
+    if [[ "$nofile_hard" -lt 655360 ]]; then
+      _set_env_kv "$env_file" "WAZUH_MANAGER_NOFILE_LIMIT" "$nofile_hard" && wrote=1
+    fi
+    if [[ "$nofile_hard" -lt 65536 ]]; then
+      _set_env_kv "$env_file" "WAZUH_INDEXER_NOFILE_LIMIT" "$nofile_hard" && wrote=1
+    fi
+  fi
+  if [[ "$wrote" -eq 1 ]]; then
+    printf 'clamped to host limits (%s)\n' "$env_file"
+  else
+    printf 'host limits sufficient, no override needed\n'
+  fi
 }
 
 _install_build_image() {
@@ -977,11 +1077,13 @@ cmd_install() {
   printf 'Full installer log: %s\n\n' "$INSTALL_LOG"
   _install_require_root
   _install_check_path_traversable
+  _install_check_host_resources
   _install_check_distro
   _install_docker_engine
   _install_create_network
   _install_set_max_map_count
   _install_ensure_tun_device
+  _install_configure_wazuh_ulimits
   _install_build_image
   _install_build_native_modules
   _install_fix_ownership
