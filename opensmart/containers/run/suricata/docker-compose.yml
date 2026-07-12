@@ -17,6 +17,20 @@ services:
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE
+    environment:
+      # Comma-separated capture interfaces, chosen in the setup Wizard and
+      # passed by the backend's provisioning module (falls back to eth0).
+      # Overrides the image's baked-in `-i eth0` CMD.
+      - CAPTURE_IFACES=${CAPTURE_IFACES:-eth0}
+    command:
+      - -c
+      - >-
+        mkdir -p /data/log;
+        ARGS="";
+        for iface in $$(printf '%s' "$$CAPTURE_IFACES" | tr ',' ' '); do
+          ARGS="$$ARGS -i $$iface";
+        done;
+        exec suricata $$ARGS -l /data/log -v
     volumes:
       - ./volumes/data:/data
     restart: unless-stopped

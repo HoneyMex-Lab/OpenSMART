@@ -5,6 +5,12 @@ import type { Settings } from '../types';
 
 const platformFields = ['platform_title', 'platform_version', 'sensor_name', 'platform_language', 'developed_by', 'failed_login_limit', 'lockout_minutes', 'tool_base_path'];
 
+const themeOptions: { value: string; label: string }[] = [
+  { value: 'dark', label: 'Dark (default)' },
+  { value: 'classic', label: 'Classic (light)' },
+  { value: 'matrix', label: 'Matrix' },
+];
+
 const passwordPolicyOptions: { value: string; label: string }[] = [
   { value: 'strict', label: 'Strict (12+ chars, upper/lower/digit/symbol)' },
   { value: 'moderate', label: 'Moderate (10+ chars, 3 of 4 character classes)' },
@@ -126,6 +132,12 @@ export default function AdminConfigPage({ settings, setSettings }: { settings: S
             {platformFields.map((field) => field === 'platform_language'
               ? <label key={field}>{t(draft, 'field.platform_language', 'Platform language')}<select value={draft[field] || 'en'} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })}>{languageOptions.map((option) => <option key={option.value} value={option.value}>{t(draft, option.labelKey, option.fallback)}</option>)}</select></label>
               : <label key={field}>{t(draft, `field.${field}`, field)}<input value={draft[field] || ''} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })} /></label>)}
+            <label>
+              {t(draft, 'field.theme', 'Theme')}
+              <select value={draft.theme || 'dark'} onChange={(event) => setDraft({ ...draft, theme: event.target.value })}>
+                {themeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
           </div>
         </article>
         <article className="card">

@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User } from './types';
+import type { AuditEvent, DataInfo, HostInterface, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnInstance, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -73,4 +73,25 @@ export const api = {
   provisionStart: (name: string, kind: 'container' | 'module' | 'tool') => request<ProvisionResult>('/api/provisioning/start', { method: 'POST', body: JSON.stringify({ name, kind }) }),
   provisionStop: (name: string) => request<ProvisionResult>('/api/provisioning/stop', { method: 'POST', body: JSON.stringify({ name, kind: 'container' }) }),
   provisionStatus: (container: string) => request<{ container: string; running: boolean; detail: string }>(`/api/provisioning/status/${container}`),
+  provisionOverview: () => request<ProvisioningOverview>('/api/provisioning/overview'),
+  provisionRestart: (name: string) => request<{ name: string; ok: boolean; detail: string }>('/api/provisioning/restart', { method: 'POST', body: JSON.stringify({ name, kind: 'container' }) }),
+  hostInterfaces: () => request<{ interfaces: HostInterface[] }>('/api/provisioning/host-interfaces'),
+  vpnInstances: () => request<{ instances: VpnInstance[] }>('/api/vpn/instances'),
+  vpnCreateInstance: (payload: { name: string; vpn_type: string; port: number; auth_mode: string; ldap_config: Record<string, string> }) => request<{ instance: VpnInstance }>('/api/vpn/instances', { method: 'POST', body: JSON.stringify(payload) }),
+  vpnDeleteInstance: (name: string) => request<{ ok: boolean }>(`/api/vpn/instances/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  vpnInstanceAction: (name: string, action: 'start' | 'stop' | 'restart') => request<{ ok: boolean; detail: string }>(`/api/vpn/instances/${encodeURIComponent(name)}/${action}`, { method: 'POST' }),
+  vpnUsers: (name: string) => request<{ users: VpnUser[] }>(`/api/vpn/instances/${encodeURIComponent(name)}/users`),
+  vpnCreateUser: (name: string, username: string, serverHost: string) => request<{ name: string; instance: string }>(`/api/vpn/instances/${encodeURIComponent(name)}/users`, { method: 'POST', body: JSON.stringify({ username, server_host: serverHost }) }),
+  vpnRevokeUser: (name: string, username: string) => request<{ ok: boolean }>(`/api/vpn/instances/${encodeURIComponent(name)}/users/${encodeURIComponent(username)}/revoke`, { method: 'POST' }),
+  vpnUserConfig: async (name: string, username: string): Promise<{ filename: string; content: string }> => {
+    // The download route is admin+CSRF-guarded even though it is a GET.
+    const response = await fetch(`/api/vpn/instances/${encodeURIComponent(name)}/users/${encodeURIComponent(username)}/config`, { credentials: 'include', headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {} });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || 'Download failed');
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    return { filename: match ? match[1] : `${name}-${username}.conf`, content: await response.text() };
+  },
 };

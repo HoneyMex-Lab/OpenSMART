@@ -222,3 +222,60 @@ export type ProvisionResult = {
   detail: string;
   containers: { container: string; ok: boolean; detail: string }[];
 };
+
+export type ContainerDetail = {
+  name: string;
+  exists: boolean;
+  status: string;
+  image?: string;
+  uptime_seconds?: number | null;
+  restart_count?: number;
+  health?: string | null;
+  warnings?: string[];
+};
+
+export type ProjectOverview = {
+  project: string;
+  containers: ContainerDetail[];
+  running: number;
+  total: number;
+  profile?: string | null;
+};
+
+export type VpnSummary = {
+  wireguard: { configured: boolean; peers: number };
+  openvpn: { configured: boolean; valid_certs: number; revoked_certs: number };
+};
+
+export type ProvisioningOverview = {
+  projects: ProjectOverview[];
+  vpn: VpnSummary;
+};
+
+export type HostInterface = {
+  name: string;
+  up: boolean;
+  mtu: number;
+  virtual: boolean;
+};
+
+export type VpnInstance = {
+  id: number;
+  name: string;
+  vpn_type: 'openvpn' | 'wireguard';
+  port: number;
+  subnet: string;
+  auth_mode: 'certs' | 'ldap';
+  created_at: string;
+  running: boolean;
+  status: string;
+  uptime_seconds: number | null;
+  users: number;
+};
+
+export type VpnUser = {
+  name: string;
+  status: string;
+  expires_at: string;
+  has_config: boolean;
+};

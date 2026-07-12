@@ -136,7 +136,36 @@ export default function ToolsConfigPage({ settings, setSettings, tools, onToolsU
               <span className="toggle-label-inline">Enabled</span>
               <Toggle checked={activeTool.enabled} onChange={(checked) => setToolDraft(toolDraft.map((item) => item.id === activeTool.id ? { ...item, enabled: checked } : item))} />
             </div>
-            <label>Internal URL<input type="url" placeholder="https://tool.example.local" value={url} onChange={(event) => setSettingsDraft({ ...settingsDraft, [definition.key]: event.target.value })} /></label>
+            {definition.alias && (() => {
+              const usingAlias = url === definition.alias;
+              return (
+                <div className="tool-access-mode">
+                  <span className="toggle-label-inline">Access mode</span>
+                  <div className="access-mode-choices">
+                    <button
+                      type="button"
+                      className={usingAlias ? 'active' : ''}
+                      onClick={() => setSettingsDraft({ ...settingsDraft, [definition.key]: definition.alias! })}
+                    >
+                      Alias ({definition.alias})
+                    </button>
+                    <button
+                      type="button"
+                      className={!usingAlias ? 'active' : ''}
+                      onClick={() => { if (usingAlias) setSettingsDraft({ ...settingsDraft, [definition.key]: '' }); }}
+                    >
+                      Direct URL
+                    </button>
+                  </div>
+                  <p className="muted access-mode-hint">
+                    {usingAlias
+                      ? 'Served through the OpenSMART front-door proxy — embeds in the tool view. Access OpenSMART via the proxy port (8080) for aliases to resolve.'
+                      : 'Point directly at the tool. Tools that block framing open in a new tab instead of embedding.'}
+                  </p>
+                </div>
+              );
+            })()}
+            <label>{url.startsWith('/') ? 'Alias path' : 'Internal URL'}<input type="text" placeholder="https://tool.example.local" value={url} onChange={(event) => setSettingsDraft({ ...settingsDraft, [definition.key]: event.target.value })} /></label>
             <button className="text-button" onClick={() => setVisibleJson({ ...visibleJson, [activeTool.id]: !visibleJson[activeTool.id] })}>{visibleJson[activeTool.id] ? 'Hide JSON config' : 'Show JSON config'}</button>
             {visibleJson[activeTool.id] && <label>JSON Configuration<textarea value={activeTool.config} onChange={(event) => setToolDraft(toolDraft.map((item) => item.id === activeTool.id ? { ...item, config: event.target.value } : item))} /></label>}
           </article>

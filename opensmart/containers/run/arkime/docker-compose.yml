@@ -18,6 +18,41 @@ services:
       - ./volumes/data:/data
     restart: "no"
 
+  # Arkime's own docker.sh --add-admin flag (deliberately unused below)
+  # hardcodes the created user's password to the literal string "admin".
+  # This one-off container upserts the admin user via the same addUser.js
+  # the image ships, with a real password from ARKIME_ADMIN_PASSWORD
+  # (override via .env; the fallback below MUST be changed before exposing
+  # this to any untrusted network — see docs/security.md). Retries
+  # addUser.js itself (rather than probing for a specific OpenSearch index
+  # name) until the users template capture's db-init step creates is
+  # ready, so it doesn't depend on Arkime's internal index-naming scheme.
+  init-admin-user:
+    image: ghcr.io/arkime/arkime/arkime:v6-latest
+    hostname: arkime-init-admin
+    entrypoint: ["bash", "-c"]
+    environment:
+      - ARKIME__elasticsearch=http://opensearch:9200
+      - ARKIME_ADMIN_PASSWORD=${ARKIME_ADMIN_PASSWORD:-changeme-arkime-admin}
+    command:
+      - >-
+        cd /opt/arkime/viewer;
+        for i in $(seq 1 60); do
+          /opt/arkime/bin/node addUser.js admin "OpenSMART Admin" "$$ARKIME_ADMIN_PASSWORD" --admin && exit 0;
+          echo "waiting for Arkime users index to be ready ($$i/60)...";
+          sleep 5;
+        done;
+        echo "gave up waiting for the Arkime users index";
+        exit 1
+    volumes:
+      - ./etc/config.ini:/opt/arkime/etc/config.ini
+    networks:
+      - opensmart
+    depends_on:
+      capture:
+        condition: service_started
+    restart: "no"
+
   # Capture sniffs eth0 -> must use host networking (like Zeek/Suricata).
   capture:
     image: ghcr.io/arkime/arkime/arkime:v6-latest

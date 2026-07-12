@@ -4,8 +4,13 @@ docker-socket-proxy sidecar (DOCKER_HOST is set in
 containers/run/opensmart/docker-compose.yml) — this process never touches
 docker.sock directly.
 """
+import json
 import logging
+import os
+import re
 import subprocess
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import PROJECT_ROOT
@@ -15,7 +20,7 @@ logger = logging.getLogger(__name__)
 CONTAINERS_ROOT = PROJECT_ROOT / "containers" / "run"
 
 # Compose projects that actually exist under containers/run/ today.
-KNOWN_CONTAINERS = frozenset({"suricata", "zeek", "arkime", "opensearch", "wireguard", "openvpn", "wazuh"})
+KNOWN_CONTAINERS = frozenset({"suricata", "zeek", "arkime", "opensearch", "wireguard", "openvpn", "wazuh", "nginx"})
 
 # Provisioning X should provision these first (shared infrastructure).
 CONTAINER_DEPENDENCIES: dict[str, list[str]] = {
@@ -30,6 +35,21 @@ CONTAINER_DEPENDENCIES: dict[str, list[str]] = {
 # checking it.
 CONTAINER_PROFILES: dict[str, str] = {
     "openvpn": "manual",
+}
+
+# Compose project -> the actual container_name(s) its services create.
+# Needed because status has to be read per-container via `docker inspect`
+# (the docker-socket-proxy blocks EXEC, so container state is the richest
+# signal available), and several projects run more than one container.
+CONTAINER_SERVICES: dict[str, list[str]] = {
+    "suricata": ["opensmart-suricata"],
+    "zeek": ["opensmart-zeek"],
+    "arkime": ["opensmart-arkime-capture", "opensmart-arkime-viewer"],
+    "opensearch": ["opensmart-opensearch"],
+    "wireguard": ["opensmart-wireguard"],
+    "openvpn": ["opensmart-openvpn"],
+    "wazuh": ["opensmart-wazuh-manager", "opensmart-wazuh-indexer", "opensmart-wazuh-dashboard"],
+    "nginx": ["opensmart-nginx"],
 }
 
 # OpenSMART module name -> required container(s), or None if no container
@@ -65,10 +85,41 @@ _COMPOSE_TIMEOUT_SECONDS = 300
 _WAZUH_CERTS_MARKER = CONTAINERS_ROOT / "wazuh" / "volumes" / "data" / "wazuh_indexer_ssl_certs" / "admin.pem"
 
 
+def _fix_wazuh_certs_permissions() -> None:
+    """The certs-generator one-off container's root maps to a different
+    host UID than the backend (same unprivileged-nesting issue as arkime's
+    init-data-dir and vpn.py's OpenVPN/WireGuard chmod fixes), so its
+    output is created unreadable here (observed: dir mode 700, file mode
+    400/440, various owning UIDs) without this."""
+    try:
+        subprocess.run(
+            ["docker", "run", "--rm", "-v", f"{_WAZUH_CERTS_MARKER.parent}:/certs", "busybox", "chmod", "-R", "a+rX", "/certs"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        logger.warning("wazuh certs permission fix failed: %s", error)
+
+
 def _ensure_wazuh_certs() -> tuple[bool, str]:
-    if _WAZUH_CERTS_MARKER.is_file():
+    try:
+        ready = _WAZUH_CERTS_MARKER.is_file()
+    except PermissionError:
+        # Certs from a prior run, unreadable due to the UID mapping above —
+        # fix permissions in place rather than regenerating.
+        _fix_wazuh_certs_permissions()
+        try:
+            ready = _WAZUH_CERTS_MARKER.is_file()
+        except PermissionError:
+            ready = False
+    if ready:
         return True, ""
-    return _run_compose("wazuh", "--profile", "certs", "run", "--rm", "wazuh-certs-generator")
+    ok, detail = _run_compose("wazuh", "--profile", "certs", "run", "--rm", "wazuh-certs-generator")
+    if ok:
+        _fix_wazuh_certs_permissions()
+    return ok, detail
 
 
 def _compose_path(container: str) -> Path:
@@ -77,12 +128,13 @@ def _compose_path(container: str) -> Path:
     return CONTAINERS_ROOT / container / "docker-compose.yml"
 
 
-def _run_compose(container: str, *args: str) -> tuple[bool, str]:
+def _run_compose(container: str, *args: str, extra_env: dict[str, str] | None = None) -> tuple[bool, str]:
     path = _compose_path(container)
     if not path.is_file():
         return False, f"No docker-compose.yml found for '{container}' at {path}"
     profile = CONTAINER_PROFILES.get(container)
     profile_args = ["--profile", profile] if profile else []
+    env = {**os.environ, **extra_env} if extra_env else None
     try:
         result = subprocess.run(
             ["docker", "compose", "-f", str(path), *profile_args, *args],
@@ -91,6 +143,7 @@ def _run_compose(container: str, *args: str) -> tuple[bool, str]:
             text=True,
             timeout=_COMPOSE_TIMEOUT_SECONDS,
             shell=False,
+            env=env,
         )
     except FileNotFoundError:
         return False, "docker CLI is not available in this environment."
@@ -103,6 +156,37 @@ def _run_compose(container: str, *args: str) -> tuple[bool, str]:
     return True, output[-2000:]
 
 
+def _setting(key: str) -> str:
+    from .database import get_db
+    with get_db() as db:
+        row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return (row["value"] if row else "").strip()
+
+
+def _monitor_interfaces_env() -> dict[str, str]:
+    """CAPTURE_IFACES for the suricata compose file, from the
+    monitor_interfaces setting (comma-separated, chosen in the Wizard).
+    Falls back to eth0 via the compose file's own default when unset."""
+    value = _setting("monitor_interfaces").strip(",")
+    return {"CAPTURE_IFACES": value} if value else {}
+
+
+def _proxy_hostname_env() -> dict[str, str]:
+    """OPENSMART_HOSTNAME for the nginx front-door, from the proxy_hostname
+    setting (chosen in the Wizard's Basics step). Drives the proxy's
+    server_name and the self-signed certificate SAN — the compose file's
+    init-certs one-off re-issues the certificate when it changes. Process
+    environment beats the compose .env file, so this wins over any
+    host-side default when set."""
+    value = _setting("proxy_hostname")
+    # The value is expanded by a shell inside the init-certs one-off (cert
+    # subject/SAN), so only RFC-hostname characters may pass — anything else
+    # is dropped, falling back to the compose default.
+    if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", value or ""):
+        return {}
+    return {"OPENSMART_HOSTNAME": value}
+
+
 def start_container(container: str) -> tuple[bool, str]:
     for dependency in CONTAINER_DEPENDENCIES.get(container, []):
         ok, detail = _run_compose(dependency, "up", "-d")
@@ -112,11 +196,244 @@ def start_container(container: str) -> tuple[bool, str]:
         ok, detail = _ensure_wazuh_certs()
         if not ok:
             return False, f"Certificate generation failed: {detail}"
-    return _run_compose(container, "up", "-d")
+    extra_env = None
+    if container == "suricata":
+        extra_env = _monitor_interfaces_env()
+    elif container == "nginx":
+        extra_env = _proxy_hostname_env()
+    return _run_compose(container, "up", "-d", extra_env=extra_env)
 
 
 def stop_container(container: str) -> tuple[bool, str]:
     return _run_compose(container, "down")
+
+
+def restart_container(container: str) -> tuple[bool, str]:
+    return _run_compose(container, "restart")
+
+
+def _docker_inspect(names: list[str]) -> list[dict]:
+    """Raw `docker inspect` for the given container names. Missing containers
+    are simply absent from the result (inspect exits non-zero for them, but
+    still prints JSON for the ones it found)."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", *names],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    try:
+        return json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+
+
+def _uptime_seconds(started_at: str) -> int | None:
+    # Docker timestamps carry nanosecond precision Python can't parse;
+    # truncate to microseconds.
+    match = re.match(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?\d*(Z|[+-]\d{2}:\d{2})?", started_at)
+    if not match:
+        return None
+    stamp = match.group(1) + ("." + match.group(2) if match.group(2) else "") + "+00:00"
+    try:
+        started = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    return max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+
+
+def container_overview() -> list[dict]:
+    """Per-container detail for every known compose project: running state,
+    image version, uptime, restart count, health, and derived warnings."""
+    overview: list[dict] = []
+    for project in sorted(KNOWN_CONTAINERS):
+        names = CONTAINER_SERVICES.get(project, [])
+        inspected = {c.get("Name", "").lstrip("/"): c for c in _docker_inspect(names)}
+        containers = []
+        for name in names:
+            data = inspected.get(name)
+            if data is None:
+                containers.append({"name": name, "exists": False, "status": "not-created"})
+                continue
+            state = data.get("State", {})
+            status = state.get("Status", "unknown")
+            restart_count = data.get("RestartCount", 0)
+            image = data.get("Config", {}).get("Image", "")
+            uptime = _uptime_seconds(state.get("StartedAt", "")) if status == "running" else None
+            health = (state.get("Health") or {}).get("Status", "")
+            warnings = []
+            if status == "restarting":
+                warnings.append("Container is stuck restarting — check its logs.")
+            if status == "running" and restart_count > 3:
+                warnings.append(f"Restarted {restart_count} times since creation.")
+            if state.get("OOMKilled"):
+                warnings.append("Killed by the kernel OOM killer at least once.")
+            if health and health not in ("healthy", "none"):
+                warnings.append(f"Health check reports: {health}.")
+            if state.get("ExitCode", 0) != 0 and status == "exited":
+                warnings.append(f"Exited with code {state.get('ExitCode')}.")
+            containers.append({
+                "name": name,
+                "exists": True,
+                "status": status,
+                "image": image,
+                "uptime_seconds": uptime,
+                "restart_count": restart_count,
+                "health": health or None,
+                "warnings": warnings,
+            })
+        running = sum(1 for c in containers if c.get("status") == "running")
+        overview.append({
+            "project": project,
+            "containers": containers,
+            "running": running,
+            "total": len(names),
+            "profile": CONTAINER_PROFILES.get(project),
+        })
+    return overview
+
+
+# ── Host network interfaces ───────────────────────────────────────────────────
+#
+# This process runs on a bridge network, so its own netns only has eth0/lo —
+# the host's capture-capable NICs (span/mirror ports) are invisible to it.
+# Enumerate them by running a one-off busybox container with host networking
+# through the docker-socket-proxy (CONTAINERS+POST are allowlisted; EXEC
+# stays blocked — this creates a new container rather than entering one).
+
+_HOST_IFACES_CACHE: tuple[float, list[dict]] = (0.0, [])
+_HOST_IFACES_TTL_SECONDS = 60
+
+
+def host_interfaces() -> list[dict]:
+    global _HOST_IFACES_CACHE
+    cached_at, cached = _HOST_IFACES_CACHE
+    if cached and time.time() - cached_at < _HOST_IFACES_TTL_SECONDS:
+        return cached
+    try:
+        result = subprocess.run(
+            ["docker", "run", "--rm", "--network", "host", "busybox", "ip", "-o", "link", "show"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return cached
+    if result.returncode != 0:
+        logger.warning("host interface enumeration failed: %s", (result.stderr or "")[:500])
+        return cached
+    interfaces: list[dict] = []
+    # busybox `ip -o link show` lines: "2: eth0: <BROADCAST,MULTICAST,UP,...> mtu 1300 ..."
+    for line in result.stdout.splitlines():
+        match = re.match(r"\d+:\s+([^:@]+)(?:@\S+)?:\s+<([^>]*)>\s+mtu\s+(\d+)", line)
+        if not match:
+            continue
+        name, flags, mtu = match.group(1).strip(), match.group(2).split(","), int(match.group(3))
+        if name == "lo":
+            continue
+        interfaces.append({
+            "name": name,
+            "up": "UP" in flags,
+            "mtu": mtu,
+            # veth/br/docker interfaces are usually container plumbing, not
+            # span/mirror candidates — flagged so the UI can de-emphasize them.
+            "virtual": bool(re.match(r"^(veth|br-|docker|virbr|tap|tun|wg)", name)),
+        })
+    if interfaces:
+        _HOST_IFACES_CACHE = (time.time(), interfaces)
+    return interfaces
+
+
+# ── Arkime admin password sync ────────────────────────────────────────────────
+
+_ARKIME_IMAGE = "ghcr.io/arkime/arkime/arkime:v6-latest"
+_ARKIME_CONFIG = CONTAINERS_ROOT / "arkime" / "etc" / "config.ini"
+
+
+def sync_arkime_password(password: str, *, username: str = "admin") -> tuple[bool, str]:
+    """Set Arkime's admin user password via a one-off container running the
+    image's own addUser.js (upsert — updates the password when the user
+    exists). Used to keep the Arkime tool credential in step with the
+    OpenSMART admin password. Best-effort: callers treat failure as
+    non-fatal (Arkime may not be provisioned/running yet).
+
+    The password is passed through the environment, never interpolated into
+    the shell command, so it can't break quoting or inject anything.
+    """
+    if not _ARKIME_CONFIG.is_file():
+        return False, "Arkime is not provisioned (no config.ini)."
+    script = 'cd /opt/arkime/viewer && exec /opt/arkime/bin/node addUser.js "$0" "OpenSMART Admin" "$ARKIME_NEW_PASSWORD" --admin'
+    try:
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "--network", "opensmart",
+                "-e", "ARKIME__elasticsearch=http://opensearch:9200",
+                "-e", f"ARKIME_NEW_PASSWORD={password}",
+                "-v", f"{_ARKIME_CONFIG}:/opt/arkime/etc/config.ini",
+                "--entrypoint", "bash",
+                _ARKIME_IMAGE, "-c", script, username,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            shell=False,
+        )
+    except FileNotFoundError:
+        return False, "docker CLI is not available in this environment."
+    except subprocess.TimeoutExpired:
+        return False, "Timed out setting the Arkime password."
+    output = (result.stderr or result.stdout or "").strip()
+    if result.returncode != 0:
+        logger.warning("arkime password sync failed: %s", output[:1000])
+        return False, output[-1000:]
+    return True, output[-1000:]
+
+
+# ── VPN summary (read-only, from bind-mounted files) ──────────────────────────
+#
+# The docker-socket-proxy blocks EXEC on purpose, so peer/cert state is read
+# straight from the files the VPN containers write into their bind-mounted
+# ./volumes/data directories — visible to this process because the whole
+# project tree is mounted at host-parity paths.
+
+_WIREGUARD_CONF = CONTAINERS_ROOT / "wireguard" / "volumes" / "data" / "wg0.conf"
+_OPENVPN_INDEX = CONTAINERS_ROOT / "openvpn" / "volumes" / "data" / "pki" / "index.txt"
+
+
+def vpn_summary() -> dict:
+    wireguard_peers = 0
+    if _WIREGUARD_CONF.is_file():
+        try:
+            wireguard_peers = _WIREGUARD_CONF.read_text().count("[Peer]")
+        except OSError:
+            pass
+    openvpn_valid = 0
+    openvpn_revoked = 0
+    if _OPENVPN_INDEX.is_file():
+        try:
+            for line in _OPENVPN_INDEX.read_text().splitlines():
+                # easy-rsa index.txt: V=valid, R=revoked, E=expired; first
+                # valid entry is the server cert itself, not a user.
+                if line.startswith("V"):
+                    openvpn_valid += 1
+                elif line.startswith("R"):
+                    openvpn_revoked += 1
+        except OSError:
+            pass
+    return {
+        "wireguard": {"configured": _WIREGUARD_CONF.is_file(), "peers": wireguard_peers},
+        "openvpn": {
+            "configured": _OPENVPN_INDEX.is_file(),
+            # Exclude the server certificate from the user count.
+            "valid_certs": max(0, openvpn_valid - 1) if openvpn_valid else 0,
+            "revoked_certs": openvpn_revoked,
+        },
+    }
 
 
 def container_status(container: str) -> dict:

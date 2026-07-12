@@ -49,7 +49,31 @@ On backend startup, `init_db()` creates the schema and default records. If no ad
 
 ## Placeholder Integrations
 
-The current tool integrations are placeholders. `GET /api/status` calls `opensmart/backend/app/scripts/module_status.sh`, which returns demo JSON. Tool entries use admin-configured internal URLs and load iframe content only after a tool is selected. Future production integrations should keep shell scripts thin and move complex logic into Python modules.
+Placeholder pages remain only for Honeypot, LXC Manager, Graylog and NTOP. Everything else on the Status page shows real container-derived state (see "Status Overview" below). Tool entries use admin-configured internal URLs and load iframe content only after a tool is selected; Wazuh and Arkime get a working local URL prefilled by the Wizard.
+
+## Status Overview (real container state)
+
+`GET /api/provisioning/overview` drives the Status page. For every compose project under `opensmart/containers/run/` (`provisioning.KNOWN_CONTAINERS`, including multi-container projects like arkime and wazuh via `CONTAINER_SERVICES`), `container_overview()` runs `docker inspect` through the socket proxy — EXEC is deliberately blocked there, so inspect output is the richest signal available — and derives per container: status, image tag, uptime (parsed from `State.StartedAt`), restart count, health-check state, and a warnings list (stuck restarting, restart_count > 3, OOM-killed, unhealthy, non-zero exit code). The Status page renders module/tool health from their backing projects (`frontend/src/pages/backing.ts`), lists every provisioned container with expandable warnings, and offers a per-project Restart action (`POST /api/provisioning/restart`, audited). A VPN summary (WireGuard peers from `wg0.conf`, OpenVPN valid/revoked certs from easy-rsa `index.txt`) rides along in the same response.
+
+## Tools Front-Door Proxy
+
+`opensmart/containers/run/nginx/` is a reverse proxy that serves OpenSMART and the external tools from a **single origin** on one port (default `:8080`), so the Tools page can embed them in iframes. It routes `/` → `opensmart:8000`, `/arkime/` → the Arkime viewer, `/wazuh/` → the Wazuh dashboard (HTTPS upstream, self-signed cert accepted), and `/proxmox/` `/opnsense/` → external hosts from `PROXMOX_UPSTREAM`/`OPNSENSE_UPSTREAM`. All upstreams are referenced through variables plus a `resolver`, so nginx starts and keeps serving whatever is up even when a tool is stopped or an address is wrong (that one alias returns 502).
+
+Why this fixes iframe rendering: self-hosted admin UIs deliberately block framing (Arkime sends `X-Frame-Options: DENY`; Wazuh/Proxmox send `SAMEORIGIN` plus a self-signed cert the browser won't accept inside a frame). Served same-origin through this proxy and with `X-Frame-Options`/`Content-Security-Policy` stripped on the tool locations, they embed. Arkime (`webBasePath=/arkime/`) and Wazuh (`server.basePath=/wazuh` + `rewriteBasePath`) are configured to emit correct links under their prefix; Proxmox and OPNsense have no native base-path support, so their aliases are best-effort (prefix-stripped pass-through) and direct url:port mode stays the reliable option for them.
+
+In the UI each tool can use **alias** mode (relative path like `/arkime/`, served by this proxy → embeds) or **direct URL** mode (absolute `http://host:port` → opens in a new tab if the tool blocks framing). A relative tool URL is treated as same-origin/embeddable by `AppShell.renderTool`. `opensmart.sh` brings the proxy up on install/start/recreate (`_start_front_proxy`, best-effort — it never fails the core app), and nginx is a `KNOWN_CONTAINERS` project so Status shows it and it can be restarted.
+
+## Tool Credential Sync
+
+Arkime is the one tool whose admin account OpenSMART provisions. When an OpenSMART **admin** changes their password (`POST /api/account/password`), `provisioning.sync_arkime_password()` re-runs the Arkime image's `addUser.js` (upsert) in a one-off container to set Arkime's admin password to match — the password is passed via the environment, never interpolated into a shell string. It runs in a background thread so a slow or failed sync (e.g. Arkime not provisioned) never delays or fails the password change. Other tools manage their own credentials.
+
+## Themes
+
+Three UI themes — Dark (default), Classic (light) and Matrix — are implemented by tokenizing every color literal in `frontend/src/styles.css` into CSS variables (`--c-<slug>`) with three generated palette blocks (`:root`, `:root[data-theme="classic"]`, `:root[data-theme="matrix"]`). The Classic palette is a lightness inversion of the dark palette; Matrix maps cool hues to green and adds a monospace font. Selection lives in Configuration → Platform Parameters, persists in the `theme` setting, and is exposed pre-login through `GET /api/settings/public` so the login page renders in the right theme; `App.tsx` stamps `data-theme` on the document root.
+
+## VPN Module
+
+`backend/app/vpn.py` manages OpenVPN/WireGuard server instances as compose projects it generates under `opensmart/containers/run/vpn/<name>/`, registered in the `vpn_instances` table. Each instance publishes its own UDP host port and gets a unique `10.<n>.0.0/24` subnet. Because the socket proxy blocks EXEC, all key/cert crypto runs in one-off containers (`docker run --rm`, the same pattern as `host_interfaces()`): easy-rsa PKI + `make-client.sh` for OpenVPN, `wg genkey` (returned on stdout) for WireGuard. Everything else is direct file work on the bind-mounted `volumes/data/` — note the unprivileged-UID-mapping consequence: one-off container root is a different host UID than the backend, so OpenVPN one-off runs end with `chmod -R a+rwX /data` and WireGuard key files are written by the backend itself (the host path above the mount stays root-only). User lifecycle: create (client config downloadable through the API), expiry visible from `index.txt`, revoke (CRL regen for OpenVPN — re-read per handshake, no restart; peer-block removal + restart for WireGuard). OpenVPN instances can additionally authenticate against LDAP/Samba AD (`auth_mode=ldap`, openvpn-auth-ldap plugin — requires the image rebuilt via `opensmart.sh`). OpenVPN needs `/dev/net/tun` on the Docker host; without it, start fails with a clear daemon error surfaced in the UI. All routes are admin-only and audited (`/api/vpn/*`).
 
 ## Deployment
 
@@ -333,24 +357,44 @@ mount had to anchor at the repo root, not just `opensmart/`, since
 - After the bootstrap admin's forced password change, `App.tsx` renders
   `WizardPage.tsx` instead of the normal app shell while
   `wizard_completed !== 'true'` and the logged-in user is an admin.
-- Five steps: mandatory version-acknowledgment, optional logo upload,
-  enable OpenSMART modules (reuses `OpenSmartConfigPage.tsx` as-is), enable
-  Tools (reuses `ToolsConfigPage.tsx` as-is), and Finish — which attempts
-  real container provisioning for every enabled module/tool and reports a
-  per-item result. The same `WizardPage` is also reachable manually from
-  `Settings > Wizard` for re-configuration later.
-- No real "check for updates"/auto-update mechanism exists yet — the
-  Update step is an honest acknowledgment gate (link to the repo, run
-  `./opensmart.sh install`/`--recreate`), not a fabricated auto-updater.
+- Four steps:
+  1. **Basics** — application name and optional logo (the running
+     version/build is shown with a pointer to `./opensmart.sh install`
+     for updates; there is still no auto-updater).
+  2. **Network** — real host NICs enumerated via
+     `GET /api/provisioning/host-interfaces` (a one-off busybox container
+     on the host network, 60 s cached; physical interfaces listed first,
+     virtual ones behind a toggle, manual comma-separated entry as a
+     fallback). The selection persists as the `monitor_interfaces`
+     setting and is injected into the Suricata compose file as
+     `CAPTURE_IFACES` on start, producing one `-i <iface>` per interface.
+  3. **Modules & Tools** — card toggles with recommended defaults
+     pre-selected on a fresh install (Suricata/Zeek traffic monitoring,
+     Suricata IDS with `eve_source=native`, OpenVPN access, embedded
+     Wazuh/Arkime/Proxmox). Enabling a Wazuh-backed module auto-enables
+     the Wazuh tool (and disabling Wazuh auto-disables its dependents),
+     with visible notices; a VPN type selector chooses OpenVPN (default)
+     or WireGuard.
+  4. **Provision** — a sequential runner with three phases
+     (Configuration, Services, Finalize), a progress bar, per-service
+     ok/warning/error rows including container-level failure details,
+     and a final summary. Wazuh/Arkime iframe URLs are prefilled when
+     empty. `wizard_completed` flips to `true` only in the Finalize
+     phase, and the app shell is entered explicitly afterwards so the
+     summary stays visible.
 
 ## Network IDS: Native vs. External eve.json
 
 - The Network IDS module's config gained an `eve_source` field
   (`external` [default, preserves existing installs] / `native`).
-- In `native` mode, `network_ids.ids_config()` derives the eve.json path
-  automatically from the bundled Suricata container's known output location
+- Path resolution is centralized in `eve_ingest.resolve_eve_json_path()`:
+  `native` returns the bundled Suricata container's known output location
   (`NATIVE_SURICATA_EVE_PATH`, computed from `opensmart/containers/run/suricata`'s
-  bind mount) instead of a manually-typed path, mirroring the existing
-  Network Traffic Monitoring log-source toggle. The OpenSMART Config UI
-  shows a live Start/Stop/status control for the Suricata container in this
-  mode, backed by the provisioning engine above.
+  bind mount), anything else returns the manually-configured
+  `eve_json_path`. Both the API-facing config (`network_ids.ids_config()`)
+  and the ingestion engine (`eve_ingest.shared_config()`) call it — they
+  previously resolved the path independently, and the ingestion side
+  ignored `eve_source` entirely, so native mode looked configured in the
+  UI while ingesting nothing. The OpenSMART Config UI shows a live
+  Start/Stop/status control for the Suricata container in native mode,
+  backed by the provisioning engine above.

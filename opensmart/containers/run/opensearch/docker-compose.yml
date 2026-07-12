@@ -1,14 +1,37 @@
 services:
+  # OpenSearch runs as a non-root image user (uid 1000), but Docker creates
+  # the ./volumes/data bind-mount point as root:root — so the process can't
+  # create /data/nodes and dies with AccessDeniedException. This is the same
+  # unprivileged-UID-mapping problem arkime/wazuh already work around; on a
+  # host where the Docker daemon itself runs inside an unprivileged LXC,
+  # "root" ownership of the mount point isn't writable by the container
+  # user, and a host UID-map shift (e.g. after reconfiguring the LXC) can
+  # even revoke access to a dir that used to work. This one-off normalizes
+  # /data's permissions before opensearch starts. chmod is non-destructive:
+  # existing indices are preserved, only their permissions are widened.
+  init-data-dir:
+    image: busybox
+    command: ["sh", "-c", "chmod -R 0777 /data"]
+    volumes:
+      - ./volumes/data:/data
+    restart: "no"
+
   opensearch:
     image: opensearchproject/opensearch:2.18.0
     container_name: opensmart-opensearch
     hostname: opensearch
+    depends_on:
+      init-data-dir:
+        condition: service_completed_successfully
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
       - DISABLE_INSTALL_DEMO_CONFIG=true
       - bootstrap.memory_lock=false
-      - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g"
+      # Overridable per host (env or a .env file next to this compose file):
+      # small hosts should lower this — a 2g heap on a 4g host running the
+      # full stack OOM-loops the container.
+      - "OPENSEARCH_JAVA_OPTS=${OPENSEARCH_JAVA_OPTS:--Xms2g -Xmx2g}"
       - path.data=/data
       - http.compression=false
     ulimits:

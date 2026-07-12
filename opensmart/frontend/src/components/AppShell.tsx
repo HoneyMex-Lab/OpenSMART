@@ -5,6 +5,7 @@ import AccountPage from '../pages/AccountPage';
 import AuditPage from '../pages/AuditPage';
 import SettingsPage from '../pages/SettingsPage';
 import NetworkIdsPage from '../pages/NetworkIdsPage';
+import VpnPage from '../pages/VpnPage';
 import NetworkTrafficPage from '../pages/NetworkTrafficPage';
 import StatusPage from '../pages/StatusPage';
 import SummaryPage from '../pages/SummaryPage';
@@ -51,17 +52,42 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
       : pageTitles[page] || page.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' ');
 
   function renderTool(tool: ToolConfig) {
-    const title = toolDefinitions[tool.name]?.title || tool.name;
+    const definition = toolDefinitions[tool.name];
+    const title = definition?.title || tool.name;
     if (!tool.enabled) return <StatusMessage title={title} status="Disabled" detail="Enable this tool in Configuration > Tools Config before loading its workspace." />;
     const url = settings[toolUrlKeys[tool.name] || ''] || '';
     if (!url) return <StatusMessage title={title} status="Warning" detail="This tool is enabled but no internal URL is configured. Add the URL in Configuration > Tools Config." />;
-    return <section className="tool-view"><div className="section-actions"><h2>{title}</h2><p className="muted">{url}</p></div><iframe title={title} src={url} className="tool-iframe" /></section>;
+    const openLink = <a className="tool-open-btn" href={url} target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>;
+    // A relative URL ("/arkime/") is served by OpenSMART's own front-door
+    // proxy, i.e. same origin as this page — so it always embeds (the proxy
+    // strips the tool's framing headers). Only absolute cross-origin URLs
+    // for tools flagged embeddable:false fall back to the launch card.
+    const isAlias = url.startsWith('/');
+    if (!isAlias && definition?.embeddable === false) {
+      return (
+        <section className="tool-view">
+          <div className="section-actions"><h2>{title}</h2><p className="muted">{url}</p></div>
+          <div className="card hero-card tool-launch-card">
+            {definition.logo && <img src={definition.logo} alt="" className="tool-launch-logo" />}
+            <h2>{title}</h2>
+            <p className="muted">
+              This tool blocks being embedded inside another page (a standard security
+              protection), so it opens in a new browser tab. If it uses a self-signed
+              certificate, accept the certificate warning there once.
+            </p>
+            {openLink}
+          </div>
+        </section>
+      );
+    }
+    return <section className="tool-view"><div className="section-actions"><h2>{title}</h2><div className="tool-actions"><span className="muted">{url}</span>{openLink}</div></div><iframe title={title} src={url} className="tool-iframe" /></section>;
   }
 
   function renderModule(module: OpenSmartModule) {
     if (!module.enabled) return <StatusMessage title={module.name} status="Disabled" detail="Enable and configure this OpenSMART module in Configuration > OpenSMART Config." />;
     if (module.name === 'Network Traffic Monitoring') return <NetworkTrafficPage settings={settings} />;
     if (module.name === 'Network IDS') return <NetworkIdsPage />;
+    if (module.name === 'Access VPN') return <VpnPage />;
     const logo = modulesLogo(module.name);
     return <section className="card hero-card"><div className="detail-heading"><img src={logo} alt="" /><div><p className="status-label"><i className="status-dot enabled" /> enabled</p><h2>{module.name}</h2><p className="muted">Placeholder content for this OpenSMART module. Future releases can render live metrics, alerts, charts, and drill-down tables here.</p></div></div></section>;
   }

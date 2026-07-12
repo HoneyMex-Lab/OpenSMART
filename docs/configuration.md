@@ -18,6 +18,18 @@ Example values are in `opensmart/backend/.env.example`.
 
 The app reads these values directly from the environment. `.env` files are ignored by git.
 
+### Front-door proxy (`opensmart/containers/run/nginx/.env`)
+
+The tools front-door proxy (see `docs/architecture.md` → "Tools Front-Door Proxy") reads two optional variables from a `.env` next to its compose file. They only affect the best-effort Proxmox/OPNsense aliases; Arkime/Wazuh use fixed internal upstreams.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PROXMOX_UPSTREAM` | `https://proxmox.invalid` | External Proxmox address the `/proxmox/` alias proxies to, e.g. `https://10.0.0.10:8006`. Unset → that alias returns 502. |
+| `OPNSENSE_UPSTREAM` | `https://opnsense.invalid` | External OPNsense address for the `/opnsense/` alias. Unset → 502. |
+| `OPENSMART_PROXY_BIND` | `0.0.0.0` | Host address the proxy's `:8080` port binds to. |
+
+Host-specific tuning (`.env` files next to the relevant compose, all optional): `OPENSEARCH_JAVA_OPTS`, `WAZUH_INDEXER_JAVA_OPTS`, `WAZUH_MEMLOCK_LIMIT`, `WAZUH_MANAGER_NOFILE_LIMIT`, `WAZUH_INDEXER_NOFILE_LIMIT`, `ARKIME_ADMIN_PASSWORD`.
+
 ## SQLite Runtime Settings
 
 Runtime settings are stored in the `settings` table and are editable by admins from `Configuration > WebConsole Config`.
@@ -38,6 +50,8 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | `lockout_minutes` | `15` | Lockout duration after too many failed attempts. |
 | `password_policy` | `strict` | Password complexity profile: `strict` / `moderate` / `low` / `disabled`. See `docs/security.md`. |
 | `wizard_completed` | `true` (`false` only on a genuinely fresh install) | Whether the first-run Wizard has been completed. Gates the Wizard redirect in `App.tsx`. |
+| `theme` | `dark` | UI theme: `dark` / `classic` (light) / `matrix`. Exposed pre-login so the login page renders themed. |
+| `monitor_interfaces` | empty | Comma-separated host NICs to capture on, chosen in the Wizard's Network step. Injected into Suricata as `CAPTURE_IFACES` on start (falls back to `eth0` when unset). |
 | `tool_base_path` | (none — set to a real path on the host) | Placeholder path for future local tool integrations. |
 | `tool_url_opnsense` | empty | Internal iframe URL for OPNsense. |
 | `tool_url_ntop` | empty | Internal iframe URL for NTOP. |
@@ -57,10 +71,15 @@ Logo uploads are read by the browser and saved as data URLs in SQLite settings. 
 `Settings > Tools` manages internal tools:
 
 - enable/disable state
-- internal iframe URL
+- access mode + URL (see below)
 - JSON configuration text
 
-A tool status is derived automatically. Disabled tools show instructions instead of an iframe. Enabled tools without a URL show a warning message. Enabled tools with a URL load the iframe.
+**Access mode** — tools the front-door proxy routes (Arkime, Wazuh, Proxmox, OPNsense) offer two modes:
+
+- **Alias** — the URL is a same-origin path (`/arkime/`, `/wazuh/`, ...) served by the front-door proxy. The tool embeds in the Tools iframe (the proxy strips framing headers). Requires reaching OpenSMART through the proxy port (default `:8080`) so the relative path resolves. This is the Wizard default for locally-provisioned tools.
+- **Direct URL** — an absolute `http://host:port`. Tools that block framing then open in a new tab instead of embedding.
+
+A tool status is derived automatically. Disabled tools show instructions instead of an iframe. Enabled tools without a URL show a warning. Enabled tools with an alias URL embed; with a direct URL they embed if allowed or offer an "Open in new tab" launch card otherwise.
 
 ## OpenSMART Config
 
@@ -77,7 +96,7 @@ Network Traffic Monitoring configuration includes source selection, shared Suric
 
 ## First-Run Wizard
 
-Shown automatically after the bootstrap admin's forced password change on a fresh install (`wizard_completed` setting is `false`); reachable manually afterward from `Settings > Wizard`. Five steps: update acknowledgment, optional logo upload, enable OpenSMART modules, enable Tools, and Finish (attempts to provision containers for whatever got enabled, reporting a per-item result). See `docs/technical-overview.md` for the provisioning flow.
+Shown automatically after the bootstrap admin's forced password change on a fresh install (`wizard_completed` setting is `false`); reachable manually afterward from `Settings > Wizard`. Four steps: Basics (app name + optional logo), Network (pick the host NICs to monitor — persisted as `monitor_interfaces`), Modules & Tools (recommended defaults pre-selected; enabling a Wazuh-backed module auto-enables the Wazuh tool with a visible notice; VPN type selector), and Provision (sequential runner with phases, a progress bar, per-service results and a final info/warning/error summary). See `docs/architecture.md` ("First-Run Wizard") for details.
 
 ## Notifications
 

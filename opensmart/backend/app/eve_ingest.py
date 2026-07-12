@@ -10,11 +10,35 @@ from pathlib import Path
 from collections import Counter
 from typing import Any
 
+from .config import PROJECT_ROOT
 from .database import get_db, get_network_ids_db, get_network_traffic_db, now_iso
 
 logger = logging.getLogger(__name__)
 
 INGEST_LOCK = threading.Lock()
+
+# Where the bundled ("native") Suricata container writes its eve.json —
+# inside the project tree, so this process can read it directly through the
+# host-parity bind mount. Defined here (not network_ids.py, which imports
+# this module) so BOTH the API-facing config in network_ids.ids_config()
+# and the ingestion engine's shared_config() below resolve the native
+# source identically. They previously didn't: ids_config() resolved
+# native → this path, but shared_config() read the raw (empty)
+# eve_json_path key, so with eve_source=native the UI showed
+# "configured/readable" while every actual ingest run skipped with
+# "path not configured" — the exact default-install pipeline failure
+# found live on the reference host.
+NATIVE_SURICATA_EVE_PATH = PROJECT_ROOT / "containers" / "run" / "suricata" / "volumes" / "data" / "log" / "eve.json"
+
+
+def resolve_eve_json_path(ids_module_config: dict[str, Any]) -> str:
+    """Resolve the effective eve.json path from the raw Network IDS module
+    config: the native Suricata container's path when eve_source=native,
+    the user-provided external path otherwise."""
+    source = str(ids_module_config.get("eve_source", "external")).strip().lower()
+    if source == "native":
+        return str(NATIVE_SURICATA_EVE_PATH)
+    return str(ids_module_config.get("eve_json_path", ""))
 _ALERT_NEEDLE = '"event_type":"alert"'
 EVENT_TYPE_RE = re.compile(r'"event_type"\s*:\s*"([^"]+)"')
 
@@ -97,7 +121,7 @@ def shared_config() -> dict[str, Any]:
     network_source = str(network.get("log_source", "eve_json") or "eve_json")
     network_uses_eve = network_source == "eve_json"
     return {
-        "eve_json_path": str(ids.get("eve_json_path", "")),
+        "eve_json_path": resolve_eve_json_path(ids),
         "summary_refresh_minutes": int(ids.get("summary_refresh_minutes", 5) or 5),
         "initial_ingestion_gb": _float(ids.get("initial_ingestion_gb", 2), 2),
         "ids_enabled": ids_enabled,

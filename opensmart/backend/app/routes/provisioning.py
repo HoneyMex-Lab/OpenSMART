@@ -48,3 +48,24 @@ def stop(payload: ProvisionRequest, admin: Annotated[dict, Depends(require_admin
 def container_status(container: str, _: Annotated[dict, Depends(require_admin_read)]) -> dict:
     _require_known_container(container)
     return provisioning.container_status(container)
+
+
+@router.get("/overview")
+def overview(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    return {"projects": provisioning.container_overview(), "vpn": provisioning.vpn_summary()}
+
+
+@router.get("/host-interfaces")
+def host_interfaces(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    return {"interfaces": provisioning.host_interfaces()}
+
+
+@router.post("/restart")
+def restart(payload: ProvisionRequest, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    if payload.kind != "container":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only individual containers can be restarted directly")
+    _require_known_container(payload.name)
+    ok, detail = provisioning.restart_container(payload.name)
+    result = {"name": payload.name, "ok": ok, "detail": detail}
+    write_audit_event("provisioning_restart", admin["id"], admin["username"], f"container:{payload.name}", "", detail[:500])
+    return result

@@ -8,7 +8,7 @@ LABEL org.opensmart.image="opensmart/openvpn"
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openvpn easy-rsa openssl \
+ && apt-get install -y --no-install-recommends openvpn easy-rsa openssl openvpn-auth-ldap \
  && rm -rf /var/lib/apt/lists/*
 
 COPY gen-pki.sh server.conf.tmpl client.ovpn.tmpl make-client.sh /opt/opensmart/

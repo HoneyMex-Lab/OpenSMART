@@ -101,16 +101,20 @@ Container provisioning (`app/provisioning.py`) follows the same rule: it shells 
 
 ## Container Provisioning
 
-The app can start/stop the sibling tool containers (Suricata, Zeek, Arkime, OpenSearch, WireGuard, OpenVPN) that back enabled modules/tools, without the app container ever mounting `docker.sock` directly:
+The app can start/stop/restart the sibling tool containers (Suricata, Zeek, Arkime, OpenSearch, WireGuard, OpenVPN, Wazuh) that back enabled modules/tools, without the app container ever mounting `docker.sock` directly:
 
 - A `docker-socket-proxy` sidecar container holds the real socket (mounted read-only into *that* container only) and exposes a filtered HTTP API. The app talks to it via `DOCKER_HOST`.
 - The proxy's allowlist is explicit and narrow: `CONTAINERS`, `NETWORKS`, `IMAGES`, `VOLUMES`, `POST`. Everything else is off, including `EXEC` (no shelling into other running containers), `BUILD`, `SWARM`, `SECRETS`, and `SYSTEM`.
 - Every provisioning request is admin-only, CSRF-protected, and audit-logged.
 - See `docs/technical-overview.md` for a diagram of the full request path and a fuller discussion of the threat model (what this design does and doesn't protect against).
 
+The VPN module (`app/vpn.py`) extends the same model: instance and user names are validated against strict patterns (`^[a-z0-9][a-z0-9-]{0,29}$` / `^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$`) before ever reaching a path or a command, key/cert crypto runs in one-off containers through the same proxy (EXEC stays blocked), and every mutation is admin-only, CSRF-protected and audit-logged (`vpn_instance_*`, `vpn_user_*`). Two deliberate tradeoffs to know about: OpenVPN PKI directories are made world-readable-within-the-mount (`chmod -R a+rwX`) because the one-off containers' root maps to a different host UID than the backend (the host path above the mount stays root-only), and WireGuard's `wg0.conf` — which embeds the server private key — is mode 0644 for the same reason. Client configs contain private keys; the download endpoint requires admin + CSRF and each download is audited.
+
 ## Embedded Tool URLs
 
 Tool URLs are configured by admins and loaded into iframes only after a user clicks a tool card. Only configure trusted internal URLs. Browser framing can fail if the target tool sends restrictive `X-Frame-Options` or `Content-Security-Policy` headers.
+
+The tools front-door proxy (`opensmart/containers/run/nginx/`, see `docs/architecture.md`) deliberately strips `X-Frame-Options` and `Content-Security-Policy` from the proxied tool responses so those UIs can embed in the OpenSMART iframe. That removes the tools' own clickjacking protection for the proxied path — acceptable here because the proxy serves them same-origin behind OpenSMART's own authenticated console, but it is a conscious trade-off: only expose the proxy port to trusted networks, and prefer direct url:port mode (new-tab, headers intact) for tools reached over untrusted paths. The proxy talks to the Wazuh/Proxmox/OPNsense HTTPS upstreams with certificate verification disabled (internal, self-signed) — a same-network integration convenience, not a substitute for real TLS trust to those hosts.
 
 ## Audit Visibility
 

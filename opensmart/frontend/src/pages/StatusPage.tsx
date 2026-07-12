@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { AlertTriangle, ChevronDown, ChevronRight, RefreshCw, RotateCcw } from 'lucide-react';
 import { api } from '../api';
-import type { DataInfo, ResourcePoint, ResourceStatus, SchemaCheckResult, StatusItem } from '../types';
+import type { ContainerDetail, DataInfo, ProjectOverview, ProvisioningOverview, ResourcePoint, ResourceStatus, SchemaCheckResult, StatusItem } from '../types';
+import { MODULE_BACKING, NOT_IMPLEMENTED, PROJECT_LABELS, TOOL_BACKING } from './backing';
 
 const TIMEFRAMES = ['1h', '8h', '1d', '3d', '7d', '1w', '1m'];
 
@@ -13,6 +14,7 @@ const TOOL_NAMES = new Set(['OPNsense', 'NTOP', 'Arkime', 'Proxmox', 'Wazuh', 'G
 
 export default function StatusPage() {
   const [items, setItems] = useState<StatusItem[]>([]);
+  const [overview, setOverview] = useState<ProvisioningOverview | null>(null);
   const [resources, setResources] = useState<ResourceStatus | null>(null);
   const [history, setHistory] = useState<ResourcePoint[]>([]);
   const [timeframe, setTimeframe] = useState('1h');
@@ -34,12 +36,14 @@ export default function StatusPage() {
   async function runCheck() {
     setChecking(true);
     try {
-      const [statusResult, schemaResult] = await Promise.all([
+      const [statusResult, schemaResult, overviewResult] = await Promise.all([
         api.status().catch(() => ({ modules: [] as StatusItem[] })),
         api.schemaCheck().catch(() => null),
+        api.provisionOverview().catch(() => null),
       ]);
       setItems(statusResult.modules);
       setSchema(schemaResult);
+      setOverview(overviewResult);
     } finally {
       setChecking(false);
     }
@@ -57,6 +61,7 @@ export default function StatusPage() {
 
   const modules = items.filter((i) => MODULE_NAMES.has(i.name));
   const tools = items.filter((i) => TOOL_NAMES.has(i.name));
+  const projectMap = new Map((overview?.projects ?? []).map((p) => [p.project, p]));
 
   return (
     <section className="status-page">
@@ -66,7 +71,7 @@ export default function StatusPage() {
         <div className="status-header">
           <div>
             <h2>Module &amp; Tool Status</h2>
-            <p className="muted">Health of connected tools and OpenSMART modules.</p>
+            <p className="muted">Live health from the containers backing each module and tool.</p>
           </div>
           <button className="ids-run-btn" onClick={runCheck} disabled={checking}>
             <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} />
@@ -88,30 +93,29 @@ export default function StatusPage() {
         )}
       </div>
 
-      <StatusCard title="OpenSMART Modules" items={modules} checking={checking} />
-      <StatusCard title="Tools" items={tools} checking={checking} />
+      <BackedStatusCard title="OpenSMART Modules" items={modules} backing={MODULE_BACKING} projectMap={projectMap} overview={overview} checking={checking} />
+      <BackedStatusCard title="Tools" items={tools} backing={TOOL_BACKING} projectMap={projectMap} overview={overview} checking={checking} />
+
+      {overview && <ContainersPanel overview={overview} onChanged={runCheck} />}
 
       {dataInfo && <DataRetentionPanel info={dataInfo} />}
     </section>
   );
 }
 
-function StatusCard({ title, items, checking }: { title: string; items: StatusItem[]; checking: boolean }) {
-  return <div className="card">
-    <h2>{title}</h2>
-    <p className="muted">{title === 'Tools' ? 'Integrated external services.' : 'OpenSMART platform modules.'}</p>
-        <table className="status-table">
-          <thead>
-            <tr><th>Component</th><th>Status</th><th>Health</th><th>Details</th></tr>
-          </thead>
-          <tbody>
-            {items.length === 0 && !checking
-              ? <tr><td colSpan={4} className="muted" style={{ padding: '10px 12px' }}>No data — click Run Check.</td></tr>
-              : items.map((item) => <StatusRow key={item.name} item={item} />)
-            }
-          </tbody>
-        </table>
-  </div>;
+function formatUptime(seconds: number): string {
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function imageVersion(image?: string): string {
+  if (!image) return '—';
+  const tag = image.includes(':') ? image.slice(image.lastIndexOf(':') + 1) : 'latest';
+  return tag;
 }
 
 function statusBadge(status: string): { label: string; cls: string } {
@@ -125,15 +129,181 @@ function statusBadge(status: string): { label: string; cls: string } {
   }
 }
 
-function StatusRow({ item }: { item: StatusItem }) {
-  const health = statusBadge(item.status);
+function containerHealth(projects: ProjectOverview[]): { label: string; cls: string; detail: string } {
+  const total = projects.reduce((acc, p) => acc + p.total, 0);
+  const running = projects.reduce((acc, p) => acc + p.running, 0);
+  const anyCreated = projects.some((p) => p.containers.some((c) => c.exists));
+  if (!anyCreated) return { label: 'Not Provisioned', cls: 'muted', detail: 'Containers not created yet — provision from Configuration or the Wizard.' };
+  if (running === total) return { label: 'Running', cls: 'ok', detail: `${running}/${total} containers running` };
+  if (running > 0) return { label: 'Degraded', cls: 'warning', detail: `${running}/${total} containers running` };
+  return { label: 'Stopped', cls: 'danger', detail: `0/${total} containers running` };
+}
+
+function BackedStatusCard({ title, items, backing, projectMap, overview, checking }: {
+  title: string;
+  items: StatusItem[];
+  backing: Record<string, string[]>;
+  projectMap: Map<string, ProjectOverview>;
+  overview: ProvisioningOverview | null;
+  checking: boolean;
+}) {
+  return <div className="card">
+    <h2>{title}</h2>
+    <p className="muted">{title === 'Tools' ? 'Integrated services and their containers.' : 'OpenSMART platform modules.'}</p>
+    <table className="status-table">
+      <thead>
+        <tr><th>Component</th><th>Status</th><th>Health</th><th>Details</th></tr>
+      </thead>
+      <tbody>
+        {items.length === 0 && !checking
+          ? <tr><td colSpan={4} className="muted" style={{ padding: '10px 12px' }}>No data — click Run Check.</td></tr>
+          : items.map((item) => {
+              const projects = (backing[item.name] ?? []).map((p) => projectMap.get(p)).filter((p): p is ProjectOverview => Boolean(p));
+              if (NOT_IMPLEMENTED.has(item.name)) {
+                return (
+                  <tr key={item.name}>
+                    <td className="status-table-name">{item.name}</td>
+                    <td><span className="badge muted">Planned</span></td>
+                    <td><span className="badge muted">Not Implemented</span></td>
+                    <td className="muted status-table-detail">This module is not implemented yet.</td>
+                  </tr>
+                );
+              }
+              if (projects.length === 0 || !overview) {
+                const health = statusBadge(item.status);
+                return (
+                  <tr key={item.name}>
+                    <td className="status-table-name">{item.name}</td>
+                    <td><span className={`badge ${item.enabled ? 'ok-dim' : 'muted'}`}>{item.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                    <td><span className={`badge ${health.cls}`}>{health.label}</span></td>
+                    <td className="muted status-table-detail">{item.detail}</td>
+                  </tr>
+                );
+              }
+              const health = item.enabled ? containerHealth(projects) : { label: 'Disabled', cls: 'muted', detail: 'Module is disabled.' };
+              const detailParts: string[] = [health.detail];
+              if (item.name === 'Access VPN' && overview.vpn) {
+                const v = overview.vpn;
+                const vpnBits: string[] = [];
+                if (v.openvpn.configured) vpnBits.push(`OpenVPN: ${v.openvpn.valid_certs} user cert${v.openvpn.valid_certs === 1 ? '' : 's'}${v.openvpn.revoked_certs ? `, ${v.openvpn.revoked_certs} revoked` : ''}`);
+                if (v.wireguard.configured) vpnBits.push(`WireGuard: ${v.wireguard.peers} peer${v.wireguard.peers === 1 ? '' : 's'}`);
+                if (vpnBits.length) detailParts.push(vpnBits.join(' · '));
+              }
+              return (
+                <tr key={item.name}>
+                  <td className="status-table-name">{item.name}</td>
+                  <td><span className={`badge ${item.enabled ? 'ok-dim' : 'muted'}`}>{item.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                  <td><span className={`badge ${health.cls}`}>{health.label}</span></td>
+                  <td className="muted status-table-detail">{detailParts.join(' — ')}</td>
+                </tr>
+              );
+            })
+        }
+      </tbody>
+    </table>
+  </div>;
+}
+
+function containerBadge(c: ContainerDetail): { label: string; cls: string } {
+  if (!c.exists) return { label: 'Not Created', cls: 'muted' };
+  switch (c.status) {
+    case 'running':    return { label: 'Running', cls: 'ok' };
+    case 'restarting': return { label: 'Restarting', cls: 'danger' };
+    case 'exited':     return { label: 'Stopped', cls: 'muted' };
+    case 'paused':     return { label: 'Paused', cls: 'warning' };
+    default:           return { label: c.status, cls: '' };
+  }
+}
+
+function ContainersPanel({ overview, onChanged }: { overview: ProvisioningOverview; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [result, setResult] = useState<{ project: string; ok: boolean; detail: string } | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const withContainers = overview.projects.filter((p) => p.containers.some((c) => c.exists));
+  if (withContainers.length === 0) return null;
+
+  async function restart(project: string) {
+    setBusy(project);
+    setResult(null);
+    try {
+      const r = await api.provisionRestart(project);
+      setResult({ project, ok: r.ok, detail: r.ok ? 'Restarted successfully.' : (r.detail || 'Restart failed.') });
+      onChanged();
+    } catch (error) {
+      setResult({ project, ok: false, detail: error instanceof Error ? error.message : 'Restart failed.' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function toggle(name: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  }
+
   return (
-    <tr>
-      <td className="status-table-name">{item.name}</td>
-      <td><span className={`badge ${item.enabled ? 'ok-dim' : 'muted'}`}>{item.enabled ? 'Enabled' : 'Disabled'}</span></td>
-      <td><span className={`badge ${health.cls}`}>{health.label}</span></td>
-      <td className="muted status-table-detail">{item.detail}</td>
-    </tr>
+    <div className="card">
+      <h2>Containers</h2>
+      <p className="muted">Every provisioned container, with live state read from the Docker engine. Click a warning count to see the details.</p>
+      <table className="status-table containers-table">
+        <thead>
+          <tr><th>Service</th><th>Container</th><th>State</th><th>Version</th><th>Uptime</th><th>Restarts</th><th>Warnings</th><th></th></tr>
+        </thead>
+        <tbody>
+          {withContainers.map((project) => project.containers.map((c, idx) => {
+            const badge = containerBadge(c);
+            const warnings = c.warnings ?? [];
+            const isExpanded = expanded.has(c.name);
+            return (
+              <Fragment key={c.name}>
+                <tr>
+                  <td className="status-table-name">{idx === 0 ? (PROJECT_LABELS[project.project] ?? project.project) : ''}</td>
+                  <td className="muted">{c.name}</td>
+                  <td><span className={`badge ${badge.cls}`}>{badge.label}</span></td>
+                  <td className="muted">{imageVersion(c.image)}</td>
+                  <td className="muted">{c.uptime_seconds != null ? formatUptime(c.uptime_seconds) : '—'}</td>
+                  <td className="muted">{c.restart_count ?? 0}</td>
+                  <td>
+                    {warnings.length > 0
+                      ? <button className="text-button warning-toggle" onClick={() => toggle(c.name)}>
+                          <AlertTriangle size={13} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+                          {warnings.length} {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        </button>
+                      : <span className="muted">—</span>}
+                  </td>
+                  <td>
+                    {idx === 0 && (
+                      <button className="btn-secondary restart-btn" disabled={busy === project.project} onClick={() => restart(project.project)}>
+                        <RotateCcw size={13} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+                        {busy === project.project ? 'Restarting…' : 'Restart'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+                {isExpanded && warnings.length > 0 && (
+                  <tr className="warning-detail-row">
+                    <td colSpan={8}>
+                      <ul className="warning-list">
+                        {warnings.map((w) => <li key={w}>{w}</li>)}
+                      </ul>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          }))}
+        </tbody>
+      </table>
+      {result && (
+        <p className={`save-message ${result.ok ? '' : 'error-text'}`}>
+          {PROJECT_LABELS[result.project] ?? result.project}: {result.detail}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -159,15 +329,6 @@ function DataRetentionPanel({ info }: { info: DataInfo }) {
       </div>
     </div>
   );
-}
-
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
 }
 
 function GaugeRing({ percent, color, size = 110 }: { percent: number; color: string; size?: number }) {

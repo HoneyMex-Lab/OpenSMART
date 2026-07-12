@@ -10,7 +10,7 @@ CONTAINER_NAME="opensmart"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
-STEP_TOTAL=12
+STEP_TOTAL=13
 STEP_NUM=0
 # Tells run_app.sh to refer to *this* script in its own user-facing
 # "run ... to do X" messages, instead of naming itself — keeps messages
@@ -33,13 +33,23 @@ usage() {
 Usage: ./opensmart.sh <command> [options]
 
 Commands:
-  start [--bind ADDRESS:PORT] [--prod] If an "opensmart" container already exists,
-                                        starts it (if not already running) and checks
-                                        its integrity — --bind/--prod are ignored in
-                                        that case, since the container's bind address
-                                        is fixed by its docker-compose.yml. Otherwise
-                                        runs the app directly on the host, defaulting
-                                        to --bind 0.0.0.0:8000 when --bind is omitted.
+  start [--bind ADDRESS:PORT] [--prod]
+        [--reverse-proxy http|https]   If an "opensmart" container already exists,
+                                        starts it (if not already running), checks
+                                        its integrity, and brings up the nginx
+                                        front-door reverse proxy that serves the app
+                                        and the tool aliases (/arkime /wazuh /proxmox
+                                        /opnsense) from one origin. --reverse-proxy
+                                        picks how the proxy answers plain HTTP:
+                                        "https" (default; self-signed cert, HTTP
+                                        redirects to HTTPS) or "http" (no redirect).
+                                        The choice persists in the proxy's .env.
+                                        --bind instead runs the app directly at
+                                        ADDRESS:PORT with NO proxy (mutually
+                                        exclusive with --reverse-proxy); when an
+                                        opensmart container exists --bind/--prod are
+                                        ignored. Host-only mode defaults to
+                                        --bind 0.0.0.0:8000.
   stop                                 Stop the OpenSMART container (docker compose stop).
   status                               Show the OpenSMART container state and whether the
                                         application inside it is responding.
@@ -54,8 +64,11 @@ Commands:
                                         OpenSMART as a container. Requires root.
   uninstall                            Stop and remove every container OpenSMART
                                         creates or manages (main app + proxy, and any
-                                        tool containers ever started). Does not remove
-                                        the "opensmart" network, images, or app data.
+                                        tool containers ever started). Prompts to
+                                        choose containers-only (keeps the "opensmart"
+                                        network, images, and app data) or full
+                                        removal (also permanently deletes app data:
+                                        databases, logs, PCAPs, indices, VPN certs).
                                         Asks for confirmation.
   version                              Show the OpenSMART version (major version plus
                                         the current git commit).
@@ -102,6 +115,7 @@ print_banner() {
 cmd_start() {
   local bind=""
   local prod=0
+  local proxy_mode=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --bind)
@@ -111,6 +125,14 @@ cmd_start() {
       --prod)
         prod=1
         shift
+        ;;
+      --reverse-proxy)
+        proxy_mode="${2:?--reverse-proxy requires http or https}"
+        if [[ "$proxy_mode" != "http" && "$proxy_mode" != "https" ]]; then
+          printf 'Invalid --reverse-proxy value: %s (expected http or https)\n' "$proxy_mode" >&2
+          exit 1
+        fi
+        shift 2
         ;;
       --help|-h)
         usage
@@ -123,6 +145,14 @@ cmd_start() {
         ;;
     esac
   done
+
+  # --bind means "run the app itself at this url:port" — the front-door
+  # proxy is the alternative access model, so the two are mutually exclusive.
+  if [[ -n "$bind" && -n "$proxy_mode" ]]; then
+    printf -- '--bind and --reverse-proxy are mutually exclusive: --bind runs the app\n' >&2
+    printf 'directly at ADDRESS:PORT (no proxy), --reverse-proxy fronts it with nginx.\n' >&2
+    exit 1
+  fi
 
   # If the "opensmart" container already exists, this is a container-managed
   # deployment: (re)start the existing container and verify it rather than
@@ -140,8 +170,17 @@ cmd_start() {
       printf 'container always runs in --prod mode on the port published by its\n'
       printf 'docker-compose.yml). Use ./opensmart.sh recreate to replace it.\n\n'
     fi
-    _start_existing_container
+    _start_existing_container "$proxy_mode"
     return
+  fi
+
+  # From here down the app runs directly on the host (dev / --bind mode) —
+  # the nginx front-door proxies to the "opensmart" container by Docker DNS
+  # name, which doesn't exist in this mode, so --reverse-proxy can't apply.
+  if [[ -n "$proxy_mode" ]]; then
+    printf -- '--reverse-proxy needs the containerized deployment (run "sudo ./opensmart.sh install"\n' >&2
+    printf 'first). In direct/host mode use --bind ADDRESS:PORT instead.\n' >&2
+    exit 1
   fi
 
   if [[ -z "$bind" ]]; then
@@ -271,6 +310,44 @@ _wait_healthy() {
   return 1
 }
 
+# Update-or-append KEY=VALUE in an env file without touching other keys
+# (the same .env may hold user-set PROXMOX_UPSTREAM/OPNSENSE_UPSTREAM etc.).
+_set_env_kv() {
+  local file="$1" key="$2" value="$3"
+  touch "$file" 2>/dev/null || return 1
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    # sed -i with a temp file keeps this portable and atomic enough here.
+    sed "s|^${key}=.*|${key}=${value}|" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
+_start_front_proxy() {
+  # Bring up (or reconcile) the nginx front-door that serves the app (with a
+  # self-signed HTTPS certificate) and the tool path aliases (/arkime,
+  # /wazuh, ...) from one origin. $1 (optional): http|https — persisted into
+  # the proxy's .env so later restarts (including ones triggered from inside
+  # the app via the socket proxy) keep the chosen mode; empty keeps whatever
+  # the .env / compose default (https) says. Best-effort: the proxy is
+  # additive, so a proxy that fails to start must never fail install/start
+  # of the core app — it just logs and moves on. Any PROXMOX_UPSTREAM/
+  # OPNSENSE_UPSTREAM/OPENSMART_HOSTNAME in the environment or .env is
+  # inherited automatically.
+  local mode="${1:-}"
+  local dir="$ROOT_DIR/opensmart/containers/run/nginx"
+  [[ -f "$dir/docker-compose.yml" ]] || return 0
+  if [[ -n "$mode" ]]; then
+    _set_env_kv "$dir/.env" "OPENSMART_PROXY_MODE" "$mode" || true
+  fi
+  printf 'Starting the front-door reverse proxy (nginx)... '
+  if (cd "$dir" && docker compose up -d) >/dev/null 2>&1; then
+    printf 'done\n'
+  else
+    printf 'skipped (proxy unavailable; tool aliases will be off, app unaffected)\n'
+  fi
+}
+
 _check_integrity() {
   printf 'Checking container stability... '
   if _wait_stable; then
@@ -293,6 +370,7 @@ _check_integrity() {
 }
 
 _start_existing_container() {
+  local proxy_mode="${1:-}"
   local state
   state="$(docker container inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
   if [[ "$state" == "running" ]]; then
@@ -305,7 +383,9 @@ _start_existing_container() {
     fi
   fi
   _check_integrity || exit 1
-  printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
+  _start_front_proxy "$proxy_mode"
+  printf '✔ OpenSMART is running at http://localhost:%s (direct)\n' "$(_container_host_port)"
+  printf '  Front-door proxy: https://<hostname>/ (tool aliases: /arkime /wazuh /proxmox /opnsense)\n'
 }
 
 cmd_status() {
@@ -455,32 +535,15 @@ cmd_recreate() {
     exit 1
   fi
   _check_integrity || exit 1
+  _start_front_proxy
   printf '✔ OpenSMART is running at http://localhost:%s\n' "$(_container_host_port)"
 }
 
-cmd_uninstall() {
-  if ! command -v docker >/dev/null 2>&1; then
-    printf 'Docker is not installed; nothing to uninstall.\n' >&2
-    exit 0
-  fi
-
-  printf 'This will stop and remove EVERY container OpenSMART creates or manages —\n'
-  printf 'the main app (%s, %s-docker-proxy) and any tool containers ever started\n' "$CONTAINER_NAME" "$CONTAINER_NAME"
-  printf 'under opensmart/containers/run/ (Suricata, Zeek, Arkime, OpenSearch,\n'
-  printf 'WireGuard, OpenVPN, ...).\n\n'
-  printf 'NOT removed: the "%s" Docker network, container images, and application\n' "$NETWORK_NAME"
-  printf 'data (SQLite DBs, logs) in the bind-mounted app directory.\n\n'
-  read -r -p 'Type UNINSTALL to continue: ' confirmation
-  if [[ "$confirmation" != "UNINSTALL" ]]; then
-    printf 'Uninstall cancelled.\n'
-    exit 0
-  fi
-
-  mkdir -p "$LOG_DIR"
-  local uninstall_log="$LOG_DIR/uninstall.log"
-  printf '\n===== opensmart.sh uninstall started %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$uninstall_log"
-
-  local dir name
+_uninstall_remove_containers() {
+  # $1: log file to append docker compose output to.
+  local log="$1" dir name
+  # Depth 1: opensmart/containers/run/<tool>/docker-compose.yml (Suricata,
+  # Zeek, Arkime, OpenSearch, WireGuard, OpenVPN, Wazuh, the main app, ...).
   for dir in "$ROOT_DIR"/opensmart/containers/run/*/; do
     [[ -f "${dir}docker-compose.yml" ]] || continue
     name="$(basename "$dir")"
@@ -489,16 +552,105 @@ cmd_uninstall() {
       # Only opensmart/containers/run/openvpn/ currently gates its service
       # behind a "manual" profile (see that file's own comments) — without
       # --profile manual, `down` won't see/remove it even if it was started.
-      (cd "$dir" && docker compose --profile manual down) >> "$uninstall_log" 2>&1 \
+      (cd "$dir" && docker compose --profile manual down) >> "$log" 2>&1 \
         && printf 'done\n' || printf 'nothing to remove\n'
     else
-      (cd "$dir" && docker compose down) >> "$uninstall_log" 2>&1 \
+      (cd "$dir" && docker compose down) >> "$log" 2>&1 \
         && printf 'done\n' || printf 'nothing to remove\n'
     fi
   done
+  # Depth 2: opensmart/containers/run/vpn/<instance>/docker-compose.yml —
+  # generated per-instance by the VPN module (backend/app/vpn.py), one
+  # level deeper than every other tool, so the loop above never sees them.
+  for dir in "$ROOT_DIR"/opensmart/containers/run/vpn/*/; do
+    [[ -f "${dir}docker-compose.yml" ]] || continue
+    name="vpn/$(basename "$dir")"
+    printf 'Removing %s... ' "$name"
+    (cd "$dir" && docker compose down) >> "$log" 2>&1 \
+      && printf 'done\n' || printf 'nothing to remove\n'
+  done
+}
 
-  printf '\n✔ OpenSMART containers removed. Full log: %s\n' "$uninstall_log"
-  printf 'Run "sudo ./opensmart.sh install" to set it up again.\n'
+_uninstall_purge_data() {
+  # $1: log file. Deletes every bind-mounted volumes/data/ (PCAPs,
+  # OpenSearch/Wazuh indices, VPN certs and keys, capture logs), the
+  # generated VPN instance directories themselves (matching vpn.py's own
+  # delete_instance()), and the main app's SQLite databases — everything a
+  # fresh install would otherwise find already sitting there and reuse.
+  local log="$1" dir
+  printf 'Deleting application data... '
+  {
+    for dir in "$ROOT_DIR"/opensmart/containers/run/*/volumes/data; do
+      [[ -d "$dir" ]] && rm -rf "$dir"
+    done
+    [[ -d "$ROOT_DIR/opensmart/containers/run/vpn" ]] && rm -rf "$ROOT_DIR/opensmart/containers/run/vpn"
+    rm -f "$ROOT_DIR"/opensmart/backend/opensmart*.db "$ROOT_DIR"/opensmart/backend/opensmart*.db-shm "$ROOT_DIR"/opensmart/backend/opensmart*.db-wal
+  } >> "$log" 2>&1
+  printf 'done\n'
+}
+
+cmd_uninstall() {
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'Docker is not installed; nothing to uninstall.\n' >&2
+    exit 0
+  fi
+
+  printf 'OpenSMART uninstall — choose how much to remove:\n\n'
+  printf '  1) Containers only\n'
+  printf '     Stops and removes EVERY container OpenSMART creates or manages —\n'
+  printf '     the main app (%s, %s-docker-proxy) and any tool containers ever\n' "$CONTAINER_NAME" "$CONTAINER_NAME"
+  printf '     started under opensmart/containers/run/ (Suricata, Zeek, Arkime,\n'
+  printf '     OpenSearch, WireGuard, OpenVPN, Wazuh, VPN module instances, ...).\n'
+  printf '     Kept: the "%s" Docker network, container images, and all\n' "$NETWORK_NAME"
+  printf '     application data (SQLite databases, logs, PCAPs, indices,\n'
+  printf '     certificates). Reinstalling later picks up right where you left off.\n\n'
+  printf '  2) Full removal — containers AND all data\n'
+  printf '     Everything in option 1, PLUS permanently deletes every tool'"'"'s\n'
+  printf '     bind-mounted volumes/data/ (PCAPs, OpenSearch/Wazuh indices, VPN\n'
+  printf '     certs and keys, capture logs), every generated VPN instance, the\n'
+  printf '     main app'"'"'s SQLite databases, and logs/. THIS CANNOT BE UNDONE.\n\n'
+
+  local choice
+  read -r -p 'Choose an option [1/2, anything else cancels]: ' choice
+  case "$choice" in
+    1) ;;
+    2) ;;
+    *) printf 'Uninstall cancelled.\n'; exit 0 ;;
+  esac
+
+  if [[ "$choice" == "1" ]]; then
+    read -r -p 'Type UNINSTALL to continue: ' confirmation
+    if [[ "$confirmation" != "UNINSTALL" ]]; then
+      printf 'Uninstall cancelled.\n'
+      exit 0
+    fi
+  else
+    printf '\nThis permanently destroys application data — PCAPs, security alerts,\n'
+    printf 'indices, VPN certificates/keys, and the app'"'"'s own databases. There is no\n'
+    printf 'undo and no backup is taken.\n\n'
+    read -r -p 'Type DELETE ALL DATA to continue: ' confirmation
+    if [[ "$confirmation" != "DELETE ALL DATA" ]]; then
+      printf 'Uninstall cancelled.\n'
+      exit 0
+    fi
+  fi
+
+  mkdir -p "$LOG_DIR"
+  local uninstall_log="$LOG_DIR/uninstall.log"
+  printf '\n===== opensmart.sh uninstall started %s (option %s) =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$choice" >> "$uninstall_log"
+
+  _uninstall_remove_containers "$uninstall_log"
+
+  if [[ "$choice" == "1" ]]; then
+    printf '\n✔ OpenSMART containers removed. Full log: %s\n' "$uninstall_log"
+    printf 'Run "sudo ./opensmart.sh install" to set it up again.\n'
+  else
+    _uninstall_purge_data "$uninstall_log"
+    printf '\n===== opensmart.sh uninstall finished %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$uninstall_log"
+    rm -rf "$LOG_DIR"
+    printf '\n✔ OpenSMART containers and all application data removed.\n'
+    printf 'Run "sudo ./opensmart.sh install" to set it up again from scratch.\n'
+  fi
 }
 
 # ── install helpers ─────────────────────────────────────────────────────────
@@ -623,13 +775,68 @@ _install_set_max_map_count() {
   # all document this same fix. Applied unconditionally (harmless if unused)
   # since provisioning.py runs as uid 1000 inside a container and can't touch
   # host sysctls itself — only this host-side, root install step can.
-  _step "Setting vm.max_map_count=262144 (required by OpenSearch-family indexers)"
-  {
-    printf 'vm.max_map_count=262144\n' > /etc/sysctl.d/99-opensmart-indexer.conf &&
-    sysctl -w vm.max_map_count=262144
-  } >> "$INSTALL_LOG" 2>&1 \
-    || _step_fail "Failed to set vm.max_map_count."
-  printf 'done\n'
+  local required=262144
+  local current
+  current="$(cat /proc/sys/vm/max_map_count 2>/dev/null || echo 0)"
+
+  _step "Setting vm.max_map_count=$required (required by OpenSearch-family indexers)"
+
+  if [[ "$current" -ge "$required" ]]; then
+    printf 'already %s, skipping\n' "$current"
+    return
+  fi
+
+  if {
+    printf 'vm.max_map_count=%s\n' "$required" > /etc/sysctl.d/99-opensmart-indexer.conf &&
+    sysctl -w "vm.max_map_count=$required"
+  } >> "$INSTALL_LOG" 2>&1; then
+    printf 'done\n'
+    return
+  fi
+
+  # sysctl -w can fail with "permission denied" specifically when this host
+  # is itself an unprivileged LXC container: vm.max_map_count isn't
+  # namespaced, so writes to it are blocked from inside the container
+  # regardless of root, even though /etc/sysctl.d writes still succeed.
+  # That's a host-level (Proxmox) setting, not something this install step
+  # can reach — so warn instead of hard-failing the whole install.
+  if [[ "$(systemd-detect-virt 2>/dev/null)" == "lxc" ]]; then
+    printf 'skipped (unprivileged LXC)\n'
+    printf '  ⚠ Could not set vm.max_map_count from inside this LXC container (current: %s, required: %s).\n' "$current" "$required" >&2
+    printf '  Run this on the Proxmox/LXC host itself, not inside the container:\n' >&2
+    printf '    echo "vm.max_map_count=%s" > /etc/sysctl.d/99-opensmart-indexer.conf && sysctl -w vm.max_map_count=%s\n' "$required" "$required" >&2
+    printf '  OpenSearch/Wazuh indexers will fail to start until this is set.\n' >&2
+    return
+  fi
+
+  _step_fail "Failed to set vm.max_map_count."
+}
+
+_install_ensure_tun_device() {
+  # OpenVPN instances (backend/app/vpn.py) need /dev/net/tun on the Docker
+  # host. Bare-metal/VM hosts have it; unprivileged LXC hosts usually don't,
+  # and creating it needs the LXC's device cgroup to allow c 10:200 — a
+  # Proxmox-host-side setting we can't change from in here. Best-effort:
+  # create it where permitted, warn with the exact host-side fix otherwise
+  # (WireGuard instances don't need it, so this never fails the install).
+  _step "Ensuring /dev/net/tun exists (needed by OpenVPN instances)"
+  if [[ -c /dev/net/tun ]]; then
+    printf 'already present\n'
+    return
+  fi
+  if mkdir -p /dev/net && mknod /dev/net/tun c 10 200 2>/dev/null && chmod 666 /dev/net/tun; then
+    printf 'created\n'
+    printf '  Note: created at runtime — on an LXC this does not survive a reboot unless\n'
+    printf '  the container config binds it (see the instructions below for permanence).\n'
+    return
+  fi
+  printf 'skipped (not permitted)\n'
+  printf '  ⚠ Could not create /dev/net/tun from inside this container/host.\n' >&2
+  printf '  On a Proxmox LXC, add to /etc/pve/lxc/<VMID>.conf on the Proxmox host:\n' >&2
+  printf '    lxc.cgroup2.devices.allow: c 10:200 rwm\n' >&2
+  printf '    lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file\n' >&2
+  printf '  then restart the LXC. Until then OpenVPN instances fail to start\n' >&2
+  printf '  (clear error in the UI); WireGuard instances are unaffected.\n' >&2
 }
 
 _install_build_image() {
@@ -714,8 +921,17 @@ _install_show_password() {
   # npm-run-build the frontend inside the container before the app logs the
   # first-run marker — that routinely takes a couple of minutes on a cold
   # cache, well past a short window. Poll for up to 5 minutes.
+  #
+  # bootstrap_admin() (opensmart/backend/app/database.py) only ever prints
+  # FIRST_RUN_MARKER when no admin user exists yet — install/--recreate
+  # against a host with a persisted DB (an admin already exists) never logs
+  # it at all. Without a second success path this loop used to burn the
+  # full 5 minutes and report a false "timed out" even though the container
+  # had come up fine seconds in — so on every attempt this also polls
+  # /api/health directly (same check as _wait_healthy) and treats a healthy
+  # response with no marker as "already provisioned," not a failure.
   _step "Waiting for OpenSMART to become ready (first run can take a few minutes)"
-  local attempt logs pw
+  local attempt logs pw port
   for attempt in $(seq 1 150); do
     logs="$(docker logs "$CONTAINER_NAME" 2>&1 || true)"
     if grep -q "$FIRST_RUN_MARKER" <<<"$logs"; then
@@ -734,13 +950,23 @@ _install_show_password() {
       printf '************************************************************\n\n'
       return 0
     fi
+    port="$(_container_host_port)"
+    if [[ -n "$port" ]] && curl -sf --max-time 3 "http://localhost:${port}/api/health" 2>/dev/null | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+      printf 'ready (existing install)\n'
+      {
+        printf '[%s] app healthy without a first-run marker — an admin account already exists.\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+      } >> "$INSTALL_LOG"
+      printf '\nOpenSMART is up. An admin account already exists on this install, so no new\n'
+      printf 'password was generated. Log in with your existing credentials.\n\n'
+      return 0
+    fi
     sleep 2
   done
   printf 'timed out\n'
   {
     printf '[%s] container log at timeout:\n%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$logs"
   } >> "$INSTALL_LOG"
-  printf '\nCould not find the initial admin password in container logs within 5 minutes.\n' >&2
+  printf '\nOpenSMART did not become ready (no first-run marker and /api/health never responded) within 5 minutes.\n' >&2
   printf 'See %s (or: docker logs %s) for details.\n' "$INSTALL_LOG" "$CONTAINER_NAME" >&2
   return 1
 }
@@ -755,6 +981,7 @@ cmd_install() {
   _install_docker_engine
   _install_create_network
   _install_set_max_map_count
+  _install_ensure_tun_device
   _install_build_image
   _install_build_native_modules
   _install_fix_ownership
@@ -769,7 +996,10 @@ cmd_install() {
   # first-run-password wait actually confirmed the app came up; otherwise
   # say so plainly instead of claiming success right after a timeout warning.
   if _install_show_password; then
-    printf '✔ OpenSMART is running at http://0.0.0.0:8000\n'
+    _start_front_proxy
+    printf '✔ OpenSMART is running:\n'
+    printf '    via the front-door proxy : https://<hostname>/  (self-signed cert; tool aliases at /arkime /wazuh /proxmox /opnsense)\n'
+    printf '    direct                   : http://0.0.0.0:8000\n'
   else
     printf '⚠ Install finished, but readiness could not be confirmed within 5 minutes.\n' >&2
     printf 'The container may still be starting (e.g. a slow network stalling the\n' >&2
