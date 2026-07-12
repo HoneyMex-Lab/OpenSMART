@@ -5,20 +5,32 @@
 # templates/default.conf.template for routing, redirect behavior and the
 # same-origin/iframe rationale.
 #
-# Access OpenSMART through this proxy (https://<hostname>/, aliases at
-# /arkime etc.); the app's own :8000 remains available for direct url:port
-# use (`./opensmart.sh start --bind`).
+# This is the ONLY externally-reachable entry point — the app container's
+# own :8000 is published loopback-only (127.0.0.1, see
+# containers/run/opensmart/docker-compose.yml), reachable from the host
+# itself but not the network. Access OpenSMART at https://<hostname>/
+# (aliases at /arkime, /wazuh, etc.) or, from the host, http://127.0.0.1:8000
+# directly.
 #
-# Host-tunable via environment or a .env file next to this compose file:
-#   OPENSMART_PROXY_MODE   http|https (written by `opensmart.sh start
-#                          --reverse-proxy <mode>`; https default). In https
-#                          mode plain HTTP 301-redirects to HTTPS.
+# Host-tunable via environment or a .env file next to this compose file —
+# `opensmart.sh start`/`install --bind ADDRESS:PORT` write the first three of
+# these (see that script's _start_front_proxy):
+#   OPENSMART_PROXY_MODE   http|https (--reverse-proxy <mode>; https
+#                          default). In https mode plain HTTP 301-redirects
+#                          to HTTPS.
+#   OPENSMART_PROXY_BIND / OPENSMART_PROXY_HTTP_PORT /
+#   OPENSMART_PROXY_HTTPS_PORT   published address/ports (0.0.0.0:80/443).
+#                          --bind sets the address plus whichever port
+#                          matches the active mode.
+#   OPENSMART_HTTPS_REDIRECT_SUFFIX   ":<port>" when OPENSMART_PROXY_HTTPS_
+#                          PORT isn't 443, else empty — appended to the
+#                          https mode redirect target so it still lands on
+#                          the right port. Computed by _start_front_proxy;
+#                          not meant to be set by hand.
 #   OPENSMART_HOSTNAME     server_name + certificate SAN. The backend passes
 #                          the Wizard's proxy_hostname setting here when it
 #                          (re)starts this project; init-certs re-issues the
 #                          certificate automatically when it changes.
-#   OPENSMART_PROXY_BIND / OPENSMART_PROXY_HTTP_PORT /
-#   OPENSMART_PROXY_HTTPS_PORT   published address/ports (0.0.0.0:80/443).
 #   PROXMOX_UPSTREAM / OPNSENSE_UPSTREAM   external tool addresses for the
 #                          best-effort aliases (unresolvable defaults: those
 #                          two aliases 502 until configured).
@@ -55,6 +67,7 @@ services:
     hostname: nginx
     environment:
       - OPENSMART_PROXY_MODE=${OPENSMART_PROXY_MODE:-https}
+      - OPENSMART_HTTPS_REDIRECT_SUFFIX=${OPENSMART_HTTPS_REDIRECT_SUFFIX:-}
       - OPENSMART_HOSTNAME=${OPENSMART_HOSTNAME:-opensmart}
       - PROXMOX_UPSTREAM=${PROXMOX_UPSTREAM:-https://proxmox.invalid}
       - OPNSENSE_UPSTREAM=${OPNSENSE_UPSTREAM:-https://opnsense.invalid}

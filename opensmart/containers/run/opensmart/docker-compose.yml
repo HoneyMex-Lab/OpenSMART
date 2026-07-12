@@ -20,7 +20,17 @@ services:
       - ${OPENSMART_PROJECT_DIR:?Set OPENSMART_PROJECT_DIR to the absolute host path of the opensmart/ directory}:${OPENSMART_PROJECT_DIR:?}
     working_dir: ${OPENSMART_PROJECT_DIR:?}
     ports:
-      - "8000:8000"
+      # Loopback-only: the app is no longer reachable from the network
+      # directly — the front-door proxy (containers/run/nginx/) is the only
+      # externally-reachable entry point (published on 80/443, reaching this
+      # container via the internal "opensmart" Docker network, not through
+      # this port mapping at all). Still reachable at http://127.0.0.1:8000
+      # from the host itself (installer health checks use "localhost", which
+      # resolves here) for local debugging. This is the HOST-side publish
+      # address only — inside its own network namespace the app still binds
+      # 0.0.0.0 (see command: below), which it must for Docker's own
+      # bridge-network port forwarding to reach it at all.
+      - "127.0.0.1:8000:8000"
     environment:
       # Sibling-container provisioning (Wizard installer, native Suricata
       # toggle) talks to the host Docker daemon through this restricted

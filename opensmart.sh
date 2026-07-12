@@ -33,23 +33,29 @@ usage() {
 Usage: ./opensmart.sh <command> [options]
 
 Commands:
-  start [--bind ADDRESS:PORT] [--prod]
-        [--reverse-proxy http|https]   If an "opensmart" container already exists,
-                                        starts it (if not already running), checks
-                                        its integrity, and brings up the nginx
-                                        front-door reverse proxy that serves the app
-                                        and the tool aliases (/arkime /wazuh /proxmox
-                                        /opnsense) from one origin. --reverse-proxy
-                                        picks how the proxy answers plain HTTP:
-                                        "https" (default; self-signed cert, HTTP
-                                        redirects to HTTPS) or "http" (no redirect).
-                                        The choice persists in the proxy's .env.
-                                        --bind instead runs the app directly at
-                                        ADDRESS:PORT with NO proxy (mutually
-                                        exclusive with --reverse-proxy); when an
-                                        opensmart container exists --bind/--prod are
-                                        ignored. Host-only mode defaults to
-                                        --bind 0.0.0.0:8000.
+  start [--bind ADDRESS:PORT]
+        [--reverse-proxy http|https]   If an "opensmart" container already exists
+                                        (the normal case), starts it (if not already
+                                        running), checks its integrity, and brings up
+                                        the nginx front-door reverse proxy — the ONLY
+                                        externally-reachable entry point (the app
+                                        container's own :8000 is loopback-only) —
+                                        serving the app and the tool aliases
+                                        (/arkime /wazuh /proxmox /opnsense) from one
+                                        origin. --reverse-proxy picks how the proxy
+                                        answers plain HTTP: "https" (default;
+                                        self-signed cert, HTTP redirects to HTTPS) or
+                                        "http" (no redirect). --bind ADDRESS:PORT sets
+                                        the proxy's own bind address/port (whichever
+                                        matches the active mode; default
+                                        0.0.0.0:443). Both choices persist in the
+                                        proxy's .env. --prod is ignored here (the
+                                        container always runs in prod mode).
+                                        Otherwise (no container — host/dev mode) runs
+                                        the app directly at ADDRESS:PORT with NO
+                                        proxy; --reverse-proxy doesn't apply there.
+                                        [--prod] is also accepted in host/dev mode.
+                                        Host-only mode defaults to --bind 0.0.0.0:8000.
   stop                                 Stop the OpenSMART container (docker compose stop).
   status                               Show the OpenSMART container state and whether the
                                         application inside it is responding.
@@ -59,9 +65,13 @@ Commands:
                                         source, delete the existing OpenSMART container,
                                         and create a new one from the rebuilt image, then
                                         check its integrity. Asks for confirmation.
-  install                              Install Docker Engine (Debian/Ubuntu only),
+  install [--bind ADDRESS:PORT]
+          [--reverse-proxy http|https] Install Docker Engine (Debian/Ubuntu only),
                                         build the opensmart/web image, and run
-                                        OpenSMART as a container. Requires root.
+                                        OpenSMART as a container fronted by the nginx
+                                        reverse proxy (see "start" above for what
+                                        --bind/--reverse-proxy do here — same
+                                        meaning). Requires root.
   uninstall                            Stop and remove every container OpenSMART
                                         creates or manages (main app + proxy, and any
                                         tool containers ever started). Prompts to
@@ -146,37 +156,37 @@ cmd_start() {
     esac
   done
 
-  # --bind means "run the app itself at this url:port" — the front-door
-  # proxy is the alternative access model, so the two are mutually exclusive.
-  if [[ -n "$bind" && -n "$proxy_mode" ]]; then
-    printf -- '--bind and --reverse-proxy are mutually exclusive: --bind runs the app\n' >&2
-    printf 'directly at ADDRESS:PORT (no proxy), --reverse-proxy fronts it with nginx.\n' >&2
-    exit 1
-  fi
-
   # If the "opensmart" container already exists, this is a container-managed
   # deployment: (re)start the existing container and verify it rather than
-  # running the app directly on the host. --bind/--prod don't apply here —
-  # the container's bind address is fixed by its docker-compose.yml. This
-  # detection only makes sense on the HOST: since the container itself now
-  # also has a `docker` CLI (for sibling-container provisioning, reaching
-  # the Docker API through docker-socket-proxy), running this script *inside*
-  # the opensmart container would otherwise see itself as "an existing
-  # container" and loop trying to manage itself instead of actually starting
-  # the app — /.dockerenv is the standard signal that we're inside one.
+  # running the app directly on the host. This detection only makes sense on
+  # the HOST: since the container itself now also has a `docker` CLI (for
+  # sibling-container provisioning, reaching the Docker API through
+  # docker-socket-proxy), running this script *inside* the opensmart
+  # container would otherwise see itself as "an existing container" and loop
+  # trying to manage itself instead of actually starting the app —
+  # /.dockerenv is the standard signal that we're inside one.
+  #
+  # --bind means something DIFFERENT here than in host/dev mode below: the
+  # app container's own :8000 is loopback-only (see containers/run/opensmart/
+  # docker-compose.yml) — the front-door proxy is the only externally-
+  # reachable entry point, so --bind sets the PROXY's own bind address:port
+  # instead (whichever port matches --reverse-proxy's mode, https by
+  # default). --prod has no effect here — the container always runs in prod
+  # mode per its own docker-compose.yml.
   if [[ ! -f /.dockerenv ]] && command -v docker >/dev/null 2>&1 && _container_exists; then
-    if [[ -n "$bind" || "$prod" -eq 1 ]]; then
-      printf 'Note: an "%s" container already exists; --bind/--prod are ignored (the\n' "$CONTAINER_NAME"
-      printf 'container always runs in --prod mode on the port published by its\n'
-      printf 'docker-compose.yml). Use ./opensmart.sh recreate to replace it.\n\n'
+    if [[ "$prod" -eq 1 ]]; then
+      printf 'Note: an "%s" container already exists; --prod is ignored (the container\n' "$CONTAINER_NAME"
+      printf 'always runs in --prod mode). Use ./opensmart.sh recreate to replace it.\n\n'
     fi
-    _start_existing_container "$proxy_mode"
+    _start_existing_container "$proxy_mode" "$bind"
     return
   fi
 
-  # From here down the app runs directly on the host (dev / --bind mode) —
-  # the nginx front-door proxies to the "opensmart" container by Docker DNS
-  # name, which doesn't exist in this mode, so --reverse-proxy can't apply.
+  # From here down the app runs directly on the host (dev mode) — the nginx
+  # front-door proxies to the "opensmart" container by Docker DNS name,
+  # which doesn't exist in this mode, so --reverse-proxy can't apply; --bind
+  # reverts to its host-mode meaning below (run the app directly at
+  # ADDRESS:PORT, no proxy).
   if [[ -n "$proxy_mode" ]]; then
     printf -- '--reverse-proxy needs the containerized deployment (run "sudo ./opensmart.sh install"\n' >&2
     printf 'first). In direct/host mode use --bind ADDRESS:PORT instead.\n' >&2
@@ -323,23 +333,74 @@ _set_env_kv() {
   fi
 }
 
+# Read KEY's current value from an env file, or $3 if the file/key is absent.
+_get_env_kv() {
+  local file="$1" key="$2" default="$3" line
+  if [[ -f "$file" ]]; then
+    line="$(grep "^${key}=" "$file" 2>/dev/null | tail -n1)"
+    if [[ -n "$line" ]]; then
+      printf '%s' "${line#*=}"
+      return
+    fi
+  fi
+  printf '%s' "$default"
+}
+
 _start_front_proxy() {
   # Bring up (or reconcile) the nginx front-door that serves the app (with a
   # self-signed HTTPS certificate) and the tool path aliases (/arkime,
-  # /wazuh, ...) from one origin. $1 (optional): http|https — persisted into
-  # the proxy's .env so later restarts (including ones triggered from inside
-  # the app via the socket proxy) keep the chosen mode; empty keeps whatever
-  # the .env / compose default (https) says. Best-effort: the proxy is
-  # additive, so a proxy that fails to start must never fail install/start
-  # of the core app — it just logs and moves on. Any PROXMOX_UPSTREAM/
-  # OPNSENSE_UPSTREAM/OPENSMART_HOSTNAME in the environment or .env is
-  # inherited automatically.
+  # /wazuh, ...) from one origin — the ONLY externally-reachable entry point
+  # now that the app container's own :8000 is published loopback-only (see
+  # containers/run/opensmart/docker-compose.yml).
+  #
+  # $1 (optional): http|https — persisted into the proxy's .env so later
+  # restarts (including ones triggered from inside the app via the socket
+  # proxy) keep the chosen mode; empty keeps whatever the .env / compose
+  # default (https) says.
+  # $2 (optional): ADDRESS:PORT to bind the proxy's user-facing listener to
+  # (whichever port matches the active mode — https by default, http if
+  # mode is "http"); empty keeps the existing/default bind (0.0.0.0:443).
+  # Also recomputes OPENSMART_HTTPS_REDIRECT_SUFFIX every call so the
+  # http->https redirect target stays correct even if only $1 changed.
+  #
+  # Best-effort throughout: the proxy is additive, so a failure here must
+  # never fail install/start of the core app — it just logs and moves on.
+  # Any PROXMOX_UPSTREAM/OPNSENSE_UPSTREAM/OPENSMART_HOSTNAME already in the
+  # environment or .env is inherited automatically.
   local mode="${1:-}"
+  local bind="${2:-}"
   local dir="$ROOT_DIR/opensmart/containers/run/nginx"
   [[ -f "$dir/docker-compose.yml" ]] || return 0
+  local env_file="$dir/.env"
+
   if [[ -n "$mode" ]]; then
-    _set_env_kv "$dir/.env" "OPENSMART_PROXY_MODE" "$mode" || true
+    _set_env_kv "$env_file" "OPENSMART_PROXY_MODE" "$mode" || true
   fi
+
+  if [[ -n "$bind" ]]; then
+    local addr="${bind%:*}" port="${bind##*:}"
+    if [[ -z "$addr" || "$port" == "$bind" || ! "$port" =~ ^[0-9]+$ ]]; then
+      printf '✘ Invalid --bind value for the front-door proxy: %s (expected ADDRESS:PORT)\n' "$bind" >&2
+      exit 1
+    fi
+    local effective_mode
+    effective_mode="${mode:-$(_get_env_kv "$env_file" OPENSMART_PROXY_MODE https)}"
+    _set_env_kv "$env_file" "OPENSMART_PROXY_BIND" "$addr" || true
+    if [[ "$effective_mode" == "http" ]]; then
+      _set_env_kv "$env_file" "OPENSMART_PROXY_HTTP_PORT" "$port" || true
+    else
+      _set_env_kv "$env_file" "OPENSMART_PROXY_HTTPS_PORT" "$port" || true
+    fi
+  fi
+
+  local https_port
+  https_port="$(_get_env_kv "$env_file" OPENSMART_PROXY_HTTPS_PORT 443)"
+  if [[ "$https_port" == "443" ]]; then
+    _set_env_kv "$env_file" "OPENSMART_HTTPS_REDIRECT_SUFFIX" "" || true
+  else
+    _set_env_kv "$env_file" "OPENSMART_HTTPS_REDIRECT_SUFFIX" ":${https_port}" || true
+  fi
+
   printf 'Starting the front-door reverse proxy (nginx)... '
   if (cd "$dir" && docker compose up -d) >/dev/null 2>&1; then
     printf 'done\n'
@@ -371,6 +432,7 @@ _check_integrity() {
 
 _start_existing_container() {
   local proxy_mode="${1:-}"
+  local proxy_bind="${2:-}"
   local state
   state="$(docker container inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
   if [[ "$state" == "running" ]]; then
@@ -383,9 +445,10 @@ _start_existing_container() {
     fi
   fi
   _check_integrity || exit 1
-  _start_front_proxy "$proxy_mode"
-  printf '✔ OpenSMART is running at http://localhost:%s (direct)\n' "$(_container_host_port)"
-  printf '  Front-door proxy: https://<hostname>/ (tool aliases: /arkime /wazuh /proxmox /opnsense)\n'
+  _start_front_proxy "$proxy_mode" "$proxy_bind"
+  printf '✔ OpenSMART is running:\n'
+  printf '    via the front-door proxy : https://<hostname>/  (tool aliases: /arkime /wazuh /proxmox /opnsense)\n'
+  printf '    local only               : http://127.0.0.1:%s\n' "$(_container_host_port)"
 }
 
 cmd_status() {
@@ -1161,6 +1224,34 @@ _install_show_password() {
 }
 
 cmd_install() {
+  local bind=""
+  local proxy_mode=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --bind)
+        bind="${2:?--bind requires an ADDRESS:PORT value}"
+        shift 2
+        ;;
+      --reverse-proxy)
+        proxy_mode="${2:?--reverse-proxy requires http or https}"
+        if [[ "$proxy_mode" != "http" && "$proxy_mode" != "https" ]]; then
+          printf 'Invalid --reverse-proxy value: %s (expected http or https)\n' "$proxy_mode" >&2
+          exit 1
+        fi
+        shift 2
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        printf 'Unknown option: %s\n' "$1" >&2
+        usage >&2
+        exit 1
+        ;;
+    esac
+  done
+
   print_banner
   _log_init
   printf 'Full installer log: %s\n\n' "$INSTALL_LOG"
@@ -1188,10 +1279,10 @@ cmd_install() {
   # first-run-password wait actually confirmed the app came up; otherwise
   # say so plainly instead of claiming success right after a timeout warning.
   if _install_show_password; then
-    _start_front_proxy
+    _start_front_proxy "$proxy_mode" "$bind"
     printf '✔ OpenSMART is running:\n'
     printf '    via the front-door proxy : https://<hostname>/  (self-signed cert; tool aliases at /arkime /wazuh /proxmox /opnsense)\n'
-    printf '    direct                   : http://0.0.0.0:8000\n'
+    printf '    local only               : http://127.0.0.1:8000\n'
   else
     printf '⚠ Install finished, but readiness could not be confirmed within 5 minutes.\n' >&2
     printf 'The container may still be starting (e.g. a slow network stalling the\n' >&2
@@ -1219,7 +1310,8 @@ case "${1:-}" in
     cmd_recreate
     ;;
   install)
-    cmd_install
+    shift
+    cmd_install "$@"
     ;;
   uninstall)
     cmd_uninstall
