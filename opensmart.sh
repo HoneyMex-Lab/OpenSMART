@@ -340,6 +340,14 @@ _set_env_kv() {
   else
     printf '%s=%s\n' "$key" "$value" >> "$file"
   fi
+  # This script runs as root (host-side install/start), but the app
+  # container's own backend (uid 1000) also writes into some of these same
+  # .env files (e.g. nginx's, for OPENSMART_HOSTNAME — see provisioning.py's
+  # own _set_env_kv) — confirmed live: without this, root-created files were
+  # unreadable-for-writing by that container, "Permission denied", same
+  # unprivileged-UID-mapping story as this project's other cross-container
+  # file exchanges. Not security-sensitive (operational config, no secrets).
+  chmod 666 "$file" 2>/dev/null || true
 }
 
 # Validate an ADDRESS:PORT value, exiting with a clear error if malformed.
