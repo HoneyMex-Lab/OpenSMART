@@ -156,6 +156,15 @@ cmd_start() {
     esac
   done
 
+  # Fail fast on a malformed --bind right after parsing, before doing
+  # anything else — cheap up front, versus surfacing it after work has
+  # already happened (matters more for `install`, see there; harmless to
+  # check early here too for consistency). Skipped when bind is empty: each
+  # branch below has its own default for that case.
+  if [[ -n "$bind" ]]; then
+    _require_valid_bind "$bind" "--bind"
+  fi
+
   # If the "opensmart" container already exists, this is a container-managed
   # deployment: (re)start the existing container and verify it rather than
   # running the app directly on the host. This detection only makes sense on
@@ -333,6 +342,21 @@ _set_env_kv() {
   fi
 }
 
+# Validate an ADDRESS:PORT value, exiting with a clear error if malformed.
+# Used to fail fast on a typo'd --bind right after argument parsing —
+# before any heavy work — in addition to _start_front_proxy's own check
+# right before it actually applies the value (belt and suspenders: a
+# caller that skips the early check, e.g. a future one, still can't write
+# a malformed value into the proxy's .env).
+_require_valid_bind() {
+  local bind="$1" label="$2"
+  local addr="${bind%:*}" port="${bind##*:}"
+  if [[ -z "$addr" || "$port" == "$bind" || ! "$port" =~ ^[0-9]+$ ]]; then
+    printf 'Invalid %s value: %s (expected ADDRESS:PORT)\n' "$label" "$bind" >&2
+    exit 1
+  fi
+}
+
 # Read KEY's current value from an env file, or $3 if the file/key is absent.
 _get_env_kv() {
   local file="$1" key="$2" default="$3" line
@@ -378,11 +402,8 @@ _start_front_proxy() {
   fi
 
   if [[ -n "$bind" ]]; then
+    _require_valid_bind "$bind" "--bind"
     local addr="${bind%:*}" port="${bind##*:}"
-    if [[ -z "$addr" || "$port" == "$bind" || ! "$port" =~ ^[0-9]+$ ]]; then
-      printf '✘ Invalid --bind value for the front-door proxy: %s (expected ADDRESS:PORT)\n' "$bind" >&2
-      exit 1
-    fi
     local effective_mode
     effective_mode="${mode:-$(_get_env_kv "$env_file" OPENSMART_PROXY_MODE https)}"
     _set_env_kv "$env_file" "OPENSMART_PROXY_BIND" "$addr" || true
@@ -1251,6 +1272,12 @@ cmd_install() {
         ;;
     esac
   done
+
+  # Fail fast on a malformed --bind before the (multi-minute) install even
+  # starts, rather than only discovering it in the very last step.
+  if [[ -n "$bind" ]]; then
+    _require_valid_bind "$bind" "--bind"
+  fi
 
   print_banner
   _log_init
