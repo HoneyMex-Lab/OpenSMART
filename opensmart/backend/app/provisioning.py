@@ -223,6 +223,69 @@ def _proxy_hostname_env() -> dict[str, str]:
     return {"OPENSMART_HOSTNAME": value}
 
 
+# ── Pending admin password (bootstraps tool credential sync) ─────────────────
+#
+# Passwords are only ever stored as Argon2 hashes — by design, this process
+# can never recover the plaintext of a password after the change request
+# that set it has completed. The tool-credential sync (sync_arkime_password/
+# sync_wazuh_password below) therefore can only ever run at the MOMENT of a
+# password change, using the plaintext from that one request.
+#
+# That collides with how a fresh install actually unfolds: the forced
+# first-login password change happens BEFORE the Wizard has provisioned
+# anything, so the very first sync attempt (fired immediately on that
+# change, see routes/account.py) has no Arkime/Wazuh admin user to sync
+# against yet — it silently no-ops. The tool then gets provisioned later,
+# via the Wizard's Provision step, using its own default password, and
+# stays there until some LATER, unrelated password change happens to catch
+# it already provisioned. Confirmed as the actual reported bug: "not
+# updated until another password change."
+#
+# Since the plaintext can't be recovered after the fact, the fix is to
+# briefly remember it: cache in process memory only (never written to
+# disk/DB/logs, never returned by any API), for a bounded window, and apply
+# it retroactively the moment a tool that needed it gets provisioned. This
+# doesn't worsen the threat model — the plaintext already transits this
+# process on every login/password-change request regardless — it just
+# extends how long it survives in memory, bounded by the TTL below.
+_PENDING_ADMIN_PASSWORD: tuple[float, str] | None = None
+_PENDING_ADMIN_PASSWORD_TTL_SECONDS = 1800  # long enough to cover a full Wizard run
+
+
+def remember_admin_password(password: str) -> None:
+    """Call this whenever an admin's password changes (see
+    routes/account.py) so a tool provisioned shortly after — even in a
+    later, separate request — can still be synced to it once."""
+    global _PENDING_ADMIN_PASSWORD
+    _PENDING_ADMIN_PASSWORD = (time.time(), password)
+
+
+def _pending_admin_password() -> str | None:
+    """Read-only peek (not consumed/cleared on read) so multiple tools
+    provisioned within the same Wizard run can all pick up the same
+    recently-changed password, not just the first one."""
+    if _PENDING_ADMIN_PASSWORD is None:
+        return None
+    changed_at, password = _PENDING_ADMIN_PASSWORD
+    if time.time() - changed_at > _PENDING_ADMIN_PASSWORD_TTL_SECONDS:
+        return None
+    return password
+
+
+def _sync_pending_password(container: str) -> None:
+    password = _pending_admin_password()
+    if not password:
+        return
+    if container == "arkime":
+        ok, detail = sync_arkime_password(password)
+    elif container == "wazuh":
+        ok, detail = sync_wazuh_password(password)
+    else:
+        return
+    if not ok:
+        logger.warning("pending admin password sync to %s failed: %s", container, detail[:300])
+
+
 def start_container(container: str) -> tuple[bool, str]:
     for dependency in CONTAINER_DEPENDENCIES.get(container, []):
         ok, detail = _run_compose(dependency, "up", "-d")
@@ -237,7 +300,10 @@ def start_container(container: str) -> tuple[bool, str]:
         extra_env = _monitor_interfaces_env()
     elif container == "nginx":
         extra_env = _proxy_hostname_env()
-    return _run_compose(container, "up", "-d", extra_env=extra_env)
+    ok, detail = _run_compose(container, "up", "-d", extra_env=extra_env)
+    if ok and container in ("arkime", "wazuh"):
+        _sync_pending_password(container)
+    return ok, detail
 
 
 def stop_container(container: str) -> tuple[bool, str]:
@@ -457,6 +523,110 @@ def sync_arkime_password(password: str, *, username: str = "admin") -> tuple[boo
     if result.returncode != 0:
         logger.warning("arkime password sync failed: %s", output[:1000])
         return False, output[-1000:]
+    return True, output[-1000:]
+
+
+# ── Wazuh admin password sync ─────────────────────────────────────────────────
+
+_WAZUH_INDEXER_IMAGE = "wazuh/wazuh-indexer:4.14.6"
+_WAZUH_USERS_FILE = CONTAINERS_ROOT / "wazuh" / "config" / "wazuh_indexer" / "internal_users.yml"
+_WAZUH_CERTS_DIR = CONTAINERS_ROOT / "wazuh" / "volumes" / "data" / "wazuh_indexer_ssl_certs"
+_WAZUH_ENV_FILE = CONTAINERS_ROOT / "wazuh" / ".env"
+
+# Wazuh ships wazuh-passwords-tool.sh for exactly this, but its "is this
+# installed" check is a package-manager query (rpm -q wazuh-indexer / apt
+# list --installed) that never matches this project's images — they're
+# built by copying files in, not via a package manager — confirmed live:
+# every invocation reports "the given user does not exist" regardless of
+# username, because the code path that would populate its known-users list
+# from a live query never runs without that detection succeeding. This
+# replicates what the tool does under the hood instead, using the same
+# image's own bundled tools: hash.sh (bcrypt, guaranteed format-compatible
+# since it's the same tool the security plugin itself ships) generates the
+# hash; sed patches just the admin user's hash line in the vendored
+# internal_users.yml (the range between "^admin:" and the next top-level
+# key "^kibanaserver:" brackets exactly one hash: line, so this is safe
+# without a real YAML parser); securityadmin.sh pushes it to the live
+# cluster, authenticating via the admin certificate rather than a password.
+# chmod first: this directory's host-side ownership varies by how the repo
+# was checked out (confirmed different across hosts in this project), and
+# the container's own uid may not match — best-effort, the sed step below
+# fails with a clear, caught error if it's still not writable after this.
+_WAZUH_SYNC_SCRIPT = r"""
+set -e
+chmod -R a+rwX /work 2>/dev/null || true
+export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+TOOLS=/usr/share/wazuh-indexer/plugins/opensearch-security/tools
+HASH="$(bash "$TOOLS/hash.sh" -p "$WAZUH_NEW_PASSWORD" | tail -n1)"
+sed -i '/^admin:/,/^kibanaserver:/{s|^\(\s*hash:\s*\).*|\1"'"$HASH"'"|}' /work/internal_users.yml
+bash "$TOOLS/securityadmin.sh" \
+  -f /work/internal_users.yml -t internalusers \
+  -icl -nhnv -p 9200 -h wazuh.indexer \
+  -cacert /certs/root-ca.pem -cert /certs/admin.pem -key /certs/admin-key.pem
+"""
+
+
+def sync_wazuh_password(password: str, *, username: str = "admin") -> tuple[bool, str]:
+    """Set the Wazuh indexer's admin user password — the credential that
+    actually gates human login to the Wazuh dashboard (the dashboard's own
+    DASHBOARD_USERNAME/kibanaserver user is a separate, unrelated internal
+    service account). See _WAZUH_SYNC_SCRIPT's comment for why this doesn't
+    just shell out to Wazuh's own wazuh-passwords-tool.sh.
+
+    Also updates WAZUH_INDEXER_PASSWORD in wazuh's own .env and recreates
+    wazuh.manager/wazuh.dashboard — both authenticate to the indexer as
+    this same admin user via that env var, so without refreshing them
+    they'd silently lose their own indexer connection the moment this
+    changes the password out from under them.
+
+    Only username="admin" is meaningful today — that's the one user a
+    human actually logs into the dashboard with; other indexer service
+    accounts (kibanaserver, logstash, ...) aren't tied to any OpenSMART
+    login and are left alone.
+
+    The password is passed through the environment, never interpolated
+    into the shell command or written to argv, so it can't break quoting
+    or show up in `docker inspect`/process listings. Best-effort: callers
+    treat failure as non-fatal (Wazuh may not be provisioned yet).
+    """
+    if username != "admin":
+        return False, "Only the 'admin' indexer user is supported."
+    if not _WAZUH_USERS_FILE.is_file() or not (_WAZUH_CERTS_DIR / "admin.pem").is_file():
+        return False, "Wazuh is not provisioned yet."
+    try:
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "--network", "opensmart",
+                "-e", f"WAZUH_NEW_PASSWORD={password}",
+                "-v", f"{_WAZUH_USERS_FILE.parent}:/work",
+                "-v", f"{_WAZUH_CERTS_DIR}:/certs:ro",
+                "--entrypoint", "bash",
+                _WAZUH_INDEXER_IMAGE, "-c", _WAZUH_SYNC_SCRIPT,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            shell=False,
+        )
+    except FileNotFoundError:
+        return False, "docker CLI is not available in this environment."
+    except subprocess.TimeoutExpired:
+        return False, "Timed out setting the Wazuh password."
+    output = (result.stderr or result.stdout or "").strip()
+    if result.returncode != 0:
+        logger.warning("wazuh password sync failed: %s", output[:1000])
+        return False, output[-1000:]
+
+    try:
+        _set_env_kv(_WAZUH_ENV_FILE, "WAZUH_INDEXER_PASSWORD", password)
+    except OSError as error:
+        logger.warning("failed to persist WAZUH_INDEXER_PASSWORD into %s: %s", _WAZUH_ENV_FILE, error)
+        return True, output[-1000:] + "\n(warning: manager/dashboard not refreshed — see server log)"
+
+    ok, refresh_detail = _run_compose("wazuh", "up", "-d", "wazuh.manager", "wazuh.dashboard")
+    if not ok:
+        logger.warning("wazuh manager/dashboard refresh after password sync failed: %s", refresh_detail[:500])
+        return True, output[-1000:] + "\n(warning: manager/dashboard refresh failed — see server log)"
     return True, output[-1000:]
 
 

@@ -17,15 +17,31 @@ router = APIRouter(prefix="/api/account", tags=["account"])
 def _sync_tool_passwords(password: str) -> None:
     """Keep tool credentials we provision in step with the admin password.
     Best-effort and off the request path: runs in a background thread so a
-    slow/failed sync never delays or fails the user's password change. Only
-    Arkime today (the one tool whose admin we create); other tools manage
-    their own credentials."""
+    slow/failed sync never delays or fails the user's password change.
+    Arkime and Wazuh today; other tools manage their own credentials.
+
+    Also remembers the plaintext briefly (see provisioning.
+    remember_admin_password) — on a fresh install, this fires from the
+    FORCED first-login password change, which happens before the Wizard
+    has provisioned anything, so the immediate sync attempts below have
+    nothing to sync against yet. Without the pending-password mechanism,
+    Arkime/Wazuh would keep their provisioning-time default password until
+    some later, unrelated password change happened to catch them already
+    provisioned — the actual reported bug ("not updated until another
+    password change")."""
+    provisioning.remember_admin_password(password)
+
     def _run() -> None:
         ok, detail = provisioning.sync_arkime_password(password)
         if ok:
             logger.info("Arkime admin password synced to the OpenSMART admin password.")
         else:
             logger.warning("Arkime admin password sync skipped/failed: %s", detail[:300])
+        ok, detail = provisioning.sync_wazuh_password(password)
+        if ok:
+            logger.info("Wazuh admin password synced to the OpenSMART admin password.")
+        else:
+            logger.warning("Wazuh admin password sync skipped/failed: %s", detail[:300])
     threading.Thread(target=_run, daemon=True).start()
 
 
