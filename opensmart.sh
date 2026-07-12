@@ -10,7 +10,7 @@ CONTAINER_NAME="opensmart"
 FIRST_RUN_MARKER="OpenSMART initial admin account created"
 LOG_DIR="$ROOT_DIR/logs"
 INSTALL_LOG="$LOG_DIR/install.log"
-STEP_TOTAL=15
+STEP_TOTAL=16
 STEP_NUM=0
 # Tells run_app.sh to refer to *this* script in its own user-facing
 # "run ... to do X" messages, instead of naming itself — keeps messages
@@ -685,6 +685,95 @@ _install_require_root() {
   printf 'ok\n'
 }
 
+_install_replace_existing_deployment() {
+  # Sub-flow of _install_check_existing_deployment's "replace" choice.
+  # Deliberately mirrors cmd_uninstall's own two-option + typed-confirmation
+  # flow exactly (same wording, same safety net) rather than inventing a
+  # separate path, and reuses its extracted helpers so there is exactly one
+  # place that knows how to actually remove things.
+  printf '\nReplace existing deployment — choose how much to remove first:\n\n'
+  printf '  1) Containers only (keeps application data — PCAPs, alerts, VPN certs, DBs)\n'
+  printf '  2) Full removal — containers AND all application data. THIS CANNOT BE UNDONE.\n\n'
+  local choice
+  read -r -p 'Choose an option [1/2, anything else cancels]: ' choice
+  case "$choice" in
+    1) ;;
+    2) ;;
+    *) printf 'Install cancelled.\n'; exit 0 ;;
+  esac
+
+  local confirmation
+  if [[ "$choice" == "1" ]]; then
+    read -r -p 'Type UNINSTALL to continue: ' confirmation
+    if [[ "$confirmation" != "UNINSTALL" ]]; then
+      printf 'Install cancelled.\n'
+      exit 0
+    fi
+  else
+    printf '\nThis permanently destroys application data — PCAPs, security alerts,\n'
+    printf 'indices, VPN certificates/keys, and the app'"'"'s own databases. There is no\n'
+    printf 'undo and no backup is taken.\n\n'
+    read -r -p 'Type DELETE ALL DATA to continue: ' confirmation
+    if [[ "$confirmation" != "DELETE ALL DATA" ]]; then
+      printf 'Install cancelled.\n'
+      exit 0
+    fi
+  fi
+
+  printf '\n===== opensmart.sh install: replacing existing deployment %s (option %s) =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$choice" >> "$INSTALL_LOG"
+  printf 'Removing existing deployment...\n'
+  _uninstall_remove_containers "$INSTALL_LOG"
+  if [[ "$choice" == "2" ]]; then
+    _uninstall_purge_data "$INSTALL_LOG"
+  fi
+  printf '✔ Existing deployment removed. Continuing with a clean install...\n\n'
+}
+
+_install_check_existing_deployment() {
+  # First thing install does (after confirming root) — before touching
+  # anything, including installing Docker itself. Detects a deployment left
+  # by a previous install/recreate via the same signal _start_existing_
+  # container uses ($CONTAINER_NAME existing at all, running or not).
+  # Never fails the install: an unattended/non-interactive run (closed or
+  # /dev/null stdin — read returns empty immediately) falls through to the
+  # same default this script always had before this check existed: keep
+  # whatever is there and continue installing in place.
+  _step "Checking for an existing OpenSMART deployment"
+  if ! command -v docker >/dev/null 2>&1 || ! _container_exists; then
+    printf 'none found\n'
+    return
+  fi
+  printf 'found\n'
+
+  local state
+  state="$(docker container inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo unknown)"
+  printf '\nAn existing OpenSMART deployment was found (container "%s": %s).\n' "$CONTAINER_NAME" "$state"
+  printf 'Installing again will rebuild the image and update it IN PLACE — existing\n'
+  printf 'containers, configuration, and application data are all kept — unless you\n'
+  printf 'choose to replace it below.\n\n'
+  printf '  1) Keep it — continue installing (updates in place)\n'
+  printf '  2) Replace it — fully remove the existing deployment first, then install\n'
+  printf '     clean (you will be asked whether to also delete application data,\n'
+  printf '     same options as ./opensmart.sh uninstall)\n'
+  printf '  3) Cancel\n\n'
+
+  local choice
+  read -r -p 'Choose an option [1/2/3, default 1 — keep and continue]: ' choice
+  choice="${choice:-1}"
+  case "$choice" in
+    1)
+      printf 'Keeping the existing deployment; continuing install.\n\n'
+      ;;
+    2)
+      _install_replace_existing_deployment
+      ;;
+    *)
+      printf 'Install cancelled.\n'
+      exit 0
+      ;;
+  esac
+}
+
 _install_check_path_traversable() {
   # The container runs as a non-root user (uid 1000) and needs every ancestor
   # directory of the bind-mounted checkout to be traversable (the "other"
@@ -1076,6 +1165,7 @@ cmd_install() {
   _log_init
   printf 'Full installer log: %s\n\n' "$INSTALL_LOG"
   _install_require_root
+  _install_check_existing_deployment
   _install_check_path_traversable
   _install_check_host_resources
   _install_check_distro
