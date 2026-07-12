@@ -273,12 +273,15 @@ def _pending_admin_password() -> str | None:
 
 
 def _sync_pending_password(container: str) -> None:
+    """Apply a cached pending admin password to a tool right after it is
+    provisioned. Only used for Wazuh — Arkime is handled deterministically at
+    `up -d` time via .env + its init-admin-user one-off (see
+    _arkime_admin_password_env), which is immune to the provision-time race
+    this post-hoc sync would otherwise lose on a fresh install."""
     password = _pending_admin_password()
     if not password:
         return
-    if container == "arkime":
-        ok, detail = sync_arkime_password(password)
-    elif container == "wazuh":
+    if container == "wazuh":
         ok, detail = sync_wazuh_password(password)
     else:
         return
@@ -300,8 +303,17 @@ def start_container(container: str) -> tuple[bool, str]:
         extra_env = _monitor_interfaces_env()
     elif container == "nginx":
         extra_env = _proxy_hostname_env()
+    elif container == "arkime":
+        # Seed ARKIME_ADMIN_PASSWORD into .env before `up -d` so the compose's
+        # own init-admin-user applies the pending admin password directly — no
+        # race against a post-provision single-shot sync (see the helper).
+        extra_env = _arkime_admin_password_env()
     ok, detail = _run_compose(container, "up", "-d", extra_env=extra_env)
-    if ok and container in ("arkime", "wazuh"):
+    # Wazuh's admin password lives in a bcrypt hash baked into internal_users.yml
+    # at provision time, not in an env var, so a fresh provision always comes up
+    # on the vendored default — it needs an explicit post-provision sync. Arkime
+    # is handled deterministically above via .env + init-admin-user instead.
+    if ok and container == "wazuh":
         _sync_pending_password(container)
     return ok, detail
 
@@ -378,6 +390,11 @@ def container_overview() -> list[dict]:
                 warnings.append(f"Health check reports: {health}.")
             if state.get("ExitCode", 0) != 0 and status == "exited":
                 warnings.append(f"Exited with code {state.get('ExitCode')}.")
+            # The Wazuh dashboard can be "running" yet serve a persistent HTTP
+            # 500 (see the auto-healer); surface that app-level assessment here
+            # since no Docker-level signal reflects it.
+            if name == _WAZUH_DASHBOARD_CONTAINER and _WAZUH_HEALTH["assessment"]:
+                warnings.append(_WAZUH_HEALTH["assessment"])
             containers.append({
                 "name": name,
                 "exists": True,
@@ -485,21 +502,87 @@ def host_resources() -> dict:
 
 _ARKIME_IMAGE = "ghcr.io/arkime/arkime/arkime:v6-latest"
 _ARKIME_CONFIG = CONTAINERS_ROOT / "arkime" / "etc" / "config.ini"
+_ARKIME_ENV_FILE = CONTAINERS_ROOT / "arkime" / ".env"
+
+# Arkime's own name for this theme value is "Green on Black" (see the theme
+# list in the viewer bundle). addUser.js replaces the whole user document, so
+# both this sync and the compose init-admin-user reset settings.theme whenever
+# they run; each re-seeds the default afterwards. Painless sets it only when
+# unset, so a theme the user picked in the UI survives until the admin user is
+# next (re)created.
+_ARKIME_DEFAULT_THEME = "dark-2-theme"
+_ARKIME_THEME_UPDATE = (
+    '{"script":{"lang":"painless","source":'
+    '"if(ctx._source.settings==null){ctx._source.settings=[:];} '
+    'if(ctx._source.settings.theme==null){ctx._source.settings.theme=params.t;}",'
+    '"params":{"t":"' + _ARKIME_DEFAULT_THEME + '"}}}'
+)
+
+
+def _arkime_admin_password_env() -> dict[str, str]:
+    """ARKIME_ADMIN_PASSWORD for the arkime compose, from the pending admin
+    password if one is cached. Persists it into arkime's own .env (source of
+    truth) AND returns it as a transient subprocess env override.
+
+    This is the deterministic half of the first-install fix. Arkime's compose
+    ships an init-admin-user one-off that, on every `up -d`, runs the image's
+    addUser.js in a retry loop until the users index exists and sets the admin
+    password from ARKIME_ADMIN_PASSWORD (default: changeme-arkime-admin). That
+    retry loop reliably wins any race against a single-shot addUser fired right
+    after `up -d` (the users index typically isn't ready for 15-120s on a fresh
+    install), which is exactly why the old post-provision sync silently lost and
+    Arkime stayed on the default until a *second*, later password change caught
+    it already up. Writing the real password to .env before `up -d` makes
+    init-admin-user itself apply it — both writers now converge on one value, so
+    there is no race left to lose. Passing it as env too forces compose to
+    recreate (re-run) init-admin-user when the password changed."""
+    password = _pending_admin_password()
+    if not password:
+        return {}
+    try:
+        _set_env_kv(_ARKIME_ENV_FILE, "ARKIME_ADMIN_PASSWORD", password)
+    except OSError as error:
+        logger.warning("failed to persist ARKIME_ADMIN_PASSWORD into %s: %s", _ARKIME_ENV_FILE, error)
+    return {"ARKIME_ADMIN_PASSWORD": password}
 
 
 def sync_arkime_password(password: str, *, username: str = "admin") -> tuple[bool, str]:
     """Set Arkime's admin user password via a one-off container running the
     image's own addUser.js (upsert — updates the password when the user
     exists). Used to keep the Arkime tool credential in step with the
-    OpenSMART admin password. Best-effort: callers treat failure as
-    non-fatal (Arkime may not be provisioned/running yet).
+    OpenSMART admin password.
 
-    The password is passed through the environment, never interpolated into
-    the shell command, so it can't break quoting or inject anything.
+    First persists the password into arkime's .env as ARKIME_ADMIN_PASSWORD —
+    the single source of truth the compose's init-admin-user one-off reads on
+    every provision. Without this, init-admin-user would reset the admin back
+    to its default password on the next `up -d`, silently undoing this sync
+    (the root cause of "Arkime password not updated after first install"). The
+    .env write happens even if the addUser step below fails (e.g. Arkime not
+    running yet), so a later provision still applies the correct password.
+
+    Also re-seeds the admin's default UI theme (addUser.js replaces the whole
+    user document, so it wipes settings.theme) — see _ARKIME_THEME_UPDATE.
+
+    Best-effort on the live-apply step: callers treat failure as non-fatal
+    (Arkime may not be provisioned/running yet). The password is passed through
+    the environment, never interpolated into the shell command, so it can't
+    break quoting or inject anything.
     """
     if not _ARKIME_CONFIG.is_file():
         return False, "Arkime is not provisioned (no config.ini)."
-    script = 'cd /opt/arkime/viewer && exec /opt/arkime/bin/node addUser.js "$0" "OpenSMART Admin" "$ARKIME_NEW_PASSWORD" --admin'
+    try:
+        _set_env_kv(_ARKIME_ENV_FILE, "ARKIME_ADMIN_PASSWORD", password)
+    except OSError as error:
+        logger.warning("failed to persist ARKIME_ADMIN_PASSWORD into %s: %s", _ARKIME_ENV_FILE, error)
+    # addUser first (must succeed for the sync to count), then best-effort
+    # re-seed the default theme addUser just wiped (|| true so a theme hiccup
+    # never reports the password change as failed). $0 is the username arg.
+    script = (
+        'cd /opt/arkime/viewer && '
+        '/opt/arkime/bin/node addUser.js "$0" "OpenSMART Admin" "$ARKIME_NEW_PASSWORD" --admin && '
+        '{ curl -s -XPOST "http://opensearch:9200/arkime_users/_update/$0" '
+        '-H "Content-Type: application/json" -d ' + "'" + _ARKIME_THEME_UPDATE + "'" + ' || true; }'
+    )
     try:
         result = subprocess.run(
             [
@@ -628,6 +711,186 @@ def sync_wazuh_password(password: str, *, username: str = "admin") -> tuple[bool
         logger.warning("wazuh manager/dashboard refresh after password sync failed: %s", refresh_detail[:500])
         return True, output[-1000:] + "\n(warning: manager/dashboard refresh failed — see server log)"
     return True, output[-1000:]
+
+
+# ── Wazuh dashboard auto-healing ──────────────────────────────────────────────
+#
+# On a first install the Wazuh dashboard frequently comes up before the indexer
+# has finished initializing its security/.kibana indices, gets stuck, and serves
+# a persistent HTTP 500 ("An internal server error occurred.") until it is
+# restarted by hand — confirmed reproducible, and confirmed that a plain restart
+# clears it once the indexer is ready. The container itself stays "running" the
+# whole time (no Docker healthcheck), so container-state warnings never catch it;
+# only an HTTP probe does.
+#
+# This runs a small background state machine (driven by main.py's loop) that
+# probes the dashboard, and — only for a *sustained* 5xx well past startup —
+# restarts it a bounded number of times, then stops and posts a human-readable
+# assessment. State is surfaced in the Status section via container_overview().
+_WAZUH_DASHBOARD_CONTAINER = "opensmart-wazuh-dashboard"
+_WAZUH_DASHBOARD_URL = "https://wazuh.dashboard:5601/wazuh/api/status"
+_WAZUH_INDEXER_URL = "https://wazuh.indexer:9200/"
+_WAZUH_HEAL_STARTUP_GRACE_SECONDS = 150  # normal startup shows transient 000/503/500
+_WAZUH_HEAL_ERROR_THRESHOLD = 2          # consecutive bad probes before healing
+_WAZUH_HEAL_MAX_ATTEMPTS = 3             # restarts before giving up and assessing
+_WAZUH_HEAL_BACKOFF_SECONDS = 120        # min gap between restart attempts
+
+# Shared, read by container_overview() (any thread) and written by the heal tick.
+_WAZUH_HEALTH: dict = {
+    "state": "unknown",       # unknown|not-provisioned|stopped|starting|healthy|degraded|healing|unhealthy
+    "http_code": None,
+    "assessment": "",         # human-readable line shown in the Status section (empty = nothing to show)
+    "consecutive_errors": 0,
+    "heal_attempts": 0,
+    "last_heal_ts": 0.0,
+    "checked_at": 0.0,
+}
+
+
+def _probe_wazuh_dashboard() -> int | None:
+    """Return the dashboard's HTTP status code, or None if unreachable. Uses a
+    one-off curl on the opensmart network (the wazuh-indexer image ships curl
+    and is already present) so it works whether this process runs in-container
+    on that network or natively on the host — same rationale as host_interfaces
+    and the password syncs."""
+    try:
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "--network", "opensmart",
+                "--entrypoint", "curl", _WAZUH_INDEXER_IMAGE,
+                "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+                "--max-time", "8", _WAZUH_DASHBOARD_URL,
+            ],
+            capture_output=True, text=True, timeout=40, shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    code = (result.stdout or "").strip()
+    if code.isdigit() and code != "000":
+        return int(code)
+    return None
+
+
+def _dashboard_healthy(code: int | None) -> bool:
+    # 401 is healthy here: the server is up and demanding auth (the dashboard
+    # requires login). 2xx/3xx are healthy too. 5xx / None are not.
+    return code is not None and (200 <= code < 400 or code == 401)
+
+
+def _probe_wazuh_indexer() -> int | None:
+    """HTTP status of the indexer's root, or None if unreachable — same one-off
+    curl mechanism as the dashboard probe."""
+    try:
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "--network", "opensmart",
+                "--entrypoint", "curl", _WAZUH_INDEXER_IMAGE,
+                "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+                "--max-time", "8", _WAZUH_INDEXER_URL,
+            ],
+            capture_output=True, text=True, timeout=40, shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    code = (result.stdout or "").strip()
+    if code.isdigit() and code != "000":
+        return int(code)
+    return None
+
+
+def _indexer_ready(code: int | None) -> bool:
+    # 401/200 = up with the security index initialized (demands auth). 503 = up
+    # but security not initialized yet; 000/None = not listening. Only the first
+    # means the dashboard has a backend it can actually talk to.
+    return code is not None and (200 <= code < 400 or code == 401)
+
+
+def _restart_wazuh_dashboard() -> tuple[bool, str]:
+    return _run_compose("wazuh", "restart", "wazuh.dashboard")
+
+
+def wazuh_autoheal_tick() -> None:
+    """One iteration of the dashboard auto-healer. Safe to call on a timer;
+    never raises. Updates _WAZUH_HEALTH (surfaced in the Status section)."""
+    now = time.time()
+    inspected = _docker_inspect([_WAZUH_DASHBOARD_CONTAINER])
+    if not inspected:
+        _WAZUH_HEALTH.update(state="not-provisioned", http_code=None, assessment="",
+                             consecutive_errors=0, heal_attempts=0, checked_at=now)
+        return
+    state = inspected[0].get("State", {})
+    if state.get("Status") != "running":
+        # Respect a deliberately stopped tool: report, but don't fight the user
+        # by auto-starting it.
+        _WAZUH_HEALTH.update(state="stopped", http_code=None,
+                             assessment="Wazuh dashboard is not running. Start it from the Tools/Status section.",
+                             consecutive_errors=0, heal_attempts=0, checked_at=now)
+        return
+    uptime = _uptime_seconds(state.get("StartedAt", ""))
+    if uptime is not None and uptime < _WAZUH_HEAL_STARTUP_GRACE_SECONDS:
+        _WAZUH_HEALTH.update(state="starting", http_code=None, assessment="",
+                             consecutive_errors=0, checked_at=now)
+        return
+
+    code = _probe_wazuh_dashboard()
+    if _dashboard_healthy(code):
+        if _WAZUH_HEALTH["heal_attempts"] or _WAZUH_HEALTH["consecutive_errors"]:
+            logger.info("wazuh dashboard healthy again (HTTP %s)", code)
+        _WAZUH_HEALTH.update(state="healthy", http_code=code, assessment="",
+                             consecutive_errors=0, heal_attempts=0, checked_at=now)
+        return
+
+    # Unhealthy (5xx or unreachable) past the startup grace.
+    code_label = str(code) if code is not None else "no response"
+
+    # Is the *indexer* even ready? The dashboard 500s/503s whenever its indexer
+    # is still initializing (the classic fresh-install / post-password-change
+    # window), and restarting the dashboard can't fix that — it just burns the
+    # attempt budget and then wrongly "gives up". So when the indexer isn't
+    # ready, wait for it (no restart, no attempt spent); the dashboard recovers
+    # on its own once the indexer is up. This is the fix for the auto-heal being
+    # "inconsistent / still failing minutes after a password change".
+    if not _indexer_ready(_probe_wazuh_indexer()):
+        _WAZUH_HEALTH.update(
+            state="degraded", http_code=code, consecutive_errors=0, checked_at=now,
+            assessment=(f"Wazuh dashboard unavailable (HTTP {code_label}) while its indexer is "
+                        "still starting — waiting for the indexer to become ready (no restart)."))
+        return
+
+    errors = _WAZUH_HEALTH["consecutive_errors"] + 1
+    attempts = _WAZUH_HEALTH["heal_attempts"]
+
+    if errors < _WAZUH_HEAL_ERROR_THRESHOLD:
+        _WAZUH_HEALTH.update(state="degraded", http_code=code, consecutive_errors=errors,
+                             assessment=f"Wazuh dashboard health check failing (HTTP {code_label}); watching before auto-restart.",
+                             checked_at=now)
+        return
+
+    if attempts >= _WAZUH_HEAL_MAX_ATTEMPTS:
+        _WAZUH_HEALTH.update(
+            state="unhealthy", http_code=code, consecutive_errors=errors, checked_at=now,
+            assessment=(f"Wazuh dashboard still failing (HTTP {code_label}) after "
+                        f"{_WAZUH_HEAL_MAX_ATTEMPTS} automatic restarts, even though the indexer is "
+                        "up — check the wazuh.dashboard container logs; a full Wazuh restart may be "
+                        "required."))
+        return
+
+    if now - _WAZUH_HEALTH["last_heal_ts"] < _WAZUH_HEAL_BACKOFF_SECONDS:
+        # A restart is still settling; keep the current assessment, wait.
+        _WAZUH_HEALTH.update(http_code=code, consecutive_errors=errors, checked_at=now)
+        return
+
+    attempts += 1
+    logger.warning("wazuh dashboard unhealthy (HTTP %s) — auto-restart attempt %d/%d",
+                   code_label, attempts, _WAZUH_HEAL_MAX_ATTEMPTS)
+    _WAZUH_HEALTH.update(
+        state="healing", http_code=code, heal_attempts=attempts, last_heal_ts=now,
+        consecutive_errors=0, checked_at=now,
+        assessment=(f"Wazuh dashboard returned HTTP {code_label} — auto-healing "
+                    f"(restart {attempts}/{_WAZUH_HEAL_MAX_ATTEMPTS})…"))
+    ok, detail = _restart_wazuh_dashboard()
+    if not ok:
+        logger.warning("wazuh dashboard auto-restart failed: %s", detail[:300])
 
 
 # ── VPN summary (read-only, from bind-mounted files) ──────────────────────────

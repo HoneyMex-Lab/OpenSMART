@@ -36,6 +36,7 @@ async def startup() -> None:
     _configure_file_logging()
     await _configure_thread_limiter()
     _start_resource_sampler()
+    _start_wazuh_autohealer()
     asyncio.create_task(_retention_loop())
 
 
@@ -132,6 +133,29 @@ def _start_resource_sampler() -> None:
             time.sleep(60)
 
     t = threading.Thread(target=_sample_loop, daemon=True, name="resource-sampler")
+    t.start()
+
+
+def _start_wazuh_autohealer() -> None:
+    """Continuously watch the Wazuh dashboard's HTTP health and auto-restart it
+    out of the persistent-500 state it can get stuck in after a fresh install
+    (see provisioning.wazuh_autoheal_tick). No-ops cheaply when Wazuh isn't
+    provisioned. Runs in a daemon thread since the tick does blocking docker
+    calls."""
+    from . import provisioning
+
+    def _heal_loop() -> None:
+        _log = logging.getLogger(__name__)
+        # Small initial delay so we don't probe during the backend's own boot.
+        time.sleep(30)
+        while True:
+            try:
+                provisioning.wazuh_autoheal_tick()
+            except Exception:
+                _log.exception("wazuh auto-heal tick error")
+            time.sleep(45)
+
+    t = threading.Thread(target=_heal_loop, daemon=True, name="wazuh-autohealer")
     t.start()
 
 
