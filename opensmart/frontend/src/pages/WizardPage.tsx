@@ -33,15 +33,17 @@ const MODULE_CONFIG_DEFAULTS: Record<string, Record<string, string>> = {
   'Network Traffic Monitoring': { log_source: 'eve_json' },
 };
 
-// Locally-provisioned tools get a working iframe URL prefilled (only when
-// the URL setting is still empty).
-// Locally-provisioned tools default to their front-door proxy alias
-// (same-origin path) so they embed in the Tools iframe out of the box when
-// OpenSMART is reached via the proxy. Switch a tool to a direct url:port in
-// Configuration > Tools if you don't run behind the proxy.
+// Locally-provisioned tools default to their front-door proxy alias, built
+// as an ABSOLUTE URL against the proxy's own host (not a bare relative
+// path — a relative "/arkime/" only resolves when OpenSMART itself is
+// being accessed through the proxy; the app's own :8000 remains a fully
+// supported direct-access mode, and a relative alias 404s there). See
+// toolDefinitions.ts's aliasUrl()/isAliasUrl() for why an absolute proxy
+// URL embeds exactly as well as a relative one regardless of which port
+// loaded the current page.
 const DEFAULT_TOOL_URLS: Record<string, (host: string) => string> = {
-  Wazuh: () => '/wazuh/',
-  Arkime: () => '/arkime/',
+  Wazuh: (host) => `https://${host}/wazuh/`,
+  Arkime: (host) => `https://${host}/arkime/`,
 };
 
 type RunState = 'pending' | 'running' | 'ok' | 'warning' | 'error' | 'info';

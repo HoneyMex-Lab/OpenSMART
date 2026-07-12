@@ -10,7 +10,7 @@ import NetworkTrafficPage from '../pages/NetworkTrafficPage';
 import StatusPage from '../pages/StatusPage';
 import SummaryPage from '../pages/SummaryPage';
 import ToolsPage from '../pages/ToolsPage';
-import { toolDefinitions } from '../pages/toolDefinitions';
+import { isAliasUrl, toolDefinitions } from '../pages/toolDefinitions';
 import { api } from '../api';
 import type { OpenSmartModule, Settings, ToolConfig, User } from '../types';
 import Sidebar, { PageKey } from './Sidebar';
@@ -58,11 +58,12 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
     const url = settings[toolUrlKeys[tool.name] || ''] || '';
     if (!url) return <StatusMessage title={title} status="Warning" detail="This tool is enabled but no internal URL is configured. Add the URL in Configuration > Tools Config." />;
     const openLink = <a className="tool-open-btn" href={url} target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>;
-    // A relative URL ("/arkime/") is served by OpenSMART's own front-door
-    // proxy, i.e. same origin as this page — so it always embeds (the proxy
-    // strips the tool's framing headers). Only absolute cross-origin URLs
-    // for tools flagged embeddable:false fall back to the launch card.
-    const isAlias = url.startsWith('/');
+    // A URL (relative OR absolute) served by OpenSMART's own front-door
+    // proxy at this tool's alias path always embeds — the proxy strips the
+    // tool's framing headers unconditionally, so this doesn't depend on the
+    // current page's own origin. Only non-proxy URLs for tools flagged
+    // embeddable:false fall back to the launch card.
+    const isAlias = isAliasUrl(url, definition);
     if (!isAlias && definition?.embeddable === false) {
       return (
         <section className="tool-view">

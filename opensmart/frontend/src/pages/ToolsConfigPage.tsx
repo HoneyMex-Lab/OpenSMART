@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Settings, ToolConfig } from '../types';
-import { toolDefinitions } from './toolDefinitions';
+import { aliasUrl, isAliasUrl, toolDefinitions } from './toolDefinitions';
 
 type DiffEntry = { field: string; from: string; to: string };
 
@@ -137,7 +137,7 @@ export default function ToolsConfigPage({ settings, setSettings, tools, onToolsU
               <Toggle checked={activeTool.enabled} onChange={(checked) => setToolDraft(toolDraft.map((item) => item.id === activeTool.id ? { ...item, enabled: checked } : item))} />
             </div>
             {definition.alias && (() => {
-              const usingAlias = url === definition.alias;
+              const usingAlias = isAliasUrl(url, definition);
               return (
                 <div className="tool-access-mode">
                   <span className="toggle-label-inline">Access mode</span>
@@ -145,7 +145,7 @@ export default function ToolsConfigPage({ settings, setSettings, tools, onToolsU
                     <button
                       type="button"
                       className={usingAlias ? 'active' : ''}
-                      onClick={() => setSettingsDraft({ ...settingsDraft, [definition.key]: definition.alias! })}
+                      onClick={() => setSettingsDraft({ ...settingsDraft, [definition.key]: aliasUrl(definition) })}
                     >
                       Alias ({definition.alias})
                     </button>
@@ -159,13 +159,13 @@ export default function ToolsConfigPage({ settings, setSettings, tools, onToolsU
                   </div>
                   <p className="muted access-mode-hint">
                     {usingAlias
-                      ? 'Served through the OpenSMART front-door proxy — embeds in the tool view. Access OpenSMART via the proxy port (8080) for aliases to resolve.'
+                      ? 'Served through the OpenSMART front-door proxy — embeds in the tool view from any access port (the URL points at the proxy itself, so it works whether OpenSMART is reached through the proxy or directly).'
                       : 'Point directly at the tool. Tools that block framing open in a new tab instead of embedding.'}
                   </p>
                 </div>
               );
             })()}
-            <label>{url.startsWith('/') ? 'Alias path' : 'Internal URL'}<input type="text" placeholder="https://tool.example.local" value={url} onChange={(event) => setSettingsDraft({ ...settingsDraft, [definition.key]: event.target.value })} /></label>
+            <label>{isAliasUrl(url, definition) ? 'Alias URL' : 'Internal URL'}<input type="text" placeholder="https://tool.example.local" value={url} onChange={(event) => setSettingsDraft({ ...settingsDraft, [definition.key]: event.target.value })} /></label>
             <button className="text-button" onClick={() => setVisibleJson({ ...visibleJson, [activeTool.id]: !visibleJson[activeTool.id] })}>{visibleJson[activeTool.id] ? 'Hide JSON config' : 'Show JSON config'}</button>
             {visibleJson[activeTool.id] && <label>JSON Configuration<textarea value={activeTool.config} onChange={(event) => setToolDraft(toolDraft.map((item) => item.id === activeTool.id ? { ...item, config: event.target.value } : item))} /></label>}
           </article>
