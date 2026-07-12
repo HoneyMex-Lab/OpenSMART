@@ -461,15 +461,32 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
       {step === 'features' && (
         <>
           {notices.map((notice) => <p key={notice} className="wizard-notice">{notice}</p>)}
-          {hostResources && hostResources.tier !== 'full' && (
-            <p className="wizard-notice warning">
-              ⚠ This host's resources ({hostResources.cpu_count} CPU / {hostResources.memory_total_mb}MB RAM / {hostResources.disk_free_gb}GB free disk, detected at install time) are below the recommended tier
-              ({hostResources.recommended_tiers.full.cpu} CPU / {hostResources.recommended_tiers.full.memory_mb}MB RAM / {hostResources.recommended_tiers.full.disk_gb}GB disk) for the full tool set.
-              {' '}{[...constrainedTools].join(' and ') || 'Some tools'} run a JVM-based OpenSearch-family indexer and are the most likely to be unstable — flagged below.
-              {hostResources.tier === 'minimal' && ' This host is also below the minimal recommended tier, so even lightweight modules may be unstable under real traffic.'}
-              {' '}Re-run <code>sudo ./opensmart.sh install</code> after resizing the host to refresh this check.
-            </p>
-          )}
+          {hostResources && hostResources.tier !== 'full' && (() => {
+            const full = hostResources.recommended_tiers.full;
+            const checks: { label: string; ok: boolean; detail: string }[] = [
+              { label: 'CPU', ok: hostResources.cpu_count >= full.cpu, detail: `${hostResources.cpu_count} (recommended ≥ ${full.cpu})` },
+              { label: 'Memory', ok: hostResources.memory_total_mb >= full.memory_mb, detail: `${hostResources.memory_total_mb}MB RAM (recommended ≥ ${full.memory_mb}MB)` },
+              { label: 'Disk', ok: hostResources.disk_free_gb >= full.disk_gb, detail: `${hostResources.disk_free_gb}GB free (recommended ≥ ${full.disk_gb}GB)` },
+            ];
+            return (
+              <div className="wizard-notice warning wizard-resource-checklist">
+                <p>⚠ This host's resources (detected at install time) are below the recommended tier for the full tool set:</p>
+                <ul className="resource-check-list">
+                  {checks.map((check) => (
+                    <li key={check.label} className={check.ok ? 'ok' : 'warn'}>
+                      <span className="resource-check-icon" aria-hidden="true">{check.ok ? '✔' : '⚠'}</span>
+                      <strong>{check.label}:</strong> {check.detail}
+                    </li>
+                  ))}
+                </ul>
+                <p>
+                  {[...constrainedTools].join(' and ') || 'Some tools'} run a JVM-based OpenSearch-family indexer and are the most likely to be unstable — flagged below.
+                  {hostResources.tier === 'minimal' && ' This host is also below the minimal recommended tier, so even lightweight modules may be unstable under real traffic.'}
+                  {' '}Re-run <code>sudo ./opensmart.sh install</code> after resizing the host to refresh this check.
+                </p>
+              </div>
+            );
+          })()}
           <article className="card">
             <h2>OpenSMART Modules</h2>
             <div className="wizard-feature-grid">
