@@ -15,11 +15,15 @@
 #
 # Everything else (images, env vars, ports, ulimits, config file contents
 # under ./config/) is vendored as close to verbatim as possible from
-# upstream. Default credentials (INDEXER_PASSWORD, API_PASSWORD,
-# DASHBOARD_PASSWORD, and the bcrypt hash in
-# config/wazuh_indexer/internal_users.yml) are Wazuh's own well-known demo
-# values — change them via Wazuh's documented wazuh-passwords-tool before
-# exposing this to any untrusted network; see docs/security.md.
+# upstream. Default credentials (API_PASSWORD, DASHBOARD_PASSWORD) are
+# Wazuh's own well-known demo values — the indexer's admin/INDEXER_PASSWORD
+# is the one exception, since OpenSMART keeps it in sync with the OpenSMART
+# admin password automatically (see provisioning.sync_wazuh_password() and
+# the INDEXER_PASSWORD comments below). Note upstream's own
+# wazuh-passwords-tool.sh does NOT work against this Docker-image-based
+# deployment — its install-detection is package-manager based (rpm/apt) and
+# never matches, which is why sync_wazuh_password() replicates its
+# underlying steps (hash.sh + securityadmin.sh) directly instead.
 #
 # First-time setup (provisioning.py's start_container("wazuh") does this
 # automatically before the first `up -d` — see _ensure_wazuh_certs()):
