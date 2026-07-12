@@ -55,6 +55,15 @@ class ProfilePayload(BaseModel):
     email: str = Field(default="", max_length=180)
 
 
+# Themes a user may pick for themselves. "" means inherit the admin-set default
+# (the global `theme` setting). Keep in sync with the frontend's THEME_OPTIONS.
+ALLOWED_THEMES = {"", "honeynet", "dark", "classic", "matrix", "energy"}
+
+
+class ThemePayload(BaseModel):
+    theme: str = Field(default="", max_length=40)
+
+
 @router.post("/password")
 def change_password(payload: PasswordPayload, user: Annotated[dict, Depends(require_csrf)]) -> dict:
     with get_db() as db:
@@ -69,6 +78,18 @@ def change_password(payload: PasswordPayload, user: Annotated[dict, Depends(requ
     if user["role"] == "admin":
         _sync_tool_passwords(payload.newPassword)
     return {"ok": True}
+
+
+@router.put("/theme")
+def set_theme(payload: ThemePayload, user: Annotated[dict, Depends(require_csrf)]) -> dict:
+    """Set the current user's own theme preference ('' = inherit the default)."""
+    theme = payload.theme.strip()
+    if theme not in ALLOWED_THEMES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown theme")
+    with get_db() as db:
+        db.execute("UPDATE users SET theme = ? WHERE id = ?", (theme, user["id"]))
+        db.commit()
+    return {"ok": True, "theme": theme}
 
 
 @router.put("/profile")

@@ -33,6 +33,7 @@ def public_user(user: dict) -> dict:
         "fullName": user["full_name"],
         "email": user["email"],
         "mustChangePassword": bool(user["must_change_password"]),
+        "theme": user["theme"] if "theme" in user.keys() else "",
     }
 
 

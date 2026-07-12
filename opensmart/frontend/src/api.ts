@@ -42,6 +42,7 @@ export const api = {
   status: () => request<{ modules: StatusItem[] }>('/api/status'),
   changePassword: (currentPassword: string, newPassword: string) => request<{ ok: boolean }>('/api/account/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
   updateProfile: (fullName: string, email: string) => request<{ user: User }>('/api/account/profile', { method: 'PUT', body: JSON.stringify({ fullName, email }) }),
+  setTheme: (theme: string) => request<{ ok: boolean; theme: string }>('/api/account/theme', { method: 'PUT', body: JSON.stringify({ theme }) }),
   accountSessions: () => request<{ sessions: SessionInfo[]; logons: LogonInfo[] }>('/api/account/sessions'),
   terminateOtherSessions: () => request<{ sessions: SessionInfo[]; logons: LogonInfo[] }>('/api/account/sessions/others', { method: 'DELETE' }),
   audit: () => request<{ events: AuditEvent[] }>('/api/audit'),

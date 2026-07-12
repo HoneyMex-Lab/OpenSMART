@@ -47,7 +47,7 @@ DEFAULT_SETTINGS = {
     "platform_build": BUILD_VERSION,
     "sensor_name": default_sensor_name(),
     "platform_language": "en",
-    "theme": "dark",
+    "theme": "honeynet",
     "logo_url": "",
     "favicon_url": "/assets/branding/favicon.svg",
     "footer_logo_primary": "",
@@ -678,8 +678,16 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             db.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        # Per-user theme override ('' = inherit the admin-set default theme).
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         for key, value in DEFAULT_SETTINGS.items():
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        # Honeynet is the new default theme; flip installs still on the old
+        # 'dark' default (leaves an explicitly-chosen non-dark theme alone).
+        db.execute("UPDATE settings SET value = 'honeynet' WHERE key = 'theme' AND value = 'dark'")
         db.execute("UPDATE settings SET value = ? WHERE key = 'platform_version' AND value = 'v0.2'", (APP_VERSION,))
         db.execute(
             "INSERT INTO settings (key, value) VALUES ('platform_build', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
