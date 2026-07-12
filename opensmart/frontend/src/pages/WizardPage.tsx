@@ -1,6 +1,6 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { HostInterface, OpenSmartModule, ProvisionResult, Settings, ToolConfig } from '../types';
+import type { HostInterface, HostResources, OpenSmartModule, ProvisionResult, Settings, ToolConfig } from '../types';
 import { MODULE_BACKING, NOT_IMPLEMENTED, PROJECT_LABELS, TOOL_BACKING } from './backing';
 import { toolDefinitions } from './toolDefinitions';
 
@@ -94,6 +94,7 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   const [localModules, setLocalModules] = useState<OpenSmartModule[]>(modulesProp ?? []);
   const [localTools, setLocalTools] = useState<ToolConfig[]>(toolsProp ?? []);
   const [defaultsApplied, setDefaultsApplied] = useState(false);
+  const [hostResources, setHostResources] = useState<HostResources | null>(null);
   const [vpnType, setVpnType] = useState<'openvpn' | 'wireguard'>('openvpn');
   const [notices, setNotices] = useState<string[]>([]);
   const [runItems, setRunItems] = useState<RunItem[]>([]);
@@ -116,19 +117,44 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
     api.tools().then((result) => setLocalTools(result.tools)).catch(() => undefined);
   }, [toolsProp]);
 
-  // Fresh install (nothing enabled yet): pre-select the recommended defaults.
+  // Determined once by opensmart.sh at install time (never measured live by
+  // the browser) — see provisioning.py's host_resources(). Falls back to an
+  // unconstrained "full" verdict if the request fails, so a broken fetch
+  // never blocks setup; it just means no warning is shown.
   useEffect(() => {
-    if (defaultsApplied || modules.length === 0 || tools.length === 0) return;
+    api.hostResources()
+      .then(setHostResources)
+      .catch(() => setHostResources({
+        cpu_count: 0, memory_total_mb: 0, disk_free_gb: 0, tier: 'full',
+        constrained_tools: [], constrained_modules: [],
+        recommended_tiers: { core: { cpu: 2, memory_mb: 3800, disk_gb: 9 }, full: { cpu: 4, memory_mb: 7500, disk_gb: 18 } },
+      }));
+  }, []);
+
+  const constrainedTools = new Set(hostResources?.constrained_tools ?? []);
+  const constrainedModules = new Set(hostResources?.constrained_modules ?? []);
+
+  // Fresh install (nothing enabled yet): pre-select the recommended defaults,
+  // skipping anything this host's install-time resource check flagged.
+  useEffect(() => {
+    if (defaultsApplied || modules.length === 0 || tools.length === 0 || hostResources === null) return;
     if (modules.some((m) => m.enabled) || tools.some((t) => t.enabled)) {
       setDefaultsApplied(true);
       return;
     }
-    handleModulesUpdate(modules.map((m) => (MODULE_DEFAULTS.has(m.name) ? { ...m, enabled: true } : m)));
-    handleToolsUpdate(tools.map((t) => (TOOL_DEFAULTS.has(t.name) ? { ...t, enabled: true } : t)));
+    const moduleDefaults = new Set([...MODULE_DEFAULTS].filter((name) => !constrainedModules.has(name)));
+    const toolDefaults = new Set([...TOOL_DEFAULTS].filter((name) => !constrainedTools.has(name)));
+    handleModulesUpdate(modules.map((m) => (moduleDefaults.has(m.name) ? { ...m, enabled: true } : m)));
+    handleToolsUpdate(tools.map((t) => (toolDefaults.has(t.name) ? { ...t, enabled: true } : t)));
     setDefaultsApplied(true);
-    setNotices(['Recommended defaults pre-selected: Suricata & Zeek traffic monitoring, Suricata IDS, OpenVPN remote access, and embedded access to Wazuh, Arkime and Proxmox.']);
+    const skippedTools = [...TOOL_DEFAULTS].filter((name) => constrainedTools.has(name));
+    const nextNotices = ['Recommended defaults pre-selected: Suricata & Zeek traffic monitoring, Suricata IDS, OpenVPN remote access, and embedded access to ' + (toolDefaults.size ? [...toolDefaults].join(', ') : 'no local tools') + '.'];
+    if (skippedTools.length) {
+      nextNotices.push(`${skippedTools.join(' and ')} left disabled by default — see the resource warning below. You can still enable ${skippedTools.length > 1 ? 'them' : 'it'} manually.`);
+    }
+    setNotices(nextNotices);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modules, tools, defaultsApplied]);
+  }, [modules, tools, defaultsApplied, hostResources]);
 
   function loadInterfaces() {
     setIfacesLoading(true);
@@ -433,17 +459,27 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
       {step === 'features' && (
         <>
           {notices.map((notice) => <p key={notice} className="wizard-notice">{notice}</p>)}
+          {hostResources && hostResources.tier !== 'full' && (
+            <p className="wizard-notice warning">
+              ⚠ This host's resources ({hostResources.cpu_count} CPU / {hostResources.memory_total_mb}MB RAM / {hostResources.disk_free_gb}GB free disk, detected at install time) are below the recommended tier
+              ({hostResources.recommended_tiers.full.cpu} CPU / {hostResources.recommended_tiers.full.memory_mb}MB RAM / {hostResources.recommended_tiers.full.disk_gb}GB disk) for the full tool set.
+              {' '}{[...constrainedTools].join(' and ') || 'Some tools'} run a JVM-based OpenSearch-family indexer and are the most likely to be unstable — flagged below.
+              {hostResources.tier === 'minimal' && ' This host is also below the minimal recommended tier, so even lightweight modules may be unstable under real traffic.'}
+              {' '}Re-run <code>sudo ./opensmart.sh install</code> after resizing the host to refresh this check.
+            </p>
+          )}
           <article className="card">
             <h2>OpenSMART Modules</h2>
             <div className="wizard-feature-grid">
               {modules.map((module) => (
-                <label key={module.id} className={`feature-card ${module.enabled ? 'enabled' : ''}`}>
+                <label key={module.id} className={`feature-card ${module.enabled ? 'enabled' : ''} ${constrainedModules.has(module.name) ? 'constrained' : ''}`}>
                   <input type="checkbox" checked={module.enabled} onChange={() => toggleModule(module)} />
                   <span>
                     <strong>{module.name}</strong>
                     <small className="muted">{module.description}</small>
                     {NOT_IMPLEMENTED.has(module.name) && <em className="feature-tag">placeholder</em>}
                     {(MODULE_REQUIRES_TOOL[module.name] || []).length > 0 && <em className="feature-tag">requires {(MODULE_REQUIRES_TOOL[module.name] || []).join(', ')}</em>}
+                    {constrainedModules.has(module.name) && <em className="feature-tag warning">⚠ host resources limited</em>}
                   </span>
                 </label>
               ))}
@@ -463,13 +499,14 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
             <p className="muted">Enabled tools open embedded inside OpenSMART once their URL is configured. Wazuh and Arkime run locally and get a working URL automatically.</p>
             <div className="wizard-feature-grid">
               {tools.map((tool) => (
-                <label key={tool.id} className={`feature-card ${tool.enabled ? 'enabled' : ''}`}>
+                <label key={tool.id} className={`feature-card ${tool.enabled ? 'enabled' : ''} ${constrainedTools.has(tool.name) ? 'constrained' : ''}`}>
                   <input type="checkbox" checked={tool.enabled} onChange={() => toggleTool(tool)} />
                   <span>
                     <strong>{toolDefinitions[tool.name]?.title || tool.name}</strong>
                     <small className="muted">{tool.description}</small>
                     {NOT_IMPLEMENTED.has(tool.name) && <em className="feature-tag">placeholder</em>}
                     {(TOOL_BACKING[tool.name] || []).length > 0 && <em className="feature-tag">runs locally</em>}
+                    {constrainedTools.has(tool.name) && <em className="feature-tag warning">⚠ host resources limited</em>}
                   </span>
                 </label>
               ))}

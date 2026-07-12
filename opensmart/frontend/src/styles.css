@@ -1574,6 +1574,8 @@ th { color: var(--c-91a2b5); font-size: .78rem; text-transform: uppercase; lette
 .wizard-field { display: grid; gap: 6px; margin: 14px 0; max-width: 420px; color: var(--c-b9cee2); font-weight: 700; font-size: .9rem; }
 .wizard-field input, .wizard-field select { width: 100%; }
 .wizard-notice { background: var(--c-rgba-88-215-255-1); border: 1px solid var(--c-rgba-88-215-255-35); color: var(--c-bfeaff); border-radius: 12px; padding: 10px 14px; font-size: .88rem; margin: 0; }
+.wizard-notice.warning { background: var(--c-rgba-255-200-87-1); border-color: var(--c-rgba-255-200-87-35); color: var(--c-ffd487); }
+.wizard-notice.warning code { background: var(--c-rgba-255-200-87-16); border-radius: 4px; padding: 1px 5px; }
 .iface-list { display: grid; gap: 8px; margin: 14px 0; max-width: 560px; }
 .iface-row { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; padding: 10px 14px; border: 1px solid var(--c-rgba-255-255-255-12); border-radius: 12px; background: var(--c-rgba-255-255-255-03); cursor: pointer; margin: 0; }
 .iface-row.selected { border-color: var(--c-rgba-88-215-255-55); background: var(--c-rgba-88-215-255-07); }
@@ -1583,10 +1585,13 @@ th { color: var(--c-91a2b5); font-size: .78rem; text-transform: uppercase; lette
 .wizard-feature-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-top: 14px; }
 .feature-card { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px 14px; border: 1px solid var(--c-rgba-255-255-255-12); border-radius: 14px; background: var(--c-rgba-255-255-255-03); cursor: pointer; margin: 0; }
 .feature-card.enabled { border-color: var(--c-rgba-99-230-190-5); background: var(--c-rgba-99-230-190-06); }
+.feature-card.constrained { border-color: var(--c-rgba-255-200-87-45); background: var(--c-rgba-255-200-87-06); }
+.feature-card.constrained.enabled { border-color: var(--c-rgba-255-200-87-58); background: var(--c-rgba-255-200-87-1); }
 .feature-card input[type="checkbox"] { width: 16px; height: 16px; margin-top: 3px; }
 .feature-card span { display: grid; gap: 4px; color: var(--c-ecf4ff); font-size: .92rem; }
 .feature-card small { color: var(--c-9aaabc); font-size: .8rem; line-height: 1.4; }
 .feature-tag { font-style: normal; font-size: .7rem; color: var(--c-8fd7ff); background: var(--c-rgba-88-215-255-1); border-radius: 999px; padding: 2px 8px; justify-self: start; }
+.feature-tag.warning { color: var(--c-ffd487); background: var(--c-rgba-255-200-87-16); }
 .wizard-vpn-type { margin-top: 18px; }
 .wizard-progress { height: 8px; border-radius: 999px; background: var(--c-rgba-255-255-255-08); overflow: hidden; margin: 16px 0; }
 .wizard-progress-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--c-rgba-88-215-255-95), var(--c-rgba-104-120-255-95)); transition: width .4s ease; }

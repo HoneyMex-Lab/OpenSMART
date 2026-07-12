@@ -36,6 +36,18 @@ services:
       # downloads persist across container recreations, so a slow/flaky
       # network on the host only ever has to succeed once.
       - UV_CACHE_DIR=${OPENSMART_PROJECT_DIR:?}/.uv-cache
+      # Written into this project's .env by opensmart.sh's
+      # _install_check_host_resources (install-time only) — surfaced to the
+      # Wizard via GET /api/provisioning/host-resources so it can warn about
+      # and de-prioritize resource-heavy tools/modules on constrained hosts.
+      # Defaults assume "full" capability (unconstrained) for dev/manual
+      # `docker compose up` runs that skip the installer.
+      - OPENSMART_RESOURCE_TIER=${OPENSMART_RESOURCE_TIER:-full}
+      - OPENSMART_RESOURCE_CPU=${OPENSMART_RESOURCE_CPU:-0}
+      - OPENSMART_RESOURCE_MEM_MB=${OPENSMART_RESOURCE_MEM_MB:-0}
+      - OPENSMART_RESOURCE_DISK_GB=${OPENSMART_RESOURCE_DISK_GB:-0}
+      - OPENSMART_RESOURCE_CONSTRAINED_TOOLS=${OPENSMART_RESOURCE_CONSTRAINED_TOOLS:-}
+      - OPENSMART_RESOURCE_CONSTRAINED_MODULES=${OPENSMART_RESOURCE_CONSTRAINED_MODULES:-}
     depends_on:
       - docker-socket-proxy
     networks:

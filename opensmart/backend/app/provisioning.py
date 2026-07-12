@@ -349,6 +349,36 @@ def host_interfaces() -> list[dict]:
     return interfaces
 
 
+# ── Host resource capability (set at install time) ────────────────────────────
+#
+# The numbers here are not measured live by this process — they were
+# detected once by opensmart.sh's _install_check_host_resources at install
+# time and written into this container's environment (see that function's
+# comment for the full "why", kept in sync with these by hand). Re-run
+# `sudo ./opensmart.sh install` after resizing the host to refresh them.
+
+# Same two tiers as opensmart.sh's _install_check_host_resources — shown to
+# the operator so the numbers driving the Wizard's warning are visible, not
+# just the pre-computed verdict.
+HOST_RESOURCE_TIERS = {
+    "core": {"cpu": 2, "memory_mb": 3800, "disk_gb": 9},
+    "full": {"cpu": 4, "memory_mb": 7500, "disk_gb": 18},
+}
+
+
+def host_resources() -> dict:
+    from . import config
+    return {
+        "cpu_count": config.RESOURCE_CPU,
+        "memory_total_mb": config.RESOURCE_MEM_MB,
+        "disk_free_gb": config.RESOURCE_DISK_GB,
+        "tier": config.RESOURCE_TIER,
+        "constrained_tools": list(config.RESOURCE_CONSTRAINED_TOOLS),
+        "constrained_modules": list(config.RESOURCE_CONSTRAINED_MODULES),
+        "recommended_tiers": HOST_RESOURCE_TIERS,
+    }
+
+
 # ── Arkime admin password sync ────────────────────────────────────────────────
 
 _ARKIME_IMAGE = "ghcr.io/arkime/arkime/arkime:v6-latest"

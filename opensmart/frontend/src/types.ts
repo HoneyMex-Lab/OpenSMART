@@ -259,6 +259,18 @@ export type HostInterface = {
   virtual: boolean;
 };
 
+export type HostResourceTier = 'full' | 'core' | 'minimal';
+
+export type HostResources = {
+  cpu_count: number;
+  memory_total_mb: number;
+  disk_free_gb: number;
+  tier: HostResourceTier;
+  constrained_tools: string[];
+  constrained_modules: string[];
+  recommended_tiers: Record<'core' | 'full', { cpu: number; memory_mb: number; disk_gb: number }>;
+};
+
 export type VpnInstance = {
   id: number;
   name: string;

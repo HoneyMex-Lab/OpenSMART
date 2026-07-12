@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, HostInterface, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnInstance, VpnUser } from './types';
+import type { AuditEvent, DataInfo, HostInterface, HostResources, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnInstance, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -76,6 +76,7 @@ export const api = {
   provisionOverview: () => request<ProvisioningOverview>('/api/provisioning/overview'),
   provisionRestart: (name: string) => request<{ name: string; ok: boolean; detail: string }>('/api/provisioning/restart', { method: 'POST', body: JSON.stringify({ name, kind: 'container' }) }),
   hostInterfaces: () => request<{ interfaces: HostInterface[] }>('/api/provisioning/host-interfaces'),
+  hostResources: () => request<HostResources>('/api/provisioning/host-resources'),
   vpnInstances: () => request<{ instances: VpnInstance[] }>('/api/vpn/instances'),
   vpnCreateInstance: (payload: { name: string; vpn_type: string; port: number; auth_mode: string; ldap_config: Record<string, string> }) => request<{ instance: VpnInstance }>('/api/vpn/instances', { method: 'POST', body: JSON.stringify(payload) }),
   vpnDeleteInstance: (name: string) => request<{ ok: boolean }>(`/api/vpn/instances/${encodeURIComponent(name)}`, { method: 'DELETE' }),
