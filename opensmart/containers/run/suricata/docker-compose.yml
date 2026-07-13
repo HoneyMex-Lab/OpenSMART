@@ -1,4 +1,24 @@
 services:
+  # Seeds the host-side Suricata config (config/etc -> /etc/suricata) and rules
+  # (config/lib -> /var/lib/suricata) from the image's baked-in defaults the
+  # first time only, so the config is editable from OpenSMART's Network IDS
+  # settings without ever starting Suricata against an empty config. Runs on
+  # every `up` but copies only when the target is empty. chmod so the backend
+  # (uid 1000, a different user than this container's root) can edit the files.
+  init-config:
+    image: opensmart/suricata
+    entrypoint: ["bash", "-c"]
+    command:
+      - >-
+        mkdir -p /seed/etc /seed/lib;
+        if [ ! -f /seed/etc/suricata.yaml ]; then cp -a /etc/suricata/. /seed/etc/; fi;
+        if [ ! -d /seed/lib/rules ]; then cp -a /var/lib/suricata/. /seed/lib/ 2>/dev/null || true; fi;
+        chmod -R a+rwX /seed/etc /seed/lib
+    volumes:
+      - ./volumes/config/etc:/seed/etc
+      - ./volumes/config/lib:/seed/lib
+    restart: "no"
+
   suricata:
     # Built by opensmart.sh (install/recreate) against the real host Docker
     # daemon, not by the backend's provisioning.py — the docker-socket-proxy
@@ -33,4 +53,13 @@ services:
         exec suricata $$ARGS -l /data/log -v
     volumes:
       - ./volumes/data:/data
+      # Config + rules bind-mounted from the host (seeded by init-config) so the
+      # Network IDS settings can manage rulesets, classification and the raw
+      # suricata.yaml. The runtime `-i <iface>` still overrides the capture
+      # interface regardless of what's in the yaml's af-packet section.
+      - ./volumes/config/etc:/etc/suricata
+      - ./volumes/config/lib:/var/lib/suricata
+    depends_on:
+      init-config:
+        condition: service_completed_successfully
     restart: unless-stopped
