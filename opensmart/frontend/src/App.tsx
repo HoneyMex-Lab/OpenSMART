@@ -5,6 +5,7 @@ import ForceChangePasswordPage from './components/ForceChangePasswordPage';
 import LoginPage from './components/LoginPage';
 import { t } from './i18n';
 import WizardPage from './pages/WizardPage';
+import { DEFAULT_THEME } from './themes';
 import type { Settings, User } from './types';
 
 const defaultSettings: Settings = {
@@ -60,10 +61,12 @@ export default function App() {
   }, [settings.favicon_url]);
 
   useEffect(() => {
-    const theme = settings.theme || 'dark';
+    // A signed-in user's own theme wins; otherwise the admin-set default
+    // (global setting), applied pre-login too so the login page matches.
+    const theme = user?.theme || settings.theme || DEFAULT_THEME;
     if (theme === 'dark') delete document.documentElement.dataset.theme;
     else document.documentElement.dataset.theme = theme;
-  }, [settings.theme]);
+  }, [user?.theme, settings.theme]);
 
   async function handleLogin(username: string, password: string) {
     const { user } = await api.login(username, password);

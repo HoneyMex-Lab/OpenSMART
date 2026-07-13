@@ -18,8 +18,9 @@
 # (see 20-envsubst-on-templates.sh). Only variables defined in the
 # environment are substituted, so nginx runtime variables ($host, $uri,
 # $scheme, $http_upgrade, ...) are preserved untouched — only
-# ${OPENSMART_PROXY_MODE}, ${OPENSMART_HOSTNAME}, ${PROXMOX_UPSTREAM} and
-# ${OPNSENSE_UPSTREAM} (set in the compose file / its .env) get replaced.
+# ${OPENSMART_PROXY_MODE}, ${OPENSMART_HOSTNAME}, ${OPENSMART_HTTPS_REDIRECT_SUFFIX},
+# ${PROXMOX_UPSTREAM} and ${OPNSENSE_UPSTREAM} (set in the compose file /
+# its .env) get replaced.
 #
 # All upstreams are referenced through variables + a resolver so nginx
 # resolves them at request time via Docker's embedded DNS. That means nginx
@@ -67,7 +68,11 @@ server {
     add_header Strict-Transport-Security $hsts_header always;
 
     if ($force_https_redirect) {
-        return 301 https://$host$request_uri;
+        # ${OPENSMART_HTTPS_REDIRECT_SUFFIX} is ":<port>" when HTTPS runs on
+        # a non-default port (set by opensmart.sh's --bind), else empty —
+        # envsubst can't do that "only if non-default" logic itself, so it's
+        # precomputed and passed in as a ready-to-use literal.
+        return 301 https://$host${OPENSMART_HTTPS_REDIRECT_SUFFIX}$request_uri;
     }
 
     # Docker's embedded DNS. valid= keeps resolution fresh as containers

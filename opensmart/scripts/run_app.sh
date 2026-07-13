@@ -919,8 +919,27 @@ FIRST_RUN_EXPECTED=0
 if admin_account_missing; then
   FIRST_RUN_EXPECTED=1
 fi
-_log INFO "backend starting: uvicorn backend.app.main:app --host ${BIND_HOST} --port ${BIND_PORT} --reload"
-uv run --project backend --python "$BACKEND_PYTHON" uvicorn backend.app.main:app --host "$BIND_HOST" --port "$BIND_PORT" --reload > >(tee "$BACKEND_LOG") 2> >(tee -a "$BACKEND_LOG" >&2) &
+# --reload is dev-only. It was previously unconditional (including in
+# --prod, i.e. the actual deployed container) — uvicorn's default reload
+# watch scope is the whole CWD (confirmed via its own startup log: "Will
+# watch for changes in these directories: ['.../opensmart']"), which
+# includes opensmart/containers/run/*/ where provisioning legitimately
+# writes files as normal operation (tool .env files, generated certs, VPN
+# instance configs, ...). Every such write could trigger a full backend
+# process restart mid-request, dropping the very connection that
+# triggered it — confirmed live: provisioning several modules/tools in a
+# row during a Wizard run produced 4 backend restarts in a 10-second
+# window, and the front-door proxy step (which both writes its own .env
+# and generates a fresh cert) is exactly the kind of step likely to race
+# its own request this way. Even in dev mode, --reload-dir narrows the
+# watch to just the actual Python source so the same class of self-
+# inflicted restart can't happen there either.
+declare -a RELOAD_FLAGS=()
+if [[ "$PROD_MODE" -eq 0 ]]; then
+  RELOAD_FLAGS=(--reload --reload-dir "$ROOT_DIR/backend/app")
+fi
+_log INFO "backend starting: uvicorn backend.app.main:app --host ${BIND_HOST} --port ${BIND_PORT} ${RELOAD_FLAGS[*]}"
+uv run --project backend --python "$BACKEND_PYTHON" uvicorn backend.app.main:app --host "$BIND_HOST" --port "$BIND_PORT" "${RELOAD_FLAGS[@]}" > >(tee "$BACKEND_LOG") 2> >(tee -a "$BACKEND_LOG" >&2) &
 BACKEND_PID=$!
 
 sleep 2

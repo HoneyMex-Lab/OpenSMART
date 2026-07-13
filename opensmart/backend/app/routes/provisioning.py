@@ -60,6 +60,11 @@ def host_interfaces(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
     return {"interfaces": provisioning.host_interfaces()}
 
 
+@router.get("/host-resources")
+def host_resources(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    return provisioning.host_resources()
+
+
 @router.post("/restart")
 def restart(payload: ProvisionRequest, admin: Annotated[dict, Depends(require_admin)]) -> dict:
     if payload.kind != "container":

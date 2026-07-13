@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
+import { THEME_OPTIONS } from '../themes';
 import type { LogonInfo, SessionInfo, User } from '../types';
 
 type Props = {
@@ -45,6 +46,17 @@ export default function AccountPage({ user, onUserUpdate }: Props) {
     }
   }
 
+  async function changeTheme(theme: string) {
+    // Apply optimistically (App reads user.theme live); revert on failure.
+    const previous = user.theme || '';
+    onUserUpdate({ ...user, theme });
+    try {
+      await api.setTheme(theme);
+    } catch {
+      onUserUpdate({ ...user, theme: previous });
+    }
+  }
+
   async function changePassword(event: FormEvent) {
     event.preventDefault();
     setPasswordMessage('');
@@ -76,6 +88,13 @@ export default function AccountPage({ user, onUserUpdate }: Props) {
           <button>Update account info</button>
           {profileMessage && <p className="muted">{profileMessage}</p>}
         </form>
+        <label className="account-theme">Theme
+          <select value={user.theme || ''} onChange={(event) => changeTheme(event.target.value)}>
+            <option value="">Use default</option>
+            {THEME_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <small className="muted">Applies to your account only, on every device.</small>
+        </label>
       </article>
       <article className="card">
         <h2>Change Password</h2>

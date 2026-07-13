@@ -17,6 +17,18 @@ CSRF_COOKIE = "opensmart_csrf"
 SESSION_TTL_HOURS = int(os.getenv("OPENSMART_SESSION_TTL_HOURS", "12"))
 APP_VERSION = os.getenv("OPENSMART_VERSION", "v0.3 beta")
 
+# Written by opensmart.sh's _install_check_host_resources at install time
+# (opensmart/containers/run/opensmart/.env); see provisioning.py's
+# HOST_RESOURCE_TIERS for how these are turned into a Wizard-facing warning.
+# Defaults assume "full" (unconstrained) capability for dev/manual runs that
+# skip the installer.
+RESOURCE_TIER = os.getenv("OPENSMART_RESOURCE_TIER", "full")
+RESOURCE_CPU = int(os.getenv("OPENSMART_RESOURCE_CPU", "0") or "0")
+RESOURCE_MEM_MB = int(os.getenv("OPENSMART_RESOURCE_MEM_MB", "0") or "0")
+RESOURCE_DISK_GB = int(os.getenv("OPENSMART_RESOURCE_DISK_GB", "0") or "0")
+RESOURCE_CONSTRAINED_TOOLS = [v for v in os.getenv("OPENSMART_RESOURCE_CONSTRAINED_TOOLS", "").split(",") if v]
+RESOURCE_CONSTRAINED_MODULES = [v for v in os.getenv("OPENSMART_RESOURCE_CONSTRAINED_MODULES", "").split(",") if v]
+
 
 def read_git_build() -> str:
     try:

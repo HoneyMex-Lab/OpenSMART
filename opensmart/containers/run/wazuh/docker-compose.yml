@@ -15,11 +15,15 @@
 #
 # Everything else (images, env vars, ports, ulimits, config file contents
 # under ./config/) is vendored as close to verbatim as possible from
-# upstream. Default credentials (INDEXER_PASSWORD, API_PASSWORD,
-# DASHBOARD_PASSWORD, and the bcrypt hash in
-# config/wazuh_indexer/internal_users.yml) are Wazuh's own well-known demo
-# values — change them via Wazuh's documented wazuh-passwords-tool before
-# exposing this to any untrusted network; see docs/security.md.
+# upstream. Default credentials (API_PASSWORD, DASHBOARD_PASSWORD) are
+# Wazuh's own well-known demo values — the indexer's admin/INDEXER_PASSWORD
+# is the one exception, since OpenSMART keeps it in sync with the OpenSMART
+# admin password automatically (see provisioning.sync_wazuh_password() and
+# the INDEXER_PASSWORD comments below). Note upstream's own
+# wazuh-passwords-tool.sh does NOT work against this Docker-image-based
+# deployment — its install-detection is package-manager based (rpm/apt) and
+# never matches, which is why sync_wazuh_password() replicates its
+# underlying steps (hash.sh + securityadmin.sh) directly instead.
 #
 # First-time setup (provisioning.py's start_container("wazuh") does this
 # automatically before the first `up -d` — see _ensure_wazuh_certs()):
@@ -86,7 +90,12 @@ services:
     environment:
       - INDEXER_URL=https://wazuh.indexer:9200
       - INDEXER_USERNAME=admin
-      - INDEXER_PASSWORD=SecretPassword
+      # Overridable — provisioning.sync_wazuh_password() writes the actual
+      # current value here (and recreates this + wazuh.dashboard) whenever
+      # it changes the indexer's own admin password, so this manager
+      # (and the dashboard, same var below) keep working. Default matches
+      # the indexer's own vendored demo password until first synced.
+      - INDEXER_PASSWORD=${WAZUH_INDEXER_PASSWORD:-SecretPassword}
       - FILEBEAT_SSL_VERIFICATION_MODE=full
       - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
       - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
@@ -169,7 +178,10 @@ services:
       - "${WAZUH_DASHBOARD_PORT:-5601}:5601"
     environment:
       - INDEXER_USERNAME=admin
-      - INDEXER_PASSWORD=SecretPassword
+      # See wazuh.manager's own comment above — same overridable var, kept
+      # in sync with the indexer's real admin password by
+      # provisioning.sync_wazuh_password() whenever it changes it.
+      - INDEXER_PASSWORD=${WAZUH_INDEXER_PASSWORD:-SecretPassword}
       - WAZUH_API_URL=https://wazuh.manager
       - DASHBOARD_USERNAME=kibanaserver
       - DASHBOARD_PASSWORD=kibanaserver

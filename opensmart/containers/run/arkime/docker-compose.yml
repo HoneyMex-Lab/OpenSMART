@@ -27,6 +27,15 @@ services:
   # addUser.js itself (rather than probing for a specific OpenSearch index
   # name) until the users template capture's db-init step creates is
   # ready, so it doesn't depend on Arkime's internal index-naming scheme.
+  #
+  # Once the admin exists, it also sets that user's default UI theme to
+  # "Green on Black" (Arkime's own name for the dark-2-theme value — see the
+  # theme list in the viewer bundle). addUser.js replaces the whole user
+  # document, so it resets settings.theme every time it runs; the painless
+  # step re-seeds the default afterwards (set-only-if-unset). provisioning.py's
+  # sync_arkime_password does the same after its own addUser, so a UI password
+  # change doesn't drop the theme either. A theme the user picks in the UI
+  # persists until the next time the admin user is (re)created.
   init-admin-user:
     image: ghcr.io/arkime/arkime/arkime:v6-latest
     hostname: arkime-init-admin
@@ -38,7 +47,10 @@ services:
       - >-
         cd /opt/arkime/viewer;
         for i in $(seq 1 60); do
-          /opt/arkime/bin/node addUser.js admin "OpenSMART Admin" "$$ARKIME_ADMIN_PASSWORD" --admin && exit 0;
+          if /opt/arkime/bin/node addUser.js admin "OpenSMART Admin" "$$ARKIME_ADMIN_PASSWORD" --admin; then
+            curl -s -XPOST "http://opensearch:9200/arkime_users/_update/admin" -H "Content-Type: application/json" -d '{"script":{"lang":"painless","source":"if(ctx._source.settings==null){ctx._source.settings=[:];} if(ctx._source.settings.theme==null){ctx._source.settings.theme=params.t;}","params":{"t":"dark-2-theme"}}}' || true;
+            exit 0;
+          fi;
           echo "waiting for Arkime users index to be ready ($$i/60)...";
           sleep 5;
         done;
@@ -74,7 +86,9 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Viewer UI on the opensmart network, reaches OpenSearch by service alias.
+  # Viewer UI, reaches OpenSearch by service alias. No direct port publish —
+  # see viewer-redirect below, which is what actually owns host port 8005
+  # now (needed for webBasePath's bare-root behavior, see redirect.conf).
   viewer:
     image: ghcr.io/arkime/arkime/arkime:v6-latest
     container_name: opensmart-arkime-viewer
@@ -85,13 +99,27 @@ services:
     volumes:
       - ./etc/config.ini:/opt/arkime/etc/config.ini
       - ./volumes/data:/data
-    ports:
-      - "8005:8005"
     networks:
       - opensmart
     depends_on:
       init-data-dir:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Owns the published host port; redirects the bare root to /arkime/ and
+  # passes everything else straight through to viewer. See redirect.conf.
+  viewer-redirect:
+    image: nginx:1.27
+    container_name: opensmart-arkime-viewer-redirect
+    hostname: arkime-viewer-redirect
+    volumes:
+      - ./redirect.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8005:8005"
+    networks:
+      - opensmart
+    depends_on:
+      - viewer
     restart: unless-stopped
 
 networks:

@@ -176,7 +176,7 @@ def get_current_user(session_token: Annotated[str | None, Cookie(alias=SESSION_C
     with get_db() as db:
         row = db.execute(
             """
-            SELECT s.token, s.csrf_token, s.expires_at, u.id, u.username, u.role, u.full_name, u.email, u.enabled, u.must_change_password
+            SELECT s.token, s.csrf_token, s.expires_at, u.id, u.username, u.role, u.full_name, u.email, u.enabled, u.must_change_password, u.theme
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ?

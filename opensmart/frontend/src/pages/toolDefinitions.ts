@@ -24,3 +24,34 @@ export const toolDefinitions: Record<string, ToolDefinition> = {
   Wazuh: { key: 'tool_url_wazuh', title: 'SIEM - Wazuh', logo: '/assets/tools/wazuh.svg', embeddable: false, alias: '/wazuh/' },
   Graylog: { key: 'tool_url_graylog', title: 'SIEM - Graylog', logo: '/assets/tools/graylog.svg' },
 };
+
+// Absolute URL for a tool's alias, anchored at the front-door proxy's own
+// origin (not the page currently viewing this — see isAliasUrl below for
+// why a bare relative path is NOT enough). window.location.origin already
+// resolves to the proxy's origin when reached through it; when reached
+// directly on the app's own port this still points requests at the
+// correct proxy host (https default port 443), matching how
+// _install_check_host_resources' sibling, the front-door proxy compose
+// file, publishes it.
+export function aliasUrl(definition: ToolDefinition): string {
+  return `${window.location.protocol}//${window.location.hostname}${definition.alias}`;
+}
+
+// Is `url` served through OUR front-door proxy at this tool's alias path?
+// Checked by PATH, not by "is the URL relative" — a relative "/arkime/"
+// only resolves correctly when the CURRENT page was itself loaded through
+// the proxy; an absolute "https://host/arkime/" resolves correctly no
+// matter which port loaded the current page (the app's own :8000 remains
+// a fully supported direct-access mode). Either form, once it reaches
+// nginx, gets the same X-Frame-Options/CSP stripped — framing permission
+// depends on the response headers of the framed resource, not on the
+// parent page's origin, so an absolute proxy URL embeds exactly as well
+// as a relative one while also working from any access port.
+export function isAliasUrl(url: string, definition: ToolDefinition | undefined): boolean {
+  if (!definition?.alias || !url) return false;
+  try {
+    return new URL(url, window.location.origin).pathname.startsWith(definition.alias);
+  } catch {
+    return false;
+  }
+}

@@ -17,15 +17,31 @@ router = APIRouter(prefix="/api/account", tags=["account"])
 def _sync_tool_passwords(password: str) -> None:
     """Keep tool credentials we provision in step with the admin password.
     Best-effort and off the request path: runs in a background thread so a
-    slow/failed sync never delays or fails the user's password change. Only
-    Arkime today (the one tool whose admin we create); other tools manage
-    their own credentials."""
+    slow/failed sync never delays or fails the user's password change.
+    Arkime and Wazuh today; other tools manage their own credentials.
+
+    Also remembers the plaintext briefly (see provisioning.
+    remember_admin_password) — on a fresh install, this fires from the
+    FORCED first-login password change, which happens before the Wizard
+    has provisioned anything, so the immediate sync attempts below have
+    nothing to sync against yet. Without the pending-password mechanism,
+    Arkime/Wazuh would keep their provisioning-time default password until
+    some later, unrelated password change happened to catch them already
+    provisioned — the actual reported bug ("not updated until another
+    password change")."""
+    provisioning.remember_admin_password(password)
+
     def _run() -> None:
         ok, detail = provisioning.sync_arkime_password(password)
         if ok:
             logger.info("Arkime admin password synced to the OpenSMART admin password.")
         else:
             logger.warning("Arkime admin password sync skipped/failed: %s", detail[:300])
+        ok, detail = provisioning.sync_wazuh_password(password)
+        if ok:
+            logger.info("Wazuh admin password synced to the OpenSMART admin password.")
+        else:
+            logger.warning("Wazuh admin password sync skipped/failed: %s", detail[:300])
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -37,6 +53,15 @@ class PasswordPayload(BaseModel):
 class ProfilePayload(BaseModel):
     fullName: str = Field(default="", max_length=120)
     email: str = Field(default="", max_length=180)
+
+
+# Themes a user may pick for themselves. "" means inherit the admin-set default
+# (the global `theme` setting). Keep in sync with the frontend's THEME_OPTIONS.
+ALLOWED_THEMES = {"", "honeynet", "dark", "classic", "matrix", "energy"}
+
+
+class ThemePayload(BaseModel):
+    theme: str = Field(default="", max_length=40)
 
 
 @router.post("/password")
@@ -53,6 +78,18 @@ def change_password(payload: PasswordPayload, user: Annotated[dict, Depends(requ
     if user["role"] == "admin":
         _sync_tool_passwords(payload.newPassword)
     return {"ok": True}
+
+
+@router.put("/theme")
+def set_theme(payload: ThemePayload, user: Annotated[dict, Depends(require_csrf)]) -> dict:
+    """Set the current user's own theme preference ('' = inherit the default)."""
+    theme = payload.theme.strip()
+    if theme not in ALLOWED_THEMES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown theme")
+    with get_db() as db:
+        db.execute("UPDATE users SET theme = ? WHERE id = ?", (theme, user["id"]))
+        db.commit()
+    return {"ok": True, "theme": theme}
 
 
 @router.put("/profile")
