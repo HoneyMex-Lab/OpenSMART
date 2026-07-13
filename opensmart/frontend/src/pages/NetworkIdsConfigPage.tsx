@@ -39,11 +39,10 @@ export default function NetworkIdsConfigPage() {
   ];
 
   return (
-    <div className="admin-stack">
-      <article className="card">
+    <section className="ids-manager">
         <div className="section-actions">
           <div>
-            <h2>Network IDS — Suricata</h2>
+            <h3>Suricata detection engine</h3>
             <p className="muted">Manage rulesets, detection variables, classification and the raw Suricata configuration. Edits are validated with <code>suricata -T</code> before they can take the sensor down.</p>
           </div>
           {summary && <span className={`badge ${summary.running ? 'ok' : 'muted'}`}>{summary.running ? 'Running' : 'Stopped'}</span>}
@@ -74,8 +73,7 @@ export default function NetworkIdsConfigPage() {
         {tab === 'detection' && <DetectionTab onChanged={() => setNeedsRestart(true)} />}
         {tab === 'classification' && <FileEditor kind="classification" label="classification.config" hint="Alert classtypes and their priorities. One classification per line." onChanged={() => setNeedsRestart(true)} />}
         {tab === 'advanced' && <AdvancedTab onChanged={() => setNeedsRestart(true)} />}
-      </article>
-    </div>
+    </section>
   );
 }
 

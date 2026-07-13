@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import NetworkIdsConfigPage from './NetworkIdsConfigPage';
 import type { OpenSmartModule } from '../types';
 
 type DiffEntry = { field: string; from: string; to: string };
@@ -227,6 +228,12 @@ export default function OpenSmartConfigPage({ modules, onModulesUpdate }: { modu
                 </div>
                 {(config.track_critical_alerts || 'off') !== 'off' && <label>Tracking mode<select value={config.track_critical_alerts || 'simple'} onChange={(event) => updateConfig(module.id, 'track_critical_alerts', event.target.value)}><option value="simple">Simple tracking</option><option value="full">Full tracking</option></select><small className="muted">Simple marks critical alerts checked when opening critical lists. Full requires acknowledging each critical alert in the alert table.</small></label>}
                 <RetentionFields config={config} id={module.id} updateConfig={updateConfig} />
+                {config.eve_source === 'native' && (
+                  <>
+                    <hr className="config-divider" />
+                    <NetworkIdsConfigPage />
+                  </>
+                )}
               </>
             )}
             {module.name === 'Network Traffic Monitoring' && (
