@@ -683,6 +683,11 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             db.execute("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+        # Editable per-instance VPN server settings (dns, tunnel mode, routes).
+        try:
+            db.execute("ALTER TABLE vpn_instances ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass
         for key, value in DEFAULT_SETTINGS.items():
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
         # Honeynet is the new default theme; flip installs still on the old

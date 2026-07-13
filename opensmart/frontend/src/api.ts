@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, HostInterface, HostResources, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnInstance, VpnUser } from './types';
+import type { AuditEvent, DataInfo, HostInterface, HostResources, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -79,12 +79,16 @@ export const api = {
   hostInterfaces: () => request<{ interfaces: HostInterface[] }>('/api/provisioning/host-interfaces'),
   hostResources: () => request<HostResources>('/api/provisioning/host-resources'),
   vpnInstances: () => request<{ instances: VpnInstance[] }>('/api/vpn/instances'),
-  vpnCreateInstance: (payload: { name: string; vpn_type: string; port: number; auth_mode: string; ldap_config: Record<string, string> }) => request<{ instance: VpnInstance }>('/api/vpn/instances', { method: 'POST', body: JSON.stringify(payload) }),
+  vpnCreateInstance: (payload: { name: string; vpn_type: string; port: number; auth_mode: string; ldap_config: Record<string, string>; subnet?: string; settings?: Partial<VpnSettings> }) => request<{ instance: VpnInstance }>('/api/vpn/instances', { method: 'POST', body: JSON.stringify(payload) }),
   vpnDeleteInstance: (name: string) => request<{ ok: boolean }>(`/api/vpn/instances/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   vpnInstanceAction: (name: string, action: 'start' | 'stop' | 'restart') => request<{ ok: boolean; detail: string }>(`/api/vpn/instances/${encodeURIComponent(name)}/${action}`, { method: 'POST' }),
   vpnUsers: (name: string) => request<{ users: VpnUser[] }>(`/api/vpn/instances/${encodeURIComponent(name)}/users`),
   vpnCreateUser: (name: string, username: string, serverHost: string) => request<{ name: string; instance: string }>(`/api/vpn/instances/${encodeURIComponent(name)}/users`, { method: 'POST', body: JSON.stringify({ username, server_host: serverHost }) }),
   vpnRevokeUser: (name: string, username: string) => request<{ ok: boolean }>(`/api/vpn/instances/${encodeURIComponent(name)}/users/${encodeURIComponent(username)}/revoke`, { method: 'POST' }),
+  vpnSetUserEnabled: (name: string, username: string, enabled: boolean) => request<{ ok: boolean }>(`/api/vpn/instances/${encodeURIComponent(name)}/users/${encodeURIComponent(username)}/enabled`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  vpnInstanceStatus: (name: string) => request<VpnStatus>(`/api/vpn/instances/${encodeURIComponent(name)}/status`),
+  vpnInstanceLogs: (name: string, tail = 200) => request<{ logs: string }>(`/api/vpn/instances/${encodeURIComponent(name)}/logs?tail=${tail}`),
+  vpnUpdateInstance: (name: string, payload: { settings?: Partial<VpnSettings>; ldap_config?: Record<string, string> }) => request<{ instance: VpnInstance }>(`/api/vpn/instances/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(payload) }),
   vpnUserConfig: async (name: string, username: string): Promise<{ filename: string; content: string }> => {
     // The download route is admin+CSRF-guarded even though it is a GET.
     const response = await fetch(`/api/vpn/instances/${encodeURIComponent(name)}/users/${encodeURIComponent(username)}/config`, { credentials: 'include', headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {} });

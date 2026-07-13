@@ -272,6 +272,8 @@ export type HostResources = {
   recommended_tiers: Record<'core' | 'full', { cpu: number; memory_mb: number; disk_gb: number }>;
 };
 
+export type VpnSettings = { dns: string; tunnel: 'full' | 'split'; routes: string };
+
 export type VpnInstance = {
   id: number;
   name: string;
@@ -284,6 +286,7 @@ export type VpnInstance = {
   status: string;
   uptime_seconds: number | null;
   users: number;
+  settings: VpnSettings;
 };
 
 export type VpnUser = {
@@ -291,4 +294,23 @@ export type VpnUser = {
   status: string;
   expires_at: string;
   has_config: boolean;
+};
+
+export type VpnConnection = {
+  name: string;
+  endpoint: string;
+  allowed_ips: string;
+  last_handshake: number;
+  rx_bytes: number;
+  tx_bytes: number;
+  online: boolean;
+};
+
+export type VpnStatus = {
+  name: string;
+  vpn_type: 'openvpn' | 'wireguard';
+  running: boolean;
+  uptime_seconds: number | null;
+  total_users: number;
+  connected: VpnConnection[];
 };

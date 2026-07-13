@@ -2207,3 +2207,8 @@ th { color: var(--c-91a2b5); font-size: .78rem; text-transform: uppercase; lette
 .vpn-user-form { margin: 14px 0 18px; max-width: 720px; }
 .vpn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .restart-btn.danger { border-color: var(--c-rgba-255-90-90-45, rgba(255,90,90,.45)); color: var(--c-ff9c9c, #ff9c9c); }
+.vpn-tabs { margin: 12px 0 16px; }
+.vpn-name-toggle { font-weight: 700; }
+.vpn-row-active > td { background: var(--c-rgba-255-255-255-04, rgba(255,255,255,.04)); }
+.vpn-status-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 4px 0 14px; font-size: .9rem; }
+.vpn-logs { max-height: 420px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem; line-height: 1.5; padding: 14px 16px; border-radius: 12px; background: var(--c-rgba-255-255-255-04, rgba(255,255,255,.04)); border: 1px solid var(--c-rgba-255-255-255-1, rgba(255,255,255,.1)); white-space: pre-wrap; word-break: break-word; }
