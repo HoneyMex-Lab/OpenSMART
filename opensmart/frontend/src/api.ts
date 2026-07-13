@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, HostInterface, HostResources, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
+import type { AuditEvent, DataInfo, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -62,6 +62,16 @@ export const api = {
   cancelNetworkIdsDetails: (queryId: string) => request<{ ok: boolean }>(`/api/network-ids/details/cancel${query({ query_id: queryId })}`, { method: 'POST' }),
   acknowledgeNetworkIdsAlert: (alertId: number) => request<{ ok: boolean }>('/api/network-ids/tracking/ack', { method: 'POST', body: JSON.stringify({ alert_id: alertId }) }),
   acknowledgeNetworkIdsCritical: (params: Record<string, string | number | undefined>) => request<{ ok: boolean; count: number }>(`/api/network-ids/tracking/ack-critical${query(params)}`, { method: 'POST' }),
+  idsManageSummary: () => request<IdsSummary>('/api/network-ids/manage/summary'),
+  idsReadFile: (kind: string) => request<{ kind: string; content: string }>(`/api/network-ids/manage/files/${kind}`),
+  idsWriteFile: (kind: string, content: string) => request<{ ok: boolean }>(`/api/network-ids/manage/files/${kind}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+  idsSources: () => request<{ sources: IdsSource[] }>('/api/network-ids/manage/sources'),
+  idsSourceAction: (action: 'enable' | 'disable', name: string, params: Record<string, string> = {}) => request<{ ok: boolean }>(`/api/network-ids/manage/sources/${action}`, { method: 'POST', body: JSON.stringify({ name, params }) }),
+  idsUpdateRules: () => request<{ ok: boolean; detail: string }>('/api/network-ids/manage/update', { method: 'POST' }),
+  idsTestConfig: () => request<{ ok: boolean; detail: string }>('/api/network-ids/manage/test', { method: 'POST' }),
+  idsRestart: () => request<{ ok: boolean; detail: string }>('/api/network-ids/manage/restart', { method: 'POST' }),
+  idsDetection: () => request<{ settings: Record<string, string> }>('/api/network-ids/manage/detection'),
+  idsUpdateDetection: (values: Record<string, string>) => request<{ ok: boolean }>('/api/network-ids/manage/detection', { method: 'PUT', body: JSON.stringify(values) }),
   networkTrafficConfig: () => request<{ config: NetworkTrafficConfig }>('/api/network-traffic/config'),
   networkTrafficSummary: (params: Record<string, string | number | boolean | undefined>, options: RequestInit = {}) => request<NetworkTrafficSummary>(`/api/network-traffic/summary${query(params)}`, options),
   cancelNetworkTrafficSummary: (queryId: string) => request<{ ok: boolean }>(`/api/network-traffic/summary/cancel${query({ query_id: queryId })}`, { method: 'POST' }),

@@ -56,6 +56,24 @@ export type LogonInfo = {
   detail: string;
 };
 
+export type IdsSummary = {
+  enabled_rules: number;
+  total_rules: number;
+  custom_rules: number;
+  enabled_sources: string[];
+  running: boolean;
+  provisioned: boolean;
+};
+
+export type IdsSource = {
+  name: string;
+  vendor: string;
+  summary: string;
+  license: string;
+  subscription: boolean;
+  enabled: boolean;
+};
+
 export type NetworkIdsConfig = {
   eve_source?: string;
   eve_json_path: string;

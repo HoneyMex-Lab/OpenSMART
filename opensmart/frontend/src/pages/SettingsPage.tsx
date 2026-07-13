@@ -1,18 +1,20 @@
 import { useState } from 'react';
-import { Bell, MonitorCog, Puzzle, Wand2, Wrench } from 'lucide-react';
+import { Bell, MonitorCog, Puzzle, ShieldAlert, Wand2, Wrench } from 'lucide-react';
 import { t } from '../i18n';
 import type { OpenSmartModule, Settings, ToolConfig } from '../types';
 import AdminConfigPage from './AdminConfigPage';
 import OpenSmartConfigPage from './OpenSmartConfigPage';
+import NetworkIdsConfigPage from './NetworkIdsConfigPage';
 import NotificationsPage from './NotificationsPage';
 import ToolsConfigPage from './ToolsConfigPage';
 import WizardPage from './WizardPage';
 
-type TabKey = 'web-interface' | 'opensmart-modules' | 'tools' | 'notifications' | 'wizard';
+type TabKey = 'web-interface' | 'opensmart-modules' | 'network-ids' | 'tools' | 'notifications' | 'wizard';
 
 const tabs: { key: TabKey; labelKey: string; fallback: string; icon: typeof MonitorCog }[] = [
   { key: 'web-interface', labelKey: 'settings.webInterface', fallback: 'Web Interface', icon: MonitorCog },
   { key: 'opensmart-modules', labelKey: 'settings.modules', fallback: 'OpenSMART Modules', icon: Puzzle },
+  { key: 'network-ids', labelKey: 'settings.networkIds', fallback: 'Network IDS', icon: ShieldAlert },
   { key: 'tools', labelKey: 'settings.tools', fallback: 'Tools', icon: Wrench },
   { key: 'notifications', labelKey: 'settings.notifications', fallback: 'Notifications', icon: Bell },
   { key: 'wizard', labelKey: 'settings.wizard', fallback: 'Wizard', icon: Wand2 },
@@ -50,6 +52,7 @@ export default function SettingsPage({ settings, setSettings, tools, onToolsUpda
       </div>
       {tab === 'web-interface' && <AdminConfigPage settings={settings} setSettings={setSettings} />}
       {tab === 'opensmart-modules' && <OpenSmartConfigPage modules={modules} onModulesUpdate={onModulesUpdate} />}
+      {tab === 'network-ids' && <NetworkIdsConfigPage />}
       {tab === 'tools' && <ToolsConfigPage settings={settings} setSettings={setSettings} tools={tools} onToolsUpdate={onToolsUpdate} />}
       {tab === 'notifications' && <NotificationsPage settings={settings} setSettings={setSettings} />}
       {tab === 'wizard' && <WizardPage settings={settings} setSettings={setSettings} modules={modules} onModulesUpdate={onModulesUpdate} tools={tools} onToolsUpdate={onToolsUpdate} />}

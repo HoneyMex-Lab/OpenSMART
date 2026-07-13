@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import APP_VERSION, BUILD_VERSION, FRONTEND_DIST_DIR, FRONTEND_ORIGIN, resolve_log_path
 from .database import get_db, init_db, init_network_ids_db, init_network_traffic_db
 from . import retention as _retention
-from .routes import account, audit, auth, modules, network_ids, network_traffic, opensmart_modules, provisioning, settings, status, tools, users, vpn
+from .routes import account, audit, auth, modules, network_ids, network_ids_config, network_traffic, opensmart_modules, provisioning, settings, status, tools, users, vpn
 
 app = FastAPI(title="OpenSMART API")
 
@@ -180,6 +180,7 @@ app.include_router(modules.router)
 app.include_router(tools.router)
 app.include_router(opensmart_modules.router)
 app.include_router(network_ids.router)
+app.include_router(network_ids_config.router)
 app.include_router(network_traffic.router)
 app.include_router(status.router)
 app.include_router(users.router)

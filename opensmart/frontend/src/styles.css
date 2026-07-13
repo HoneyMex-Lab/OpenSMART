@@ -2207,6 +2207,17 @@ th { color: var(--c-91a2b5); font-size: .78rem; text-transform: uppercase; lette
 .vpn-user-form { margin: 14px 0 18px; max-width: 720px; }
 .vpn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .restart-btn.danger { border-color: var(--c-rgba-255-90-90-45, rgba(255,90,90,.45)); color: var(--c-ff9c9c, #ff9c9c); }
+/* Network IDS config manager */
+.ids-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; font-size: .9rem; }
+.ids-tabs { margin: 14px 0 16px; }
+.ids-subhead { margin: 22px 0 8px; font-size: .95rem; }
+.ids-restart-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 10px 0; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--c-rgba-255-196-87-45, rgba(255,196,87,.45)); background: var(--c-rgba-255-200-87-12, rgba(255,200,87,.12)); font-size: .88rem; }
+.ids-file-editor { margin: 6px 0 8px; }
+.ids-editor { width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem; line-height: 1.5; padding: 12px 14px; border-radius: 12px; background: var(--c-rgba-255-255-255-04, rgba(255,255,255,.04)); border: 1px solid var(--c-rgba-255-255-255-1, rgba(255,255,255,.1)); color: inherit; resize: vertical; }
+textarea.ids-editor { min-height: 180px; }
+textarea.ids-editor-large { min-height: 460px; }
+.ids-update-log { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+.ids-error { white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow: auto; }
 .vpn-tabs { margin: 12px 0 16px; }
 .vpn-name-toggle { font-weight: 700; }
 .vpn-row-active > td { background: var(--c-rgba-255-255-255-04, rgba(255,255,255,.04)); }
