@@ -19,6 +19,13 @@ class InstanceCreate(BaseModel):
     ldap_config: dict[str, str] = Field(default_factory=dict)
     subnet: str | None = Field(default=None, max_length=18)
     settings: dict[str, str] | None = None
+    ca: str | None = Field(default=None, max_length=30)
+
+
+class CaCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=30)
+    cn: str | None = Field(default=None, max_length=64)
+    description: str = Field(default="", max_length=200)
 
 
 class UserCreate(BaseModel):
@@ -39,6 +46,31 @@ def _bad_request(error: vpn.VpnError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
 
 
+@router.get("/cas")
+def cas(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    return {"cas": vpn.list_cas()}
+
+
+@router.post("/cas")
+def create_ca(payload: CaCreate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        ca = vpn.create_ca(payload.name, payload.description, payload.cn)
+    except vpn.VpnError as error:
+        raise _bad_request(error) from error
+    write_audit_event("vpn_ca_create", admin["id"], admin["username"], f"vpn-ca:{payload.name}", "", ca.get("cn", ""))
+    return {"ca": ca}
+
+
+@router.delete("/cas/{name}")
+def delete_ca(name: str, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        vpn.delete_ca(name)
+    except vpn.VpnError as error:
+        raise _bad_request(error) from error
+    write_audit_event("vpn_ca_delete", admin["id"], admin["username"], f"vpn-ca:{name}", "", "")
+    return {"ok": True}
+
+
 @router.get("/instances")
 def instances(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
     return {"instances": vpn.list_instances()}
@@ -47,7 +79,7 @@ def instances(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
 @router.post("/instances")
 def create_instance(payload: InstanceCreate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
     try:
-        instance = vpn.create_instance(payload.name, payload.vpn_type, payload.port, payload.auth_mode, payload.ldap_config, payload.subnet, payload.settings)
+        instance = vpn.create_instance(payload.name, payload.vpn_type, payload.port, payload.auth_mode, payload.ldap_config, payload.subnet, payload.settings, payload.ca)
     except vpn.VpnError as error:
         raise _bad_request(error) from error
     write_audit_event("vpn_instance_create", admin["id"], admin["username"], f"vpn:{payload.name}", "", f"{payload.vpn_type} port {payload.port} auth {payload.auth_mode}")

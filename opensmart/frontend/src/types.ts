@@ -274,6 +274,16 @@ export type HostResources = {
 
 export type VpnSettings = { dns: string; tunnel: 'full' | 'split'; routes: string };
 
+export type VpnCa = {
+  name: string;
+  cn: string;
+  description: string;
+  created_at: string;
+  ready: boolean;
+  users: number;
+  instances: string[];
+};
+
 export type VpnInstance = {
   id: number;
   name: string;
@@ -287,6 +297,7 @@ export type VpnInstance = {
   uptime_seconds: number | null;
   users: number;
   settings: VpnSettings;
+  ca: string;
 };
 
 export type VpnUser = {

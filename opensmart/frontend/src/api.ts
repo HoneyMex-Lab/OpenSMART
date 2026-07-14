@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, HostInterface, HostResources, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
+import type { AuditEvent, DataInfo, HostInterface, HostResources, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -78,8 +78,11 @@ export const api = {
   provisionRestart: (name: string) => request<{ name: string; ok: boolean; detail: string }>('/api/provisioning/restart', { method: 'POST', body: JSON.stringify({ name, kind: 'container' }) }),
   hostInterfaces: () => request<{ interfaces: HostInterface[] }>('/api/provisioning/host-interfaces'),
   hostResources: () => request<HostResources>('/api/provisioning/host-resources'),
+  vpnCas: () => request<{ cas: VpnCa[] }>('/api/vpn/cas'),
+  vpnCreateCa: (payload: { name: string; cn?: string; description?: string }) => request<{ ca: VpnCa }>('/api/vpn/cas', { method: 'POST', body: JSON.stringify(payload) }),
+  vpnDeleteCa: (name: string) => request<{ ok: boolean }>(`/api/vpn/cas/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   vpnInstances: () => request<{ instances: VpnInstance[] }>('/api/vpn/instances'),
-  vpnCreateInstance: (payload: { name: string; vpn_type: string; port: number; auth_mode: string; ldap_config: Record<string, string>; subnet?: string; settings?: Partial<VpnSettings> }) => request<{ instance: VpnInstance }>('/api/vpn/instances', { method: 'POST', body: JSON.stringify(payload) }),
+  vpnCreateInstance: (payload: { name: string; vpn_type: string; port: number; auth_mode: string; ldap_config: Record<string, string>; subnet?: string; settings?: Partial<VpnSettings>; ca?: string }) => request<{ instance: VpnInstance }>('/api/vpn/instances', { method: 'POST', body: JSON.stringify(payload) }),
   vpnDeleteInstance: (name: string) => request<{ ok: boolean }>(`/api/vpn/instances/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   vpnInstanceAction: (name: string, action: 'start' | 'stop' | 'restart') => request<{ ok: boolean; detail: string }>(`/api/vpn/instances/${encodeURIComponent(name)}/${action}`, { method: 'POST' }),
   vpnUsers: (name: string) => request<{ users: VpnUser[] }>(`/api/vpn/instances/${encodeURIComponent(name)}/users`),
