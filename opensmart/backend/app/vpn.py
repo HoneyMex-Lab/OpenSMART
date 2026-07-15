@@ -635,15 +635,48 @@ def create_instance(name: str, vpn_type: str, port: int, auth_mode: str = "certs
         with get_db() as db:
             db.execute("DELETE FROM vpn_instances WHERE name = ?", (name,))
             db.commit()
-        shutil.rmtree(_instance_dir(name), ignore_errors=True)
+        _force_remove_container(name)
+        _purge_instance_dir(name)
         raise
     return _public_instance(_get_instance(name))
+
+
+def _force_remove_container(name: str) -> None:
+    """Remove the instance's container by name even if its compose file is gone —
+    guards against orphaned, restart-looping containers left by a partial
+    teardown (a failed create or an interrupted delete)."""
+    try:
+        subprocess.run(["docker", "rm", "-f", _container_name(name)],
+                       capture_output=True, text=True, timeout=60, shell=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        logger.warning("vpn: could not force-remove container for %s: %s", name, error)
+
+
+def _purge_instance_dir(name: str) -> None:
+    """Delete the instance directory, including root-owned PKI/log files that the
+    uid-1000 backend can't unlink itself. shutil.rmtree(ignore_errors=True) alone
+    silently leaves those behind, orphaning the instance on disk — so if anything
+    survives, a one-off root container removes it."""
+    if not NAME_RE.match(name or ""):
+        raise VpnError("Invalid instance name.")
+    inst = _instance_dir(name)
+    shutil.rmtree(inst, ignore_errors=True)
+    if inst.exists():
+        try:
+            subprocess.run(
+                ["docker", "run", "--rm", "-v", f"{INSTANCES_ROOT}:/vpn",
+                 "--entrypoint", "sh", "opensmart/openvpn", "-c", f"rm -rf /vpn/{name}"],
+                capture_output=True, text=True, timeout=60, shell=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+            logger.warning("vpn: could not purge dir for %s: %s", name, error)
 
 
 def delete_instance(name: str) -> None:
     instance = _get_instance(name)
     _compose(instance["name"], "down")
-    shutil.rmtree(_instance_dir(name), ignore_errors=True)
+    _force_remove_container(name)
+    _purge_instance_dir(name)
     with get_db() as db:
         db.execute("DELETE FROM vpn_instances WHERE name = ?", (name,))
         db.commit()
@@ -1131,6 +1164,43 @@ def _patch_openvpn_client_template(name: str, instance: dict) -> None:
     tmpl.write_text(text)
 
 
+def _regenerate_openvpn_clients(name: str, instance: dict) -> None:
+    """Rebuild every existing OpenVPN client bundle from the current template so a
+    settings change (MTU, password auth, DNS/routes/tunnel) reaches users created
+    earlier — otherwise their stale .ovpn omits e.g. `auth-user-pass` and the now
+    stricter server rejects them. Each user's certificate is reused; only the
+    .ovpn is reassembled, preserving that bundle's original `remote` host."""
+    clients = _data_dir(name) / "clients"
+    if not clients.is_dir():
+        return
+    ca = instance.get("ca") or ""
+    # Only rebuild bundles for users who can still connect — never resurrect a
+    # revoked/expired user's certificate into a fresh bundle.
+    active = {u["name"] for u in _openvpn_users(name) if u["status"] in ("valid", "disabled")}
+    for ovpn in sorted(clients.glob("*.ovpn")):
+        username = ovpn.stem
+        if not USER_RE.match(username) or username not in active:
+            continue
+        match = re.search(r"(?m)^remote\s+(\S+)\s", ovpn.read_text())
+        if not match:
+            logger.warning("vpn: cannot find remote host in %s, skipping regeneration", ovpn)
+            continue
+        host = match.group(1)
+        try:
+            if ca:
+                _openvpn_make_client_from_ca(instance, username, host)
+            else:
+                ok, detail = _docker_run(
+                    "opensmart/openvpn",
+                    f"/opt/opensmart/make-client.sh {username} {host} && {_OPENVPN_CHMOD}",
+                    _data_dir(name),
+                )
+                if not ok:
+                    logger.warning("vpn: failed to rebuild bundle for %s on %s: %s", username, name, detail)
+        except VpnError as error:
+            logger.warning("vpn: failed to rebuild bundle for %s on %s: %s", username, name, error)
+
+
 def _apply_openvpn_settings(name: str, instance: dict, ldap_config: dict | None) -> None:
     data = _data_dir(name)
     settings = _instance_settings(instance)
@@ -1144,6 +1214,7 @@ def _apply_openvpn_settings(name: str, instance: dict, ldap_config: dict | None)
         conf_path.write_text(conf)
     _write_openvpn_auth_script(name, settings)
     _patch_openvpn_client_template(name, instance)
+    _regenerate_openvpn_clients(name, instance)
     if ldap_config is not None and instance["auth_mode"] == "ldap":
         _write_ldap_conf(data / "auth-ldap.conf", ldap_config)
     _restart_if_running(name)
