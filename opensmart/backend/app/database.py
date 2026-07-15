@@ -668,6 +668,17 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             );
             """
         )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vpn_cas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                cn TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            """
+        )
         db.execute("PRAGMA journal_mode = WAL")
         for column in ("ip_address", "user_agent"):
             try:
@@ -686,6 +697,12 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
         # Editable per-instance VPN server settings (dns, tunnel mode, routes).
         try:
             db.execute("ALTER TABLE vpn_instances ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass
+        # Shared CA an OpenVPN instance's certs are signed by ('' = legacy
+        # per-instance PKI, still supported).
+        try:
+            db.execute("ALTER TABLE vpn_instances ADD COLUMN ca TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass
         for key, value in DEFAULT_SETTINGS.items():

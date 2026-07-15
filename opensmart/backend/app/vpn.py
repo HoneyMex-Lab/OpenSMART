@@ -25,9 +25,21 @@ from .provisioning import CONTAINERS_ROOT, _docker_inspect, _uptime_seconds
 logger = logging.getLogger(__name__)
 
 INSTANCES_ROOT = CONTAINERS_ROOT / "vpn"
+# Shared Certificate Authorities live outside any single instance so several
+# OpenVPN instances can be signed by (and share the users of) one CA.
+CA_ROOT = INSTANCES_ROOT / "_cas"
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,29}$")
 USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
+CN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
+
+# easy-rsa environment shared by CA + cert generation (EC secp384r1 / sha512,
+# 10-year validity) — matches the image's gen-pki.sh defaults.
+_EASYRSA_ENV = (
+    'export EASYRSA_PKI=/ca/pki EASYRSA_BATCH=1 EASYRSA_ALGO=ec '
+    'EASYRSA_CURVE=secp384r1 EASYRSA_DIGEST=sha512 EASYRSA_CERT_EXPIRE=3650 '
+    'EASYRSA_CA_EXPIRE=3650; EASY=/usr/share/easy-rsa/easyrsa'
+)
 
 # The gen-pki templates default to OpenVPN's standard port; _init_openvpn
 # rewrites it to the instance's real port (host networking, no remapping).
@@ -272,13 +284,164 @@ def _write_compose(name: str, vpn_type: str, port: int, instance_id: int) -> Non
 _OPENVPN_CHMOD = "chmod -R a+rwX /data"
 
 
-def _init_openvpn(name: str, subnet: str, port: int, auth_mode: str, ldap_config: dict) -> None:
+# ── Certificate Authorities (shared across OpenVPN instances) ─────────────────
+
+def _ca_dir(name: str) -> Path:
+    return CA_ROOT / name
+
+
+def _ca_index_path(ca: str) -> Path:
+    return _ca_dir(ca) / "pki" / "index.txt"
+
+
+def _ca_run(ca_name: str, script: str, *, mounts: dict | None = None, env: dict | None = None) -> tuple[bool, str]:
+    """One-off `bash -c <script>` in the OpenVPN image with the CA dir mounted
+    at /ca (plus any extra mounts, e.g. an instance's /data), used for easy-rsa
+    CA/cert operations. Secrets (CN) are passed via env, never interpolated."""
+    cmd = ["docker", "run", "--rm", "--entrypoint", "bash", "-v", f"{_ca_dir(ca_name)}:/ca"]
+    for host, dest in (mounts or {}).items():
+        cmd += ["-v", f"{host}:{dest}"]
+    for key, value in (env or {}).items():
+        cmd += ["-e", f"{key}={value}"]
+    cmd += ["opensmart/openvpn", "-c", script]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECONDS, shell=False)
+    except FileNotFoundError:
+        return False, "docker CLI is not available in this environment."
+    except subprocess.TimeoutExpired:
+        return False, f"Timed out after {_RUN_TIMEOUT_SECONDS}s."
+    output = (result.stderr or result.stdout or "").strip()
+    if result.returncode != 0:
+        logger.warning("vpn CA run failed for %s: %s", ca_name, output[:2000])
+        return False, output[-2000:]
+    return True, output[-2000:]
+
+
+def _ca_client_names(ca: str, *, include_revoked: bool = False) -> list[str]:
+    """Client (user) certificate CNs in a CA's PKI — server certs excluded."""
+    index = _ca_index_path(ca)
+    if not index.is_file():
+        return []
+    names = []
+    for line in index.read_text().splitlines():
+        parts = line.split("\t")
+        if len(parts) < 6:
+            continue
+        status, cn = parts[0].strip(), parts[5].strip()
+        common = cn.split("/CN=")[-1] if "/CN=" in cn else cn
+        if common == "server" or common.startswith("server-"):
+            continue
+        if status != "V" and not include_revoked:
+            continue
+        names.append(common)
+    return names
+
+
+def _ca_instances(ca: str) -> list[str]:
+    with get_db() as db:
+        rows = db.execute("SELECT name FROM vpn_instances WHERE ca = ? ORDER BY name", (ca,)).fetchall()
+    return [row["name"] for row in rows]
+
+
+def _ca_info(name: str) -> dict:
+    with get_db() as db:
+        row = db.execute("SELECT * FROM vpn_cas WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        raise VpnError(f"Unknown CA '{name}'.")
+    ca = dict(row)
+    ca["instances"] = _ca_instances(name)
+    ca["users"] = len(_ca_client_names(name))
+    ca["ready"] = (_ca_dir(name) / "pki" / "ca.crt").is_file()
+    return ca
+
+
+def list_cas() -> list[dict]:
+    with get_db() as db:
+        rows = db.execute("SELECT name FROM vpn_cas ORDER BY name").fetchall()
+    return [_ca_info(row["name"]) for row in rows]
+
+
+def create_ca(name: str, description: str = "", cn: str | None = None) -> dict:
+    if not NAME_RE.match(name or ""):
+        raise VpnError("CA name must be 1-30 chars: lowercase letters, digits, dashes.")
+    cn = (cn or f"OpenSMART-{name}-CA").strip()
+    if not CN_RE.match(cn):
+        raise VpnError("Common name may only contain letters, digits, spaces, dot, underscore and dash.")
+    with get_db() as db:
+        if db.execute("SELECT 1 FROM vpn_cas WHERE name = ?", (name,)).fetchone():
+            raise VpnError("A CA with that name already exists.")
+    data = _ca_dir(name)
+    shutil.rmtree(data, ignore_errors=True)
+    data.mkdir(parents=True, exist_ok=True)
+    data.chmod(0o777)
+    script = f'{_EASYRSA_ENV}; "$EASY" init-pki && "$EASY" --req-cn="$CA_CN" build-ca nopass && "$EASY" gen-crl && chmod -R a+rwX /ca'
+    ok, detail = _ca_run(name, script, env={"CA_CN": cn})
+    if not ok:
+        shutil.rmtree(data, ignore_errors=True)
+        raise VpnError(f"CA creation failed: {detail}")
+    with get_db() as db:
+        db.execute("INSERT INTO vpn_cas (name, cn, description, created_at) VALUES (?, ?, ?, ?)",
+                   (name, cn, description.strip()[:200], _now()))
+        db.commit()
+    return _ca_info(name)
+
+
+def delete_ca(name: str) -> None:
+    used = _ca_instances(name)
+    if used:
+        raise VpnError(f"CA '{name}' is used by instance(s): {', '.join(used)}. Delete or reassign them first.")
+    with get_db() as db:
+        if not db.execute("SELECT 1 FROM vpn_cas WHERE name = ?", (name,)).fetchone():
+            raise VpnError(f"Unknown CA '{name}'.")
+        db.execute("DELETE FROM vpn_cas WHERE name = ?", (name,))
+        db.commit()
+    shutil.rmtree(_ca_dir(name), ignore_errors=True)
+
+
+def _require_ca(name: str) -> None:
+    with get_db() as db:
+        if not db.execute("SELECT 1 FROM vpn_cas WHERE name = ?", (name,)).fetchone():
+            raise VpnError(f"Unknown CA '{name}'.")
+    if not (_ca_dir(name) / "pki" / "ca.crt").is_file():
+        raise VpnError(f"CA '{name}' is missing its certificate — recreate it.")
+
+
+def _openvpn_server_pki_from_ca(name: str, ca: str) -> None:
+    """Sign a server certificate (server-<instance>) with the shared CA and lay
+    the instance's /data/pki out the way server.conf.tmpl expects: ca.crt +
+    server cert/key from the CA, a fresh CRL, and a per-instance tls-crypt key."""
+    data = _data_dir(name)
+    srv = f"server-{name}"
+    script = (
+        f'{_EASYRSA_ENV}; set -e; '
+        f'[ -f /ca/pki/issued/{srv}.crt ] || "$EASY" build-server-full {srv} nopass; '
+        '"$EASY" gen-crl; '
+        'mkdir -p /data/pki/issued /data/pki/private /data/log /data/ccd /data/clients; '
+        'cp /ca/pki/ca.crt /data/pki/ca.crt; '
+        f'cp /ca/pki/issued/{srv}.crt /data/pki/issued/server.crt; '
+        f'cp /ca/pki/private/{srv}.key /data/pki/private/server.key; '
+        'cp /ca/pki/crl.pem /data/pki/crl.pem; '
+        '[ -f /data/pki/ta.key ] || { openvpn --genkey secret /data/pki/ta.key; chmod 600 /data/pki/ta.key; }; '
+        'sed "s#__PKI__#/data/pki#g" /opt/opensmart/server.conf.tmpl > /data/server.conf; '
+        'cp /opt/opensmart/client.ovpn.tmpl /data/client.ovpn.tmpl; '
+        'chmod -R a+rwX /data /ca'
+    )
+    ok, detail = _ca_run(ca, script, mounts={data: "/data"})
+    if not ok:
+        raise VpnError(f"Server certificate generation failed: {detail}")
+
+
+def _init_openvpn(name: str, subnet: str, port: int, auth_mode: str, ldap_config: dict, ca: str = "") -> None:
     data = _data_dir(name)
     data.mkdir(parents=True, exist_ok=True)
     data.chmod(0o777)
-    ok, detail = _docker_run("opensmart/openvpn", f"/opt/opensmart/gen-pki.sh && {_OPENVPN_CHMOD}", data)
-    if not ok:
-        raise VpnError(f"PKI generation failed: {detail}")
+    if ca:
+        _require_ca(ca)
+        _openvpn_server_pki_from_ca(name, ca)
+    else:
+        ok, detail = _docker_run("opensmart/openvpn", f"/opt/opensmart/gen-pki.sh && {_OPENVPN_CHMOD}", data)
+        if not ok:
+            raise VpnError(f"PKI generation failed: {detail}")
     server_conf = data / "server.conf"
     conf = server_conf.read_text()
     conf = conf.replace("server 10.20.0.0 255.255.255.0", f"server {_subnet_base(subnet)}.0 255.255.255.0")
@@ -417,7 +580,7 @@ def _get_instance(name: str) -> dict:
 
 def create_instance(name: str, vpn_type: str, port: int, auth_mode: str = "certs",
                     ldap_config: dict | None = None, subnet: str | None = None,
-                    settings: dict | None = None) -> dict:
+                    settings: dict | None = None, ca: str | None = None) -> dict:
     if not NAME_RE.match(name or ""):
         raise VpnError("Instance name must be 1-30 chars: lowercase letters, digits, dashes.")
     if vpn_type not in ("openvpn", "wireguard"):
@@ -428,6 +591,11 @@ def create_instance(name: str, vpn_type: str, port: int, auth_mode: str = "certs
         raise VpnError("auth_mode must be 'certs' or 'ldap'.")
     if auth_mode == "ldap" and vpn_type != "openvpn":
         raise VpnError("LDAP authentication is only supported for OpenVPN.")
+    ca = (ca or "").strip()
+    if ca:
+        if vpn_type != "openvpn":
+            raise VpnError("A Certificate Authority applies only to OpenVPN instances.")
+        _require_ca(ca)
     ldap_config = ldap_config or {}
     requested_subnet = _validate_subnet(subnet) if subnet else None
     settings_json = json.dumps(_validate_settings(settings)) if settings else "{}"
@@ -442,15 +610,15 @@ def create_instance(name: str, vpn_type: str, port: int, auth_mode: str = "certs
         else:
             subnet = _allocate_subnet(db)
         cursor = db.execute(
-            "INSERT INTO vpn_instances (name, vpn_type, port, subnet, auth_mode, ldap_config, settings, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (name, vpn_type, port, subnet, auth_mode, json.dumps(ldap_config), settings_json, _now()),
+            "INSERT INTO vpn_instances (name, vpn_type, port, subnet, auth_mode, ldap_config, settings, ca, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, vpn_type, port, subnet, auth_mode, json.dumps(ldap_config), settings_json, ca, _now()),
         )
         instance_id = int(cursor.lastrowid or 0)
         db.commit()
     try:
         _write_compose(name, vpn_type, port, instance_id)
         if vpn_type == "openvpn":
-            _init_openvpn(name, subnet, port, auth_mode, ldap_config)
+            _init_openvpn(name, subnet, port, auth_mode, ldap_config, ca)
             # Bake the chosen DNS / tunnel mode into the server's pushed config.
             _apply_openvpn_settings(name, _get_instance(name), None)
         else:
@@ -515,7 +683,10 @@ def list_users(name: str, vpn_type: str | None = None) -> list[dict]:
 
 
 def _openvpn_users(name: str) -> list[dict]:
-    index = _data_dir(name) / "pki" / "index.txt"
+    # With a shared CA the users live in the CA's PKI (so they're consistent
+    # across every instance on that CA); legacy instances keep their own PKI.
+    ca = _get_instance(name).get("ca") or ""
+    index = _ca_index_path(ca) if ca else _data_dir(name) / "pki" / "index.txt"
     if not index.is_file():
         return []
     users = []
@@ -525,7 +696,7 @@ def _openvpn_users(name: str) -> list[dict]:
             continue
         status, expiry, cn = parts[0].strip(), parts[1].strip(), parts[5].strip()
         common_name = cn.split("/CN=")[-1] if "/CN=" in cn else cn
-        if common_name == "server":
+        if common_name == "server" or common_name.startswith("server-"):
             continue
         label = {"V": "valid", "R": "revoked", "E": "expired"}.get(status, status)
         if label == "valid" and _openvpn_user_disabled(name, common_name):
@@ -582,6 +753,29 @@ def _wireguard_peers(name: str) -> list[dict]:
     return peers
 
 
+def _openvpn_make_client_from_ca(instance: dict, username: str, server_host: str) -> None:
+    """Sign the client cert in the shared CA (once) and assemble a self-contained
+    .ovpn bundle for this instance — its endpoint + its own tls-crypt key. Safe to
+    call again for the same user on another instance to produce that instance's
+    bundle from the same certificate."""
+    name, ca = instance["name"], instance["ca"]
+    data = _data_dir(name)
+    script = (
+        f'{_EASYRSA_ENV}; set -e; '
+        f'[ -f /ca/pki/issued/{username}.crt ] || "$EASY" build-client-full {username} nopass; '
+        f'mkdir -p /data/clients; OUT=/data/clients/{username}.ovpn; '
+        'sed "s#__SERVER_IP__#${SRV_HOST}#g" /data/client.ovpn.tmpl | grep -v "^#" > "$OUT"; '
+        'echo "<ca>" >> "$OUT"; cat /ca/pki/ca.crt >> "$OUT"; echo "</ca>" >> "$OUT"; '
+        f'echo "<cert>" >> "$OUT"; openssl x509 -in /ca/pki/issued/{username}.crt >> "$OUT"; echo "</cert>" >> "$OUT"; '
+        f'echo "<key>" >> "$OUT"; cat /ca/pki/private/{username}.key >> "$OUT"; echo "</key>" >> "$OUT"; '
+        'echo "<tls-crypt>" >> "$OUT"; cat /data/pki/ta.key >> "$OUT"; echo "</tls-crypt>" >> "$OUT"; '
+        'chmod -R a+rwX /data /ca'
+    )
+    ok, detail = _ca_run(ca, script, mounts={data: "/data"}, env={"SRV_HOST": server_host})
+    if not ok:
+        raise VpnError(f"Client creation failed: {detail}")
+
+
 def create_user(name: str, username: str, server_host: str) -> dict:
     if not USER_RE.match(username or ""):
         raise VpnError("User name must be 1-40 chars: letters, digits, dot, underscore, dash.")
@@ -589,17 +783,26 @@ def create_user(name: str, username: str, server_host: str) -> dict:
     if not server_host or re.search(r"[\s'\"\\;|&$`]", server_host):
         raise VpnError("A valid server host/IP is required.")
     instance = _get_instance(name)
-    if any(u["name"] == username and u["status"] == "valid" for u in list_users(name, instance["vpn_type"])):
-        raise VpnError(f"User '{username}' already exists.")
+    ca = instance.get("ca") or ""
+    existing_valid = any(u["name"] == username and u["status"] == "valid" for u in list_users(name, instance["vpn_type"]))
     if instance["vpn_type"] == "openvpn":
-        ok, detail = _docker_run(
-            "opensmart/openvpn",
-            f"/opt/opensmart/make-client.sh {username} {server_host} && {_OPENVPN_CHMOD}",
-            _data_dir(name),
-        )
-        if not ok:
-            raise VpnError(f"Client creation failed: {detail}")
+        if ca:
+            # Shared CA: reuse the cert if it already exists (the user may already
+            # be enrolled on another instance) and just build this instance's bundle.
+            _openvpn_make_client_from_ca(instance, username, server_host)
+        else:
+            if existing_valid:
+                raise VpnError(f"User '{username}' already exists.")
+            ok, detail = _docker_run(
+                "opensmart/openvpn",
+                f"/opt/opensmart/make-client.sh {username} {server_host} && {_OPENVPN_CHMOD}",
+                _data_dir(name),
+            )
+            if not ok:
+                raise VpnError(f"Client creation failed: {detail}")
     else:
+        if existing_valid:
+            raise VpnError(f"User '{username}' already exists.")
         _create_wireguard_peer(instance, username, server_host)
     return {"name": username, "instance": name}
 
@@ -648,17 +851,28 @@ def revoke_user(name: str, username: str) -> None:
     if not USER_RE.match(username or ""):
         raise VpnError("Invalid user name.")
     instance = _get_instance(name)
+    ca = instance.get("ca") or ""
     if instance["vpn_type"] == "openvpn":
-        ok, detail = _docker_run(
-            "opensmart/openvpn",
-            "export EASYRSA_PKI=/data/pki EASYRSA_BATCH=1; EASY=/usr/share/easy-rsa/easyrsa; "
-            f'"$EASY" revoke {username} && "$EASY" gen-crl && {_OPENVPN_CHMOD}',
-            _data_dir(name),
-        )
-        if not ok:
-            raise VpnError(f"Revocation failed: {detail}")
-        client = _data_dir(name) / "clients" / f"{username}.ovpn"
-        client.unlink(missing_ok=True)
+        if ca:
+            # Revoke in the shared CA (affects every instance on it), then push
+            # the refreshed CRL to all of them and drop the client bundles.
+            script = f'{_EASYRSA_ENV}; set -e; "$EASY" revoke {username} && "$EASY" gen-crl && chmod -R a+rwX /ca'
+            ok, detail = _ca_run(ca, script)
+            if not ok:
+                raise VpnError(f"Revocation failed: {detail}")
+            for inst in _ca_instances(ca):
+                (_data_dir(inst) / "clients" / f"{username}.ovpn").unlink(missing_ok=True)
+            _refresh_ca_crl_to_instances(ca)
+        else:
+            ok, detail = _docker_run(
+                "opensmart/openvpn",
+                "export EASYRSA_PKI=/data/pki EASYRSA_BATCH=1; EASY=/usr/share/easy-rsa/easyrsa; "
+                f'"$EASY" revoke {username} && "$EASY" gen-crl && {_OPENVPN_CHMOD}',
+                _data_dir(name),
+            )
+            if not ok:
+                raise VpnError(f"Revocation failed: {detail}")
+            (_data_dir(name) / "clients" / f"{username}.ovpn").unlink(missing_ok=True)
         # The running server re-reads crl.pem per handshake; no restart needed.
     else:
         conf_path = _wg_conf_path(name)
@@ -687,6 +901,23 @@ def _restart_if_running(name: str) -> None:
     inspected = _docker_inspect([_container_name(name)])
     if inspected and inspected[0].get("State", {}).get("Running"):
         _compose(name, "restart")
+
+
+def _refresh_ca_crl_to_instances(ca: str) -> None:
+    """Copy a CA's freshly-generated CRL to every instance that uses it so their
+    servers honour the revocation (OpenVPN re-reads crl.pem per handshake). Runs
+    the copy in a one-off container (root) since the existing crl.pem is owned by
+    the container's root, not the backend's uid."""
+    if not (_ca_dir(ca) / "pki" / "crl.pem").is_file():
+        return
+    for inst in _ca_instances(ca):
+        ok, detail = _ca_run(
+            ca,
+            'mkdir -p /data/pki && cp /ca/pki/crl.pem /data/pki/crl.pem && chmod a+r /data/pki/crl.pem',
+            mounts={_data_dir(inst): "/data"},
+        )
+        if not ok:
+            logger.warning("failed to refresh CRL for instance %s: %s", inst, detail[:200])
 
 
 # --- Server settings ---------------------------------------------------------

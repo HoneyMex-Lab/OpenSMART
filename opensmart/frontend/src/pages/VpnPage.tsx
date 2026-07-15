@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { VpnConnection, VpnInstance, VpnStatus, VpnUser } from '../types';
+import type { VpnCa, VpnConnection, VpnInstance, VpnStatus, VpnUser } from '../types';
 
 const LDAP_FIELDS: { key: string; label: string; placeholder: string; required?: boolean }[] = [
   { key: 'url', label: 'LDAP URL', placeholder: 'ldap://dc1.example.local', required: true },
@@ -42,10 +42,11 @@ export default function VpnPage() {
   const [error, setError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: '', vpn_type: 'openvpn', port: '1194', auth_mode: 'certs', subnet: '', dns: '1.1.1.1', tunnel: 'full', routes: '' });
+  const [form, setForm] = useState({ name: '', vpn_type: 'openvpn', port: '1194', auth_mode: 'certs', subnet: '', dns: '1.1.1.1', tunnel: 'full', routes: '', ca: '' });
   const [ldap, setLdap] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [cas, setCas] = useState<VpnCa[]>([]);
 
   async function refresh() {
     try {
@@ -59,7 +60,11 @@ export default function VpnPage() {
     }
   }
 
-  useEffect(() => { refresh(); }, []);
+  async function refreshCas() {
+    try { setCas((await api.vpnCas()).cas); } catch { /* ignore */ }
+  }
+
+  useEffect(() => { refresh(); refreshCas(); }, []);
 
   async function createInstance(event: FormEvent) {
     event.preventDefault();
@@ -75,11 +80,13 @@ export default function VpnPage() {
         ldap_config: form.auth_mode === 'ldap' ? ldap : {},
         subnet: form.subnet.trim() || undefined,
         settings: { dns: form.dns.trim(), tunnel: form.tunnel as 'full' | 'split', routes: form.tunnel === 'split' ? form.routes.trim() : '' },
+        ca: form.vpn_type === 'openvpn' ? (form.ca || undefined) : undefined,
       });
       setShowCreate(false);
-      setForm({ name: '', vpn_type: 'openvpn', port: '1194', auth_mode: 'certs', subnet: '', dns: '1.1.1.1', tunnel: 'full', routes: '' });
+      setForm({ name: '', vpn_type: 'openvpn', port: '1194', auth_mode: 'certs', subnet: '', dns: '1.1.1.1', tunnel: 'full', routes: '', ca: '' });
       setLdap({});
       await refresh();
+      await refreshCas();
       setExpanded(newName);  // open the new instance straight into its management panel
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create instance');
@@ -119,6 +126,7 @@ export default function VpnPage() {
 
   return (
     <section className="admin-stack">
+      <CaManager cas={cas} onChanged={() => { refreshCas(); refresh(); }} />
       <article className="card">
         <div className="section-actions">
           <div>
@@ -137,6 +145,14 @@ export default function VpnPage() {
               <label>UDP port<input type="number" min={1024} max={65535} value={form.port} required onChange={(e) => setForm({ ...form, port: e.target.value })} /></label>
               {form.vpn_type === 'openvpn' && (
                 <label>Authentication<select value={form.auth_mode} onChange={(e) => setForm({ ...form, auth_mode: e.target.value })}><option value="certs">Local certificates</option><option value="ldap">LDAP / Samba AD + certs</option></select></label>
+              )}
+              {form.vpn_type === 'openvpn' && (
+                <label>Certificate Authority
+                  <select value={form.ca} onChange={(e) => setForm({ ...form, ca: e.target.value })}>
+                    <option value="">Standalone (own CA for this instance)</option>
+                    {cas.filter((c) => c.ready).map((c) => <option key={c.name} value={c.name}>Shared: {c.name} — {c.cn}</option>)}
+                  </select>
+                </label>
               )}
             </div>
             <div className="vpn-form-grid">
@@ -207,6 +223,85 @@ export default function VpnPage() {
   );
 }
 
+function CaManager({ cas, onChanged }: { cas: VpnCa[]; onChanged: () => void }) {
+  const [show, setShow] = useState(false);
+  const [form, setForm] = useState({ name: '', cn: '', description: '' });
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    setCreating(true);
+    setError('');
+    try {
+      await api.vpnCreateCa({ name: form.name.trim(), cn: form.cn.trim() || undefined, description: form.description.trim() });
+      setForm({ name: '', cn: '', description: '' });
+      setShow(false);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create CA');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function remove(name: string) {
+    if (!window.confirm(`Delete CA '${name}'? Its certificate and every user certificate it issued are destroyed.`)) return;
+    setBusy(name);
+    setError('');
+    try {
+      await api.vpnDeleteCa(name);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <article className="card">
+      <div className="section-actions">
+        <div>
+          <h2>Certificate Authorities</h2>
+          <p className="muted">A CA signs each server and user certificate. Assign one CA to several OpenVPN instances and their users are managed together — issue a user once, use it on any instance on that CA.</p>
+        </div>
+        <button onClick={() => setShow((v) => !v)}>{show ? 'Cancel' : 'New CA'}</button>
+      </div>
+      {error && <p className="error-text">{error}</p>}
+      {show && (
+        <form className="vpn-create-form" onSubmit={create}>
+          <div className="vpn-form-grid">
+            <label>Name<input value={form.name} maxLength={30} placeholder="corporate" pattern="[a-z0-9][a-z0-9-]*" title="lowercase letters, digits, dashes" required onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+            <label>Common name<input value={form.cn} maxLength={64} placeholder={`OpenSMART-${form.name || 'name'}-CA`} onChange={(e) => setForm({ ...form, cn: e.target.value })} /></label>
+            <label>Description<input value={form.description} maxLength={200} placeholder="optional" onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
+          </div>
+          <div className="config-save-bar"><button disabled={creating}>{creating ? 'Generating CA…' : 'Create CA'}</button></div>
+        </form>
+      )}
+      {cas.length === 0
+        ? !show && <p className="muted">No Certificate Authorities yet. Create one, then assign it when you create an OpenVPN instance.</p>
+        : (
+          <table className="status-table containers-table">
+            <thead><tr><th>CA</th><th>Common name</th><th>Users</th><th>Used by</th><th></th></tr></thead>
+            <tbody>
+              {cas.map((ca) => (
+                <tr key={ca.name}>
+                  <td><strong>{ca.name}</strong>{ca.description && <><br /><small className="muted">{ca.description}</small></>}</td>
+                  <td className="muted">{ca.cn}</td>
+                  <td>{ca.users}</td>
+                  <td className="muted">{ca.instances.length ? ca.instances.join(', ') : '—'}</td>
+                  <td className="vpn-actions"><button className="restart-btn danger" disabled={busy === ca.name || ca.instances.length > 0} title={ca.instances.length ? 'In use — delete its instances first' : ''} onClick={() => remove(ca.name)}>Delete</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+    </article>
+  );
+}
+
 type Tab = 'status' | 'users' | 'settings' | 'logs';
 
 function InstanceDetail({ instance, onChanged }: { instance?: VpnInstance; onChanged: () => void }) {
@@ -221,7 +316,7 @@ function InstanceDetail({ instance, onChanged }: { instance?: VpnInstance; onCha
   ];
   return (
     <article className="card">
-      <h2>{instance.name} <small className="muted">({instance.vpn_type === 'openvpn' ? 'OpenVPN' : 'WireGuard'} · {instance.port}/udp · {instance.subnet})</small></h2>
+      <h2>{instance.name} <small className="muted">({instance.vpn_type === 'openvpn' ? 'OpenVPN' : 'WireGuard'} · {instance.port}/udp · {instance.subnet}{instance.ca ? ` · CA: ${instance.ca}` : ''})</small></h2>
       <div className="config-subtabs vpn-tabs">
         {TABS.map((t) => <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>{t.label}</button>)}
       </div>
@@ -371,11 +466,12 @@ function UsersTab({ instance, onChanged }: { instance: VpnInstance; onChanged: (
   return (
     <>
       {instance.auth_mode === 'ldap' && <p className="muted">This instance also validates credentials against LDAP/Samba AD at connect time; certificates below remain the transport identity.</p>}
+      {instance.ca && <p className="muted">Users are issued by the shared CA <strong>{instance.ca}</strong> — the same certificate works on every instance on that CA, and revoking removes access everywhere. Creating a user here also builds this instance's <code>.ovpn</code> bundle.</p>}
       {error && <p className="error-text">{error}</p>}
       <form className="vpn-form-grid vpn-user-form" onSubmit={createUser}>
         <label>User name<input value={username} maxLength={40} pattern="[A-Za-z0-9][A-Za-z0-9._-]*" title="letters, digits, dot, underscore, dash" required onChange={(e) => setUsername(e.target.value)} /></label>
         <label>Server host/IP in client config<input value={serverHost} required onChange={(e) => setServerHost(e.target.value)} /></label>
-        <button disabled={working}>{working ? 'Working…' : 'Create user'}</button>
+        <button disabled={working}>{working ? 'Working…' : instance.ca ? 'Add / build bundle' : 'Create user'}</button>
       </form>
       {users.length === 0
         ? <p className="muted">No users yet.</p>
