@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { VpnCa, VpnConnection, VpnInstance, VpnStatus, VpnUser } from '../types';
+import type { VpnCa, VpnConnection, VpnInstance, VpnSettings, VpnStatus, VpnUser } from '../types';
 
 const LDAP_FIELDS: { key: string; label: string; placeholder: string; required?: boolean }[] = [
   { key: 'url', label: 'LDAP URL', placeholder: 'ldap://dc1.example.local', required: true },
@@ -42,7 +42,7 @@ export default function VpnPage() {
   const [error, setError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: '', vpn_type: 'openvpn', port: '1194', auth_mode: 'certs', subnet: '', dns: '1.1.1.1', tunnel: 'full', routes: '', ca: '' });
+  const [form, setForm] = useState({ name: '', vpn_type: 'openvpn', port: '1194', auth_mode: 'certs', subnet: '', dns: '1.1.1.1', tunnel: 'full', routes: '', mtu: '', password_auth: 'off', ca: '' });
   const [ldap, setLdap] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -79,11 +79,11 @@ export default function VpnPage() {
         auth_mode: form.vpn_type === 'openvpn' ? form.auth_mode : 'certs',
         ldap_config: form.auth_mode === 'ldap' ? ldap : {},
         subnet: form.subnet.trim() || undefined,
-        settings: { dns: form.dns.trim(), tunnel: form.tunnel as 'full' | 'split', routes: form.tunnel === 'split' ? form.routes.trim() : '' },
+        settings: { dns: form.dns.trim(), tunnel: form.tunnel as 'full' | 'split', routes: form.tunnel === 'split' ? form.routes.trim() : '', mtu: form.mtu.trim(), password_auth: (form.vpn_type === 'openvpn' ? form.password_auth : 'off') as 'on' | 'off' },
         ca: form.vpn_type === 'openvpn' ? (form.ca || undefined) : undefined,
       });
       setShowCreate(false);
-      setForm({ name: '', vpn_type: 'openvpn', port: '1194', auth_mode: 'certs', subnet: '', dns: '1.1.1.1', tunnel: 'full', routes: '', ca: '' });
+      setForm({ name: '', vpn_type: 'openvpn', port: '1194', auth_mode: 'certs', subnet: '', dns: '1.1.1.1', tunnel: 'full', routes: '', mtu: '', password_auth: 'off', ca: '' });
       setLdap({});
       await refresh();
       await refreshCas();
@@ -160,7 +160,11 @@ export default function VpnPage() {
               <label>Client DNS<input value={form.dns} placeholder="1.1.1.1, 9.9.9.9" onChange={(e) => setForm({ ...form, dns: e.target.value })} /></label>
               <label>Tunnel mode<select value={form.tunnel} onChange={(e) => setForm({ ...form, tunnel: e.target.value })}><option value="full">Full — all client traffic</option><option value="split">Split — only routed subnets</option></select></label>
               {form.tunnel === 'split' && <label>Routed subnets<input value={form.routes} placeholder="10.0.0.0/8, 192.168.1.0/24" onChange={(e) => setForm({ ...form, routes: e.target.value })} /></label>}
+              <label>Tunnel MTU<input value={form.mtu} placeholder="auto (1500)" inputMode="numeric" pattern="\d{3,4}" title="576–9000, leave blank for the default" onChange={(e) => setForm({ ...form, mtu: e.target.value })} /></label>
             </div>
+            {form.vpn_type === 'openvpn' && form.auth_mode === 'certs' && (
+              <label className="vpn-inline-check"><input type="checkbox" checked={form.password_auth === 'on'} onChange={(e) => setForm({ ...form, password_auth: e.target.checked ? 'on' : 'off' })} /> Require a username and password in addition to the client certificate</label>
+            )}
             {form.vpn_type === 'openvpn' && form.auth_mode === 'ldap' && (
               <div className="vpn-form-grid">
                 {LDAP_FIELDS.map((field) => (
@@ -389,7 +393,9 @@ function UsersTab({ instance, onChanged }: { instance: VpnInstance; onChanged: (
   const [error, setError] = useState('');
   const [username, setUsername] = useState('');
   const [serverHost, setServerHost] = useState(window.location.hostname);
+  const [password, setPassword] = useState('');
   const [working, setWorking] = useState(false);
+  const passwordAuth = instance.vpn_type === 'openvpn' && instance.settings?.password_auth === 'on';
 
   async function refreshUsers() {
     try {
@@ -408,12 +414,28 @@ function UsersTab({ instance, onChanged }: { instance: VpnInstance; onChanged: (
     setWorking(true);
     setError('');
     try {
-      await api.vpnCreateUser(instance.name, username.trim(), serverHost.trim());
+      await api.vpnCreateUser(instance.name, username.trim(), serverHost.trim(), passwordAuth ? password : '');
       setUsername('');
+      setPassword('');
       await refreshUsers();
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create user');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function setUserPassword(name: string) {
+    const next = window.prompt(`Set the VPN password for '${name}' (4–128 characters). Leave blank to clear it.`);
+    if (next === null) return;
+    setWorking(true);
+    setError('');
+    try {
+      await api.vpnSetUserPassword(instance.name, name, next);
+      await refreshUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set password');
     } finally {
       setWorking(false);
     }
@@ -471,21 +493,25 @@ function UsersTab({ instance, onChanged }: { instance: VpnInstance; onChanged: (
       <form className="vpn-form-grid vpn-user-form" onSubmit={createUser}>
         <label>User name<input value={username} maxLength={40} pattern="[A-Za-z0-9][A-Za-z0-9._-]*" title="letters, digits, dot, underscore, dash" required onChange={(e) => setUsername(e.target.value)} /></label>
         <label>Server host/IP in client config<input value={serverHost} required onChange={(e) => setServerHost(e.target.value)} /></label>
+        {passwordAuth && <label>Login password<input type="password" value={password} minLength={4} maxLength={128} placeholder="4–128 characters" required onChange={(e) => setPassword(e.target.value)} /></label>}
         <button disabled={working}>{working ? 'Working…' : instance.ca ? 'Add / build bundle' : 'Create user'}</button>
       </form>
+      {passwordAuth && <p className="muted">This instance requires a username and password on top of the certificate. Set each user's password below; the certificate common name is their login name.</p>}
       {users.length === 0
         ? <p className="muted">No users yet.</p>
         : (
           <table className="status-table containers-table">
-            <thead><tr><th>Name</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Status</th>{passwordAuth && <th>Password</th>}<th>Expires</th><th></th></tr></thead>
             <tbody>
               {users.map((user) => (
                 <tr key={user.name}>
                   <td>{user.name}</td>
                   <td><span className={`badge ${user.status === 'valid' ? 'ok' : user.status === 'disabled' ? 'warning' : user.status === 'revoked' ? 'danger' : 'muted'}`}>{user.status}</span></td>
+                  {passwordAuth && <td><span className={`badge ${user.has_password ? 'ok' : 'warning'}`}>{user.has_password ? 'Set' : 'Not set'}</span></td>}
                   <td>{user.expires_at ? user.expires_at.slice(0, 10) : '—'}</td>
                   <td className="vpn-actions">
                     {user.has_config && user.status !== 'revoked' && <button className="restart-btn" onClick={() => download(user.name)}>Download config</button>}
+                    {passwordAuth && user.status !== 'revoked' && <button className="restart-btn" disabled={working} onClick={() => setUserPassword(user.name)}>Set password</button>}
                     {user.status === 'valid' && <button className="restart-btn" disabled={working} onClick={() => toggle(user.name, false)}>Disable</button>}
                     {user.status === 'disabled' && <button className="restart-btn" disabled={working} onClick={() => toggle(user.name, true)}>Enable</button>}
                     {user.status !== 'revoked' && <button className="restart-btn danger" disabled={working} onClick={() => revoke(user.name)}>Revoke</button>}
@@ -503,15 +529,20 @@ function SettingsTab({ instance, onChanged }: { instance: VpnInstance; onChanged
   const [dns, setDns] = useState(instance.settings?.dns ?? '1.1.1.1');
   const [tunnel, setTunnel] = useState<'full' | 'split'>(instance.settings?.tunnel ?? 'full');
   const [routes, setRoutes] = useState(instance.settings?.routes ?? '');
+  const [mtu, setMtu] = useState(instance.settings?.mtu ?? '');
+  const [passwordAuth, setPasswordAuth] = useState<'on' | 'off'>(instance.settings?.password_auth ?? 'off');
   const [ldap, setLdap] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const canPasswordAuth = instance.vpn_type === 'openvpn' && instance.auth_mode === 'certs';
 
   useEffect(() => {
     setDns(instance.settings?.dns ?? '1.1.1.1');
     setTunnel(instance.settings?.tunnel ?? 'full');
     setRoutes(instance.settings?.routes ?? '');
+    setMtu(instance.settings?.mtu ?? '');
+    setPasswordAuth(instance.settings?.password_auth ?? 'off');
   }, [instance.name, instance.settings]);
 
   async function save(event: FormEvent) {
@@ -520,7 +551,7 @@ function SettingsTab({ instance, onChanged }: { instance: VpnInstance; onChanged
     setError('');
     setMessage('');
     try {
-      const payload: { settings: { dns: string; tunnel: 'full' | 'split'; routes: string }; ldap_config?: Record<string, string> } = { settings: { dns, tunnel, routes } };
+      const payload: { settings: VpnSettings; ldap_config?: Record<string, string> } = { settings: { dns, tunnel, routes, mtu, password_auth: canPasswordAuth ? passwordAuth : 'off' } };
       if (instance.auth_mode === 'ldap' && Object.values(ldap).some((v) => v.trim())) payload.ldap_config = ldap;
       await api.vpnUpdateInstance(instance.name, payload);
       setMessage(`Saved.${instance.running ? ' Existing clients must re-download their config to pick up DNS/route changes.' : ''}`);
@@ -544,7 +575,11 @@ function SettingsTab({ instance, onChanged }: { instance: VpnInstance; onChanged
           <option value="split">Split — only the routes below</option>
         </select></label>
         {tunnel === 'split' && <label>Routed subnets<input value={routes} placeholder="10.0.0.0/8, 192.168.1.0/24" onChange={(e) => setRoutes(e.target.value)} /></label>}
+        <label>Tunnel MTU<input value={mtu} placeholder="auto (1500)" inputMode="numeric" pattern="\d{3,4}" title="576–9000, leave blank for the default" onChange={(e) => setMtu(e.target.value)} /></label>
       </div>
+      {canPasswordAuth && (
+        <label className="vpn-inline-check"><input type="checkbox" checked={passwordAuth === 'on'} onChange={(e) => setPasswordAuth(e.target.checked ? 'on' : 'off')} /> Require a username and password in addition to the client certificate</label>
+      )}
       {instance.auth_mode === 'ldap' && (
         <>
           <p className="muted">Update LDAP / Samba AD binding (leave blank to keep the current configuration):</p>

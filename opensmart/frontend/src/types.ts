@@ -290,7 +290,7 @@ export type HostResources = {
   recommended_tiers: Record<'core' | 'full', { cpu: number; memory_mb: number; disk_gb: number }>;
 };
 
-export type VpnSettings = { dns: string; tunnel: 'full' | 'split'; routes: string };
+export type VpnSettings = { dns: string; tunnel: 'full' | 'split'; routes: string; mtu: string; password_auth: 'on' | 'off' };
 
 export type VpnCa = {
   name: string;
@@ -323,6 +323,7 @@ export type VpnUser = {
   status: string;
   expires_at: string;
   has_config: boolean;
+  has_password?: boolean;
 };
 
 export type VpnConnection = {

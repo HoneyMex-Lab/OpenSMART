@@ -67,7 +67,7 @@ _OPENVPN_EXTRAS_DIRECTIVE = (
 # dns: comma-separated client DNS; tunnel: 'full' routes all client traffic
 # through the VPN, 'split' only the routes below; routes: comma-separated CIDRs
 # for split tunnel (defaults to the instance subnet).
-_DEFAULT_SETTINGS = {"dns": "1.1.1.1", "tunnel": "full", "routes": ""}
+_DEFAULT_SETTINGS = {"dns": "1.1.1.1", "tunnel": "full", "routes": "", "mtu": "", "password_auth": "off"}
 _OFF = "#OFF "  # marks a disabled WireGuard peer's lines (wg-quick ignores them)
 # OpenVPN's DNS/route/gateway pushes are regenerated between these markers so
 # editing settings replaces them cleanly instead of stacking duplicates.
@@ -112,11 +112,18 @@ def _validate_settings(settings: dict, base: dict | None = None) -> dict:
     dns = str(settings.get("dns", base["dns"])).strip()
     tunnel = str(settings.get("tunnel", base["tunnel"])).strip()
     routes = str(settings.get("routes", base["routes"])).strip()
+    mtu = str(settings.get("mtu", base.get("mtu", ""))).strip()
+    password_auth = str(settings.get("password_auth", base.get("password_auth", "off"))).strip()
     if tunnel not in ("full", "split"):
         raise VpnError("Tunnel mode must be 'full' or 'split'.")
+    if password_auth not in ("on", "off"):
+        raise VpnError("password_auth must be 'on' or 'off'.")
+    if mtu:
+        if not mtu.isdigit() or not (576 <= int(mtu) <= 9000):
+            raise VpnError("MTU must be a number between 576 and 9000 (or blank for the default).")
     _validate_addresses(_split_csv(dns), cidr=False)
     _validate_addresses(_split_csv(routes), cidr=True)
-    return {"dns": dns, "tunnel": tunnel, "routes": routes}
+    return {"dns": dns, "tunnel": tunnel, "routes": routes, "mtu": mtu, "password_auth": password_auth}
 
 
 def _validate_subnet(subnet: str) -> str:
@@ -689,6 +696,7 @@ def _openvpn_users(name: str) -> list[dict]:
     index = _ca_index_path(ca) if ca else _data_dir(name) / "pki" / "index.txt"
     if not index.is_file():
         return []
+    password_users = _openvpn_password_users(name)
     users = []
     for line in index.read_text().splitlines():
         parts = line.split("\t")
@@ -706,8 +714,16 @@ def _openvpn_users(name: str) -> list[dict]:
             "status": label,
             "expires_at": _parse_index_ts(expiry),
             "has_config": (_data_dir(name) / "clients" / f"{common_name}.ovpn").is_file(),
+            "has_password": common_name in password_users,
         })
     return users
+
+
+def _openvpn_password_users(name: str) -> set[str]:
+    users_file = _data_dir(name) / "auth-users"
+    if not users_file.is_file():
+        return set()
+    return {ln.split(":", 1)[0] for ln in users_file.read_text().splitlines() if ln.strip()}
 
 
 def _openvpn_user_disabled(name: str, username: str) -> bool:
@@ -776,7 +792,7 @@ def _openvpn_make_client_from_ca(instance: dict, username: str, server_host: str
         raise VpnError(f"Client creation failed: {detail}")
 
 
-def create_user(name: str, username: str, server_host: str) -> dict:
+def create_user(name: str, username: str, server_host: str, password: str = "") -> dict:
     if not USER_RE.match(username or ""):
         raise VpnError("User name must be 1-40 chars: letters, digits, dot, underscore, dash.")
     server_host = (server_host or "").strip()
@@ -800,11 +816,65 @@ def create_user(name: str, username: str, server_host: str) -> dict:
             )
             if not ok:
                 raise VpnError(f"Client creation failed: {detail}")
+        if password:
+            set_user_password(name, username, password)
     else:
         if existing_valid:
             raise VpnError(f"User '{username}' already exists.")
         _create_wireguard_peer(instance, username, server_host)
     return {"name": username, "instance": name}
+
+
+def _hash_password(password: str) -> str:
+    """SHA-512 crypt hash via a one-off openssl (Python 3.13 dropped `crypt`)."""
+    try:
+        result = subprocess.run(
+            ["docker", "run", "--rm", "-e", f"PW={password}", "--entrypoint", "bash",
+             "opensmart/openvpn", "-c", 'printf "%s" "$PW" | openssl passwd -6 -stdin'],
+            capture_output=True, text=True, timeout=30, shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        raise VpnError(f"Could not hash the password: {error}") from error
+    line = (result.stdout or "").strip().splitlines()[-1] if result.stdout.strip() else ""
+    if result.returncode != 0 or not line.startswith("$6$"):
+        raise VpnError("Password hashing failed.")
+    return line
+
+
+def set_user_password(name: str, username: str, password: str) -> None:
+    """Set (or clear, when password is empty) a user's local login password for
+    an OpenVPN instance. Stored SHA-512-crypt-hashed in the instance's
+    auth-users file, checked by verify-user.sh when password auth is enabled."""
+    if not USER_RE.match(username or ""):
+        raise VpnError("Invalid user name.")
+    instance = _get_instance(name)
+    if instance["vpn_type"] != "openvpn":
+        raise VpnError("Passwords apply only to OpenVPN users.")
+    if password and not (4 <= len(password) <= 128) or "\n" in (password or ""):
+        raise VpnError("Password must be 4-128 characters.")
+    users_file = _data_dir(name) / "auth-users"
+    kept = [ln for ln in (users_file.read_text().splitlines() if users_file.is_file() else [])
+            if ln.strip() and ln.split(":", 1)[0] != username]
+    if password:
+        kept.append(f"{username}:{_hash_password(password)}")
+    users_file.parent.mkdir(parents=True, exist_ok=True)
+    users_file.write_text("\n".join(kept) + ("\n" if kept else ""))
+    try:
+        users_file.chmod(0o644)
+    except OSError:
+        pass
+
+
+def _drop_user_credential(name: str, username: str) -> None:
+    users_file = _data_dir(name) / "auth-users"
+    if not users_file.is_file():
+        return
+    kept = [ln for ln in users_file.read_text().splitlines()
+            if ln.strip() and ln.split(":", 1)[0] != username]
+    try:
+        users_file.write_text("\n".join(kept) + ("\n" if kept else ""))
+    except OSError:
+        pass
 
 
 def _create_wireguard_peer(instance: dict, username: str, server_host: str) -> None:
@@ -831,12 +901,14 @@ def _create_wireguard_peer(instance: dict, username: str, server_host: str) -> N
     clients.mkdir(exist_ok=True)
     settings = _instance_settings(instance)
     dns = settings["dns"] or _DEFAULT_SETTINGS["dns"]
+    mtu_line = f"MTU = {settings['mtu']}\n" if settings.get("mtu") else ""
     client_conf = clients / f"{username}.conf"
     client_conf.write_text(
         "[Interface]\n"
         f"PrivateKey = {client_private}\n"
         f"Address = {base}.{host_id}/32\n"
-        f"DNS = {dns}\n\n"
+        f"DNS = {dns}\n"
+        f"{mtu_line}\n"
         "[Peer]\n"
         f"PublicKey = {server_public}\n"
         f"Endpoint = {server_host}:{instance['port']}\n"
@@ -862,6 +934,7 @@ def revoke_user(name: str, username: str) -> None:
                 raise VpnError(f"Revocation failed: {detail}")
             for inst in _ca_instances(ca):
                 (_data_dir(inst) / "clients" / f"{username}.ovpn").unlink(missing_ok=True)
+                _drop_user_credential(inst, username)
             _refresh_ca_crl_to_instances(ca)
         else:
             ok, detail = _docker_run(
@@ -873,6 +946,7 @@ def revoke_user(name: str, username: str) -> None:
             if not ok:
                 raise VpnError(f"Revocation failed: {detail}")
             (_data_dir(name) / "clients" / f"{username}.ovpn").unlink(missing_ok=True)
+            _drop_user_credential(name, username)
         # The running server re-reads crl.pem per handshake; no restart needed.
     else:
         conf_path = _wg_conf_path(name)
@@ -948,11 +1022,14 @@ def update_instance(name: str, settings: dict | None = None, ldap_config: dict |
 
 
 def _regenerate_wg_clients(name: str, instance: dict) -> None:
-    """Rewrite existing WireGuard client configs' DNS + AllowedIPs from the
-    current settings, preserving each client's keys (users must re-download)."""
+    """Rewrite existing WireGuard client configs' DNS + AllowedIPs + MTU from the
+    current settings, preserving each client's keys (users must re-download). Also
+    applies the MTU to the server interface (needs a restart)."""
     settings = _instance_settings(instance)
     dns = settings["dns"] or _DEFAULT_SETTINGS["dns"]
     allowed = _wg_client_allowed_ips(settings, instance["subnet"])
+    mtu = settings.get("mtu", "")
+    _set_wg_interface_mtu(name, mtu)
     clients = _data_dir(name) / "clients"
     if not clients.is_dir():
         return
@@ -960,7 +1037,25 @@ def _regenerate_wg_clients(name: str, instance: dict) -> None:
         text = conf.read_text()
         text = re.sub(r"(?m)^DNS = .*$", f"DNS = {dns}", text)
         text = re.sub(r"(?m)^AllowedIPs = .*$", f"AllowedIPs = {allowed}", text)
+        # Set/replace/remove the client [Interface] MTU line.
+        text = re.sub(r"(?m)^MTU = .*\n?", "", text)
+        if mtu:
+            text = re.sub(r"(?m)^(DNS = .*)$", rf"\1\nMTU = {mtu}", text, count=1)
         conf.write_text(text)
+
+
+def _set_wg_interface_mtu(name: str, mtu: str) -> None:
+    """Add/replace/remove the MTU line on the server's WireGuard interface conf,
+    and reload the instance if it's running so the change takes effect."""
+    try:
+        conf_path = _wg_conf_path(name)
+    except VpnError:
+        return
+    text = re.sub(r"(?m)^MTU = .*\n", "", conf_path.read_text())
+    if mtu:
+        text = re.sub(r"(?m)^(ListenPort = .*)$", rf"\1\nMTU = {mtu}", text, count=1)
+    conf_path.write_text(text)
+    _restart_if_running(name)
 
 
 def _openvpn_settings_block(settings: dict) -> str:
@@ -975,20 +1070,80 @@ def _openvpn_settings_block(settings: dict) -> str:
         for route in _split_csv(settings["routes"]):
             net, mask = _cidr_to_net_mask(route)
             lines.append(f'push "route {net} {mask}"')
+    mtu = settings.get("mtu", "")
+    if mtu:
+        lines.append(f"tun-mtu {mtu}")
+        lines.append(f'push "tun-mtu {mtu}"')
+    if settings.get("password_auth") == "on":
+        # Local username/password as a second factor on top of the certificate;
+        # verify-user.sh checks it against the per-instance auth-users file.
+        lines.append("script-security 2")
+        lines.append("auth-user-pass-verify /data/verify-user.sh via-file")
     lines.append(_OVPN_SETTINGS_END)
     return "\n".join(lines) + "\n"
 
 
+_OPENVPN_VERIFY_SCRIPT = (
+    "#!/bin/bash\n"
+    "# OpenSMART local user/password check (auth-user-pass-verify via-file).\n"
+    'u=$(sed -n 1p "$1"); p=$(sed -n 2p "$1")\n'
+    '[ -n "$common_name" ] && [ "$u" != "$common_name" ] && exit 1\n'
+    "line=$(awk -F: -v U=\"$u\" '$1==U{print; exit}' /data/auth-users 2>/dev/null)\n"
+    '[ -n "$line" ] || exit 1\n'
+    "stored=${line#*:}\n"
+    "salt=$(printf '%s' \"$stored\" | cut -d'$' -f3)\n"
+    '[ "$(openssl passwd -6 -salt "$salt" "$p")" = "$stored" ] && exit 0\n'
+    "exit 1\n"
+)
+
+
+def _write_openvpn_auth_script(name: str, settings: dict) -> None:
+    """Install the local-password verify script + credentials file when the
+    instance requires username/password. Files must stay readable/executable by
+    the server container's root."""
+    data = _data_dir(name)
+    if settings.get("password_auth") != "on":
+        return
+    script = data / "verify-user.sh"
+    script.write_text(_OPENVPN_VERIFY_SCRIPT)
+    script.chmod(0o755)
+    users = data / "auth-users"
+    if not users.exists():
+        users.write_text("")
+        users.chmod(0o644)
+
+
+def _patch_openvpn_client_template(name: str, instance: dict) -> None:
+    """Keep the client template's auth-user-pass / tun-mtu lines in step with the
+    instance's settings, so freshly-built .ovpn bundles carry them."""
+    tmpl = _data_dir(name) / "client.ovpn.tmpl"
+    if not tmpl.is_file():
+        return
+    settings = _instance_settings(instance)
+    text = re.sub(r'(?m)^(auth-user-pass|tun-mtu \d+)\s*$\n?', "", tmpl.read_text()).rstrip() + "\n"
+    extra = []
+    if settings.get("mtu"):
+        extra.append(f"tun-mtu {settings['mtu']}")
+    if settings.get("password_auth") == "on" or instance["auth_mode"] == "ldap":
+        extra.append("auth-user-pass")
+    if extra:
+        text += "\n".join(extra) + "\n"
+    tmpl.write_text(text)
+
+
 def _apply_openvpn_settings(name: str, instance: dict, ldap_config: dict | None) -> None:
     data = _data_dir(name)
+    settings = _instance_settings(instance)
     conf_path = data / "server.conf"
     if conf_path.is_file():
         conf = conf_path.read_text()
         # Drop any prior managed block and the pushes we now own, then re-add.
         conf = re.sub(re.escape(_OVPN_SETTINGS_BEGIN) + r".*?" + re.escape(_OVPN_SETTINGS_END) + r"\n?", "", conf, flags=re.S)
         conf = re.sub(r'(?m)^push "(redirect-gateway|dhcp-option DNS|route |block-outside-dns).*\n?', "", conf)
-        conf = conf.rstrip() + "\n" + _openvpn_settings_block(_instance_settings(instance))
+        conf = conf.rstrip() + "\n" + _openvpn_settings_block(settings)
         conf_path.write_text(conf)
+    _write_openvpn_auth_script(name, settings)
+    _patch_openvpn_client_template(name, instance)
     if ldap_config is not None and instance["auth_mode"] == "ldap":
         _write_ldap_conf(data / "auth-ldap.conf", ldap_config)
     _restart_if_running(name)

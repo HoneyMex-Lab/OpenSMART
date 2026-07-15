@@ -2205,6 +2205,8 @@ th { color: var(--c-91a2b5); font-size: .78rem; text-transform: uppercase; lette
 .vpn-form-grid label { display: grid; gap: 5px; font-size: .86rem; font-weight: 700; }
 .vpn-form-grid input, .vpn-form-grid select { width: 100%; }
 .vpn-user-form { margin: 14px 0 18px; max-width: 720px; }
+.vpn-inline-check { display: flex; align-items: center; gap: 8px; font-size: .86rem; font-weight: 700; margin: 4px 0; }
+.vpn-inline-check input { width: auto; }
 .vpn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .restart-btn.danger { border-color: var(--c-rgba-255-90-90-45, rgba(255,90,90,.45)); color: var(--c-ff9c9c, #ff9c9c); }
 /* Network IDS config manager */

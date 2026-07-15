@@ -31,6 +31,11 @@ class CaCreate(BaseModel):
 class UserCreate(BaseModel):
     username: str = Field(min_length=1, max_length=40)
     server_host: str = Field(min_length=1, max_length=253)
+    password: str = Field(default="", max_length=128)
+
+
+class UserPassword(BaseModel):
+    password: str = Field(default="", max_length=128)
 
 
 class InstanceUpdate(BaseModel):
@@ -133,11 +138,21 @@ def users(name: str, _: Annotated[dict, Depends(require_admin_read)]) -> dict:
 @router.post("/instances/{name}/users")
 def create_user(name: str, payload: UserCreate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
     try:
-        result = vpn.create_user(name, payload.username, payload.server_host)
+        result = vpn.create_user(name, payload.username, payload.server_host, payload.password)
     except vpn.VpnError as error:
         raise _bad_request(error) from error
     write_audit_event("vpn_user_create", admin["id"], admin["username"], f"vpn:{name}:{payload.username}", "", "")
     return result
+
+
+@router.post("/instances/{name}/users/{username}/password")
+def set_user_password(name: str, username: str, payload: UserPassword, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        vpn.set_user_password(name, username, payload.password)
+    except vpn.VpnError as error:
+        raise _bad_request(error) from error
+    write_audit_event("vpn_user_password", admin["id"], admin["username"], f"vpn:{name}:{username}", "", "set" if payload.password else "cleared")
+    return {"ok": True}
 
 
 @router.post("/instances/{name}/users/{username}/enabled")
