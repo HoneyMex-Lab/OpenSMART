@@ -26,6 +26,12 @@ cipher AES-256-GCM
 auth SHA256
 tls-server
 tls-version-min 1.2
+# Pin classical TLS key-exchange groups. OpenSSL 3.5 defaults to the
+# post-quantum hybrid X25519MLKEM768, whose ~1 KB key shares bloat the TLS
+# handshake past what OpenVPN Connect (mobile) tolerates — desktop clients
+# cope, mobile ones time out with "TLS key negotiation failed". Classical
+# groups keep the handshake small and universally compatible.
+tls-groups X25519:secp256r1:secp384r1
 remote-cert-tls client
 
 user nobody

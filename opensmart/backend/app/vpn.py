@@ -1201,6 +1201,22 @@ def _regenerate_openvpn_clients(name: str, instance: dict) -> None:
             logger.warning("vpn: failed to rebuild bundle for %s on %s: %s", username, name, error)
 
 
+_OVPN_TLS_GROUPS = "tls-groups X25519:secp256r1:secp384r1"
+
+
+def _ensure_tls_groups(conf: str) -> str:
+    """Pin classical TLS key-exchange groups if the server config doesn't already.
+    OpenSSL 3.5 defaults to the post-quantum hybrid X25519MLKEM768, whose ~1 KB
+    key shares bloat the TLS handshake past what OpenVPN Connect (mobile)
+    tolerates — desktop clients cope, mobile ones time out at 'TLS key
+    negotiation failed'. This heals instances created before the pin existed."""
+    if re.search(r"(?m)^tls-groups\s", conf):
+        return conf
+    if re.search(r"(?m)^remote-cert-tls client\s*$", conf):
+        return re.sub(r"(?m)^(remote-cert-tls client)\s*$", r"\1\n" + _OVPN_TLS_GROUPS, conf, count=1)
+    return _OVPN_TLS_GROUPS + "\n" + conf
+
+
 def _apply_openvpn_settings(name: str, instance: dict, ldap_config: dict | None) -> None:
     data = _data_dir(name)
     settings = _instance_settings(instance)
@@ -1211,6 +1227,7 @@ def _apply_openvpn_settings(name: str, instance: dict, ldap_config: dict | None)
         conf = re.sub(re.escape(_OVPN_SETTINGS_BEGIN) + r".*?" + re.escape(_OVPN_SETTINGS_END) + r"\n?", "", conf, flags=re.S)
         conf = re.sub(r'(?m)^push "(redirect-gateway|dhcp-option DNS|route |block-outside-dns).*\n?', "", conf)
         conf = conf.rstrip() + "\n" + _openvpn_settings_block(settings)
+        conf = _ensure_tls_groups(conf)
         conf_path.write_text(conf)
     _write_openvpn_auth_script(name, settings)
     _patch_openvpn_client_template(name, instance)
