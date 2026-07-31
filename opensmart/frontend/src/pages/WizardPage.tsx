@@ -1,16 +1,18 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { HostInterface, HostResources, OpenSmartModule, ProvisionResult, Settings, ToolConfig } from '../types';
+import { THEME_OPTIONS } from '../themes';
+import type { HostInterface, HostResources, OpenSmartModule, ProvisionResult, Settings, ToolConfig, User } from '../types';
 import { MODULE_BACKING, NOT_IMPLEMENTED, PROJECT_LABELS, TOOL_BACKING } from './backing';
 import { toolDefinitions } from './toolDefinitions';
 
-type StepKey = 'basics' | 'network' | 'features' | 'provision';
+type StepKey = 'basics' | 'network' | 'features' | 'provision' | 'theme';
 
 const steps: { key: StepKey; label: string }[] = [
   { key: 'basics', label: '1. Basics' },
   { key: 'network', label: '2. Network' },
   { key: 'features', label: '3. Modules & Tools' },
   { key: 'provision', label: '4. Provision' },
+  { key: 'theme', label: '5. Theme' },
 ];
 
 // Strong working defaults: Suricata+Zeek traffic monitoring, Suricata IDS,
@@ -65,6 +67,8 @@ type Props = {
   tools?: ToolConfig[];
   onToolsUpdate?: (tools: ToolConfig[]) => void;
   onComplete?: () => void;
+  user?: User;
+  onUserUpdate?: (user: User) => void;
 };
 
 function mergeConfig(raw: string, defaults: Record<string, string>): string {
@@ -81,7 +85,7 @@ function mergeConfig(raw: string, defaults: Record<string, string>): string {
   return JSON.stringify(config);
 }
 
-export default function WizardPage({ settings, setSettings, modules: modulesProp, onModulesUpdate, tools: toolsProp, onToolsUpdate, onComplete }: Props) {
+export default function WizardPage({ settings, setSettings, modules: modulesProp, onModulesUpdate, tools: toolsProp, onToolsUpdate, onComplete, user, onUserUpdate }: Props) {
   const [step, setStep] = useState<StepKey>('basics');
   const [visited, setVisited] = useState<Set<StepKey>>(new Set(['basics']));
   const [appName, setAppName] = useState(settings.platform_title || 'OpenSMART');
@@ -103,6 +107,7 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   const [running, setRunning] = useState(false);
   const [runDone, setRunDone] = useState(false);
   const [runError, setRunError] = useState('');
+  const [theme, setTheme] = useState(user?.theme || '');
 
   const modules = modulesProp ?? localModules;
   const handleModulesUpdate = onModulesUpdate ?? setLocalModules;
@@ -346,6 +351,15 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   }
 
   async function enterApp() {
+    if (theme && user && onUserUpdate) {
+      onUserUpdate({ ...user, theme });
+      try {
+        await api.setTheme(theme);
+      } catch {
+        // Non-fatal — entering the app shouldn't block on this; the theme
+        // can still be changed from the Account page afterwards.
+      }
+    }
     setSettings({ ...settings, wizard_completed: 'true' });
     await onComplete?.();
   }
@@ -591,12 +605,29 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
                     {errorItems.length === 0 && warningItems.length === 0 && <p className="wizard-summary-ok">All services started successfully.</p>}
                   </div>
                   <div className="config-save-bar">
-                    <button onClick={enterApp}>Enter {appName.trim() || 'OpenSMART'}</button>
+                    <button onClick={() => goTo('theme')}>Next: Theme</button>
                   </div>
                 </>
               )}
             </>
           )}
+        </article>
+      )}
+
+      {step === 'theme' && (
+        <article className="card">
+          <h2>Choose your theme</h2>
+          <p className="muted">Pick a look for OpenSMART. This is just your personal preference — you can change it anytime from your Account page.</p>
+          <label className="account-theme">
+            Theme
+            <select value={theme} onChange={(event) => setTheme(event.target.value)}>
+              <option value="">Use default</option>
+              {THEME_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <div className="config-save-bar">
+            <button onClick={enterApp}>Enter {appName.trim() || 'OpenSMART'}</button>
+          </div>
         </article>
       )}
     </section>

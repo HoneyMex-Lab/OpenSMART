@@ -90,6 +90,6 @@ export default function App() {
   if (loading) return <div className="loading">{t(settings, 'common.loadingOpenSMART', 'Loading OpenSMART...')}</div>;
   if (!user) return <LoginPage settings={settings} onLogin={handleLogin} />;
   if (user.mustChangePassword) return <ForceChangePasswordPage settings={settings} onChanged={handlePasswordChanged} />;
-  if (user.role === 'admin' && settings.wizard_completed !== 'true') return <WizardPage settings={settings} setSettings={setSettings} onComplete={loadSettings} />;
+  if (user.role === 'admin' && settings.wizard_completed !== 'true') return <WizardPage settings={settings} setSettings={setSettings} onComplete={loadSettings} user={user} onUserUpdate={setUser} />;
   return <AppShell user={user} setUser={setUser} settings={settings} setSettings={setSettings} onLogout={handleLogout} />;
 }
