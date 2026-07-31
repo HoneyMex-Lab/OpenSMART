@@ -49,7 +49,7 @@ export default function NetworkIdsConfigPage() {
         </div>
         {summary && !summary.provisioned && <p className="muted">Suricata isn't provisioned yet — start the Network IDS module first.</p>}
         {summary && summary.provisioned && (
-          <div className="ids-summary">
+          <div className="ids-status-strip">
             <span><strong>{summary.enabled_rules.toLocaleString()}</strong> active rules</span>
             <span className="muted">·</span>
             <span><strong>{summary.enabled_sources.length}</strong> enabled source{summary.enabled_sources.length === 1 ? '' : 's'}</span>

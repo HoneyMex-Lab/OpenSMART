@@ -37,7 +37,7 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | Key | Default | Purpose |
 |---|---|---|
 | `platform_title` | `OpenSMART` | Sidebar and branding title. |
-| `platform_version` | `v0.3 beta` | Version shown in the sidebar and About page. |
+| `platform_version` | `v0.3 beta` | Version shown in the sidebar and About page. Read-only — set from `OPENSMART_VERSION`, not editable from Settings. |
 | `platform_build` | current git commit or `unknown` | Build identifier shown in app metadata. |
 | `sensor_name` | host name or `OpenSMART Sensor` | Sensor name shown in telemetry and notifications. |
 | `platform_language` | `en` | UI language. Supported values are `en` and `es-MX`. |
@@ -45,14 +45,14 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | `favicon_url` | `/assets/branding/favicon.svg` | Browser favicon URL. |
 | `footer_logo_primary` | empty | First sidebar footer logo, managed through logo upload UI. |
 | `footer_logo_secondary` | empty | Second sidebar footer logo, managed through logo upload UI. |
-| `developed_by` | `Developed by` | Sidebar footer text. |
+| `developed_by` | `Developed by` | Sidebar footer text. Read-only — not editable from Settings. |
 | `failed_login_limit` | `5` | Failed login count before lockout. |
 | `lockout_minutes` | `15` | Lockout duration after too many failed attempts. |
 | `password_policy` | `strict` | Password complexity profile: `strict` / `moderate` / `low` / `disabled`. See `docs/security.md`. |
 | `wizard_completed` | `true` (`false` only on a genuinely fresh install) | Whether the first-run Wizard has been completed. Gates the Wizard redirect in `App.tsx`. |
 | `theme` | `dark` | UI theme: `dark` / `classic` (light) / `matrix`. Exposed pre-login so the login page renders themed. |
 | `monitor_interfaces` | empty | Comma-separated host NICs to capture on, chosen in the Wizard's Network step. Injected into Suricata as `CAPTURE_IFACES` on start (falls back to `eth0` when unset). |
-| `tool_base_path` | (none — set to a real path on the host) | Placeholder path for future local tool integrations. |
+| `tool_base_path` | `/opt/opensmart/tools` | Unused placeholder — not read by any backend code, not editable from Settings. |
 | `tool_url_opnsense` | empty | Internal iframe URL for OPNsense. |
 | `tool_url_ntop` | empty | Internal iframe URL for NTOP. |
 | `tool_url_arkime` | empty | Internal iframe URL for Arkime. |
@@ -61,8 +61,6 @@ Runtime settings are stored in the `settings` table and are editable by admins f
 | `tool_url_graylog` | empty | Internal iframe URL for Graylog. |
 | `log_file_path` | `logs/opensmart.log` | Backend log file path. Relative paths resolve from the project root. |
 | `worker_threads` | `8` | Backend worker thread limit for blocking work. |
-| `dashboard_use_demo_for_disabled` | `false` | Shows demo dashboard values for disabled modules/tools when enabled. |
-| `dashboard_feed_json` | `[]` | JSON feed for the home dashboard internal feed panel. |
 
 Logo uploads are read by the browser and saved as data URLs in SQLite settings. Tool URLs are edited from `Configuration > Tools Config` and loaded only when a user clicks a tool sidebar item or card.
 

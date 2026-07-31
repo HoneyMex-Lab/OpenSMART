@@ -25,31 +25,16 @@ export default function SummaryPage({ settings, tools, modules, onNavigate }: Pr
   const totalItems = tools.length + modules.length || 1;
   const healthyItems = enabledTools.length + enabledModules.length - warningCount;
   const healthPercent = Math.max(0, Math.round((healthyItems / totalItems) * 100));
-  const useDemo = settings.dashboard_use_demo_for_disabled === 'true';
 
   // Module/tool enabled helpers
   const isModuleEnabled = (name: string) => modules.find((m) => m.name === name)?.enabled ?? true;
   const isToolEnabled = (name: string) => tools.find((t) => t.name === name)?.enabled ?? true;
 
-  const ids = {
-    critical: numberSetting(settings, 'dashboard_ids_alerts_critical'),
-    high: numberSetting(settings, 'dashboard_ids_alerts_high'),
-    medium: numberSetting(settings, 'dashboard_ids_alerts_medium'),
-    low: numberSetting(settings, 'dashboard_ids_alerts_low'),
-  };
-  const vulns = {
-    critical: numberSetting(settings, 'dashboard_vulnerabilities_critical'),
-    high: numberSetting(settings, 'dashboard_vulnerabilities_high'),
-    medium: numberSetting(settings, 'dashboard_vulnerabilities_medium'),
-    open: numberSetting(settings, 'dashboard_vulnerabilities_open'),
-  };
-  const idsNetworkDemo = {
-    critical: numberSetting(settings, 'dashboard_ids_severity_critical'),
-    high: numberSetting(settings, 'dashboard_ids_severity_high'),
-    medium: numberSetting(settings, 'dashboard_ids_severity_medium'),
-    low: numberSetting(settings, 'dashboard_ids_severity_low'),
-  };
-  const feed = parseFeed(settings.dashboard_feed_json);
+  // No live telemetry source exists yet for these panels — they read as
+  // empty until a real per-module summary is wired up.
+  const ids = { critical: 0, high: 0, medium: 0, low: 0 };
+  const vulns = { critical: 0, high: 0, medium: 0, open: 0 };
+  const feed = defaultFeed();
 
   // Network IDS live data
   const [idsSummary, setIdsSummary] = useState<NetworkIdsSummary | null>(null);
@@ -78,7 +63,7 @@ export default function SummaryPage({ settings, tools, modules, onNavigate }: Pr
     ]).finally(() => setResourcesLoading(false));
   }, []);
 
-  // Derive IDS severity counts from live data or demo
+  // Derive IDS severity counts from live data; zero until it loads (or if disabled).
   const idsSeverityLive = idsSummary ? {
     critical: idsSummary.counters.severity['1'] ?? idsSummary.counters.severity['critical'] ?? 0,
     high: idsSummary.counters.severity['2'] ?? idsSummary.counters.severity['high'] ?? 0,
@@ -86,21 +71,16 @@ export default function SummaryPage({ settings, tools, modules, onNavigate }: Pr
     low: idsSummary.counters.severity['4'] ?? idsSummary.counters.severity['low'] ?? 0,
   } : null;
 
-  const idsSeverity = idsModuleEnabled ? (idsSeverityLive ?? idsNetworkDemo) : (useDemo ? idsNetworkDemo : { critical: 0, high: 0, medium: 0, low: 0 });
-  const idsNetworkIsDemo = !idsModuleEnabled && useDemo;
-  const idsNetworkDisabledNoDemo = !idsModuleEnabled && !useDemo;
+  const idsSeverity = idsSeverityLive ?? { critical: 0, high: 0, medium: 0, low: 0 };
+  const idsNetworkDisabled = !idsModuleEnabled;
 
-  const fwAllowed = numberSetting(settings, 'dashboard_fw_allowed_packets_24h');
-  const fwBlocked = numberSetting(settings, 'dashboard_fw_blocked_packets_24h');
-  const fwIsDemo = !isToolEnabled('OPNsense') && useDemo;
-  const fwDisabledNoDemo = !isToolEnabled('OPNsense') && !useDemo;
+  const fwAllowed = 0;
+  const fwBlocked = 0;
+  const fwDisabled = !isToolEnabled('OPNsense');
 
-  const threatIsDemo = !isModuleEnabled('Threat Detection Alerts') && useDemo;
-  const threatDisabledNoDemo = !isModuleEnabled('Threat Detection Alerts') && !useDemo;
-  const vulnIsDemo = !isModuleEnabled('Vulnerability Management') && useDemo;
-  const vulnDisabledNoDemo = !isModuleEnabled('Vulnerability Management') && !useDemo;
-  const trafficIsDemo = !trafficModuleEnabled && useDemo;
-  const trafficDisabledNoDemo = !trafficModuleEnabled && !useDemo;
+  const threatDisabled = !isModuleEnabled('Threat Detection Alerts');
+  const vulnDisabled = !isModuleEnabled('Vulnerability Management');
+  const trafficDisabled = !trafficModuleEnabled;
   const trafficIsEmpty = trafficModuleEnabled && trafficSummary !== null && Number(trafficSummary.counters.total_events || 0) === 0;
 
   // Empty flags: live data source enabled but produces no values.
@@ -110,17 +90,14 @@ export default function SummaryPage({ settings, tools, modules, onNavigate }: Pr
   const fwIsEmpty = isToolEnabled('OPNsense') && (fwAllowed + fwBlocked === 0);
 
   // Per-service flags for Security Services panel
-  const endpointsValue = numberSetting(settings, 'dashboard_endpoints_total');
-  const vpnValue = numberSetting(settings, 'dashboard_vpn_users');
-  const lxcValue = numberSetting(settings, 'dashboard_lxc_assets');
-  const endpointDemo = !isModuleEnabled('Endpoint') && useDemo;
-  const endpointDisabledNoDemo = !isModuleEnabled('Endpoint') && !useDemo;
+  const endpointsValue = 0;
+  const vpnValue = 0;
+  const lxcValue = 0;
+  const endpointDisabled = !isModuleEnabled('Endpoint');
   const endpointEmpty = isModuleEnabled('Endpoint') && endpointsValue === 0;
-  const vpnDemo = !isModuleEnabled('Access VPN') && useDemo;
-  const vpnDisabledNoDemo = !isModuleEnabled('Access VPN') && !useDemo;
+  const vpnDisabled = !isModuleEnabled('Access VPN');
   const vpnEmpty = isModuleEnabled('Access VPN') && vpnValue === 0;
-  const lxcDemo = !isModuleEnabled('LXC Manager') && useDemo;
-  const lxcDisabledNoDemo = !isModuleEnabled('LXC Manager') && !useDemo;
+  const lxcDisabled = !isModuleEnabled('LXC Manager');
   const lxcEmpty = isModuleEnabled('LXC Manager') && lxcValue === 0;
 
   return (
@@ -170,36 +147,36 @@ export default function SummaryPage({ settings, tools, modules, onNavigate }: Pr
 
       <div className="dashboard-layout">
         <article className="card posture-card">
-          <PanelTitle title={t(settings, 'home.threatAlerts', 'Threat Detection Alerts')} subtitle={t(settings, 'home.threatSubtitle', 'Threat alerts by severity, last 24h.')} isDemo={threatIsDemo} isEmpty={threatIsEmpty} onDemoClick={() => onNavigate('webconsole-config')} action={<button className="panel-action-btn" onClick={() => navigateModule(modules, 'Threat Detection Alerts', onNavigate)}>{t(settings, 'home.openAlerts', 'Open alerts')}</button>} />
-          {threatDisabledNoDemo ? <DisabledPanelMessage settings={settings} /> : <><SeverityBar label={t(settings, 'home.critical', 'Critical')} value={ids.critical} max={maxValue(ids)} tone="critical" /><SeverityBar label={t(settings, 'home.high', 'High')} value={ids.high} max={maxValue(ids)} tone="high" /><SeverityBar label={t(settings, 'home.medium', 'Medium')} value={ids.medium} max={maxValue(ids)} tone="medium" /><SeverityBar label={t(settings, 'home.low', 'Low')} value={ids.low} max={maxValue(ids)} tone="low" /></>}
+          <PanelTitle title={t(settings, 'home.threatAlerts', 'Threat Detection Alerts')} subtitle={t(settings, 'home.threatSubtitle', 'Threat alerts by severity, last 24h.')} isEmpty={threatIsEmpty} action={<button className="panel-action-btn" onClick={() => navigateModule(modules, 'Threat Detection Alerts', onNavigate)}>{t(settings, 'home.openAlerts', 'Open alerts')}</button>} />
+          {threatDisabled ? <DisabledPanelMessage settings={settings} /> : <><SeverityBar label={t(settings, 'home.critical', 'Critical')} value={ids.critical} max={maxValue(ids)} tone="critical" /><SeverityBar label={t(settings, 'home.high', 'High')} value={ids.high} max={maxValue(ids)} tone="high" /><SeverityBar label={t(settings, 'home.medium', 'Medium')} value={ids.medium} max={maxValue(ids)} tone="medium" /><SeverityBar label={t(settings, 'home.low', 'Low')} value={ids.low} max={maxValue(ids)} tone="low" /></>}
         </article>
 
         <article className="card posture-card">
-          <PanelTitle title={t(settings, 'home.networkIdsAlerts', 'Network IDS Alerts')} subtitle={t(settings, 'home.networkIdsSubtitle', 'IDS alerts by severity, last 24h.')} isDemo={idsNetworkIsDemo} isEmpty={idsNetworkIsEmpty} onDemoClick={() => onNavigate('webconsole-config')} action={<button className="panel-action-btn" onClick={() => navigateModule(modules, 'Network IDS', onNavigate)}>{t(settings, 'home.openIds', 'Open IDS')}</button>} />
-          {idsNetworkDisabledNoDemo ? <DisabledPanelMessage settings={settings} /> : idsSummaryLoading ? <PanelLoader settings={settings} /> : <><SeverityBar label={t(settings, 'home.critical', 'Critical')} value={idsSeverity.critical} max={maxValue(idsSeverity)} tone="critical" /><SeverityBar label={t(settings, 'home.high', 'High')} value={idsSeverity.high} max={maxValue(idsSeverity)} tone="high" /><SeverityBar label={t(settings, 'home.medium', 'Medium')} value={idsSeverity.medium} max={maxValue(idsSeverity)} tone="medium" /><SeverityBar label={t(settings, 'home.low', 'Low')} value={idsSeverity.low} max={maxValue(idsSeverity)} tone="low" /></>}
+          <PanelTitle title={t(settings, 'home.networkIdsAlerts', 'Network IDS Alerts')} subtitle={t(settings, 'home.networkIdsSubtitle', 'IDS alerts by severity, last 24h.')} isEmpty={idsNetworkIsEmpty} action={<button className="panel-action-btn" onClick={() => navigateModule(modules, 'Network IDS', onNavigate)}>{t(settings, 'home.openIds', 'Open IDS')}</button>} />
+          {idsNetworkDisabled ? <DisabledPanelMessage settings={settings} /> : idsSummaryLoading ? <PanelLoader settings={settings} /> : <><SeverityBar label={t(settings, 'home.critical', 'Critical')} value={idsSeverity.critical} max={maxValue(idsSeverity)} tone="critical" /><SeverityBar label={t(settings, 'home.high', 'High')} value={idsSeverity.high} max={maxValue(idsSeverity)} tone="high" /><SeverityBar label={t(settings, 'home.medium', 'Medium')} value={idsSeverity.medium} max={maxValue(idsSeverity)} tone="medium" /><SeverityBar label={t(settings, 'home.low', 'Low')} value={idsSeverity.low} max={maxValue(idsSeverity)} tone="low" /></>}
         </article>
 
         <article className="card posture-card network-traffic-dashboard-card">
-          <PanelTitle title={t(settings, 'home.networkTraffic', 'Network Traffic')} subtitle={t(settings, 'home.networkTrafficSubtitle', 'Network event and protocol distribution, last 24h.')} isDemo={trafficIsDemo} isEmpty={trafficIsEmpty} onDemoClick={() => onNavigate('webconsole-config')} action={<button className="panel-action-btn" onClick={() => navigateModule(modules, 'Network Traffic Monitoring', onNavigate)}>{t(settings, 'home.openTraffic', 'Open traffic')}</button>} />
-          {trafficDisabledNoDemo ? <DisabledPanelMessage settings={settings} /> : trafficSummaryLoading ? <PanelLoader settings={settings} /> : <NetworkTrafficDashboard summary={trafficSummary} useDemo={trafficIsDemo} settings={settings} />}
+          <PanelTitle title={t(settings, 'home.networkTraffic', 'Network Traffic')} subtitle={t(settings, 'home.networkTrafficSubtitle', 'Network event and protocol distribution, last 24h.')} isEmpty={trafficIsEmpty} action={<button className="panel-action-btn" onClick={() => navigateModule(modules, 'Network Traffic Monitoring', onNavigate)}>{t(settings, 'home.openTraffic', 'Open traffic')}</button>} />
+          {trafficDisabled ? <DisabledPanelMessage settings={settings} /> : trafficSummaryLoading ? <PanelLoader settings={settings} /> : <NetworkTrafficDashboard summary={trafficSummary} settings={settings} />}
         </article>
 
         <article className="card posture-card">
-          <PanelTitle title={t(settings, 'home.firewallActivity', 'Firewall Activity')} subtitle={t(settings, 'home.firewallSubtitle', 'Allowed vs blocked packets, last 24h.')} isDemo={fwIsDemo} isEmpty={fwIsEmpty} onDemoClick={() => onNavigate('webconsole-config')} action={<button className="panel-action-btn" onClick={() => navigateTool(tools, 'OPNsense', onNavigate)}>{t(settings, 'home.openFirewall', 'Open firewall')}</button>} />
-          {fwDisabledNoDemo ? <DisabledPanelMessage settings={settings} /> : <><div className="split-metrics"><MetricPill label={t(settings, 'home.blockedPackets', 'Blocked packets')} value={fwBlocked} /><MetricPill label={t(settings, 'home.allowedPackets', 'Allowed packets')} value={fwAllowed} /></div><FirewallChart blocked={fwBlocked} allowed={fwAllowed} /></>}
+          <PanelTitle title={t(settings, 'home.firewallActivity', 'Firewall Activity')} subtitle={t(settings, 'home.firewallSubtitle', 'Allowed vs blocked packets, last 24h.')} isEmpty={fwIsEmpty} action={<button className="panel-action-btn" onClick={() => navigateTool(tools, 'OPNsense', onNavigate)}>{t(settings, 'home.openFirewall', 'Open firewall')}</button>} />
+          {fwDisabled ? <DisabledPanelMessage settings={settings} /> : <><div className="split-metrics"><MetricPill label={t(settings, 'home.blockedPackets', 'Blocked packets')} value={fwBlocked} /><MetricPill label={t(settings, 'home.allowedPackets', 'Allowed packets')} value={fwAllowed} /></div><FirewallChart blocked={fwBlocked} allowed={fwAllowed} /></>}
         </article>
 
         <article className="card posture-card">
-          <PanelTitle title={t(settings, 'home.vulnerabilities', 'Vulnerabilities')} subtitle={t(settings, 'home.vulnSubtitle', 'Open findings by severity and remediation queue.')} isDemo={vulnIsDemo} isEmpty={vulnIsEmpty} onDemoClick={() => onNavigate('webconsole-config')} action={<button className="panel-action-btn" onClick={() => navigateModule(modules, 'Vulnerability Management', onNavigate)}>{t(settings, 'home.openModule', 'Open module')}</button>} />
-          {vulnDisabledNoDemo ? <DisabledPanelMessage settings={settings} /> : <><SeverityBar label={t(settings, 'home.critical', 'Critical')} value={vulns.critical} max={maxValue(vulns)} tone="critical" /><SeverityBar label={t(settings, 'home.high', 'High')} value={vulns.high} max={maxValue(vulns)} tone="high" /><SeverityBar label={t(settings, 'home.medium', 'Medium')} value={vulns.medium} max={maxValue(vulns)} tone="medium" /><MetricPill label={t(settings, 'home.openTotal', 'Open total')} value={vulns.open} /></>}
+          <PanelTitle title={t(settings, 'home.vulnerabilities', 'Vulnerabilities')} subtitle={t(settings, 'home.vulnSubtitle', 'Open findings by severity and remediation queue.')} isEmpty={vulnIsEmpty} action={<button className="panel-action-btn" onClick={() => navigateModule(modules, 'Vulnerability Management', onNavigate)}>{t(settings, 'home.openModule', 'Open module')}</button>} />
+          {vulnDisabled ? <DisabledPanelMessage settings={settings} /> : <><SeverityBar label={t(settings, 'home.critical', 'Critical')} value={vulns.critical} max={maxValue(vulns)} tone="critical" /><SeverityBar label={t(settings, 'home.high', 'High')} value={vulns.high} max={maxValue(vulns)} tone="high" /><SeverityBar label={t(settings, 'home.medium', 'Medium')} value={vulns.medium} max={maxValue(vulns)} tone="medium" /><MetricPill label={t(settings, 'home.openTotal', 'Open total')} value={vulns.open} /></>}
         </article>
 
         <article className="card posture-card">
-          <PanelTitle title={t(settings, 'home.securityServices', 'Security Services')} subtitle={t(settings, 'home.securityServicesSubtitle', 'Per-service counters across endpoint, VPN, and LXC.')} isDemo={false} isEmpty={false} onDemoClick={() => onNavigate('webconsole-config')} action={null} />
+          <PanelTitle title={t(settings, 'home.securityServices', 'Security Services')} subtitle={t(settings, 'home.securityServicesSubtitle', 'Per-service counters across endpoint, VPN, and LXC.')} isEmpty={false} action={null} />
           <div className="service-list">
-            <ServiceLink label={t(settings, 'home.endpoints', 'Endpoints')} value={endpointsValue} target="Endpoint" modules={modules} onNavigate={onNavigate} isDemo={endpointDemo} isEmpty={endpointEmpty} disabledNoDemo={endpointDisabledNoDemo} />
-            <ServiceLink label={t(settings, 'home.vpnUsers', 'VPN users')} value={vpnValue} target="Access VPN" modules={modules} onNavigate={onNavigate} isDemo={vpnDemo} isEmpty={vpnEmpty} disabledNoDemo={vpnDisabledNoDemo} />
-            <ServiceLink label={t(settings, 'home.lxcAssets', 'LXC assets')} value={lxcValue} target="LXC Manager" modules={modules} onNavigate={onNavigate} isDemo={lxcDemo} isEmpty={lxcEmpty} disabledNoDemo={lxcDisabledNoDemo} />
+            <ServiceLink label={t(settings, 'home.endpoints', 'Endpoints')} value={endpointsValue} target="Endpoint" modules={modules} onNavigate={onNavigate} isEmpty={endpointEmpty} disabled={endpointDisabled} />
+            <ServiceLink label={t(settings, 'home.vpnUsers', 'VPN users')} value={vpnValue} target="Access VPN" modules={modules} onNavigate={onNavigate} isEmpty={vpnEmpty} disabled={vpnDisabled} />
+            <ServiceLink label={t(settings, 'home.lxcAssets', 'LXC assets')} value={lxcValue} target="LXC Manager" modules={modules} onNavigate={onNavigate} isEmpty={lxcEmpty} disabled={lxcDisabled} />
           </div>
         </article>
       </div>
@@ -212,14 +189,13 @@ export default function SummaryPage({ settings, tools, modules, onNavigate }: Pr
   );
 }
 
-function PanelTitle({ title, subtitle, isDemo, isEmpty, onDemoClick, action }: { title: string; subtitle: string; isDemo: boolean; isEmpty: boolean; onDemoClick: () => void; action: React.ReactNode }) {
+function PanelTitle({ title, subtitle, isEmpty, action }: { title: string; subtitle: string; isEmpty: boolean; action: React.ReactNode }) {
   return (
     <div className="section-actions">
       <div>
         <div className="panel-title-row">
           <h2>{title}</h2>
-          {isDemo && <button className="demo-badge" onClick={onDemoClick} title="Using demo data — click to configure">DEMO</button>}
-          {isEmpty && <span className="empty-badge" title="Live data source enabled but no values reported">EMPTY</span>}
+          {isEmpty && <span className="empty-badge" title="Enabled, but no values reported yet">EMPTY</span>}
         </div>
         <p className="muted">{subtitle}</p>
       </div>
@@ -281,12 +257,12 @@ function PanelLoader({ settings }: { settings: Settings }) {
 }
 
 function DisabledPanelMessage({ settings }: { settings: Settings }) {
-  return <div className="disabled-panel-message"><strong>{t(settings, 'home.disabled', 'Disabled')}</strong><span>{t(settings, 'home.disabledMessage', 'No live data is shown while this service is disabled. Enable Demo data in Settings to show placeholders.')}</span></div>;
+  return <div className="disabled-panel-message"><strong>{t(settings, 'home.disabled', 'Disabled')}</strong><span>{t(settings, 'home.disabledMessage', 'No live data is shown while this service is disabled.')}</span></div>;
 }
 
-function NetworkTrafficDashboard({ summary, useDemo, settings }: { summary: NetworkTrafficSummary | null; useDemo: boolean; settings: Settings }) {
-  const eventRows = summary?.tables.event_counts || (useDemo ? demoTrafficEvents() : []);
-  const protocolRows = summary?.tables.protocols || (useDemo ? demoTrafficProtocols() : []);
+function NetworkTrafficDashboard({ summary, settings }: { summary: NetworkTrafficSummary | null; settings: Settings }) {
+  const eventRows = summary?.tables.event_counts || [];
+  const protocolRows = summary?.tables.protocols || [];
   if (!eventRows.length && !protocolRows.length) return <p className="muted">{t(settings, 'home.noTraffic', 'No network traffic data available.')}</p>;
   return <div className="dashboard-subsections"><TrafficBarSection title={t(settings, 'home.networkEvents', 'Network Events')} rows={eventRows} labelKey="event_type" /><TrafficBarSection title={t(settings, 'home.protocols', 'Protocols')} rows={protocolRows} labelKey="protocol" /></div>;
 }
@@ -301,7 +277,7 @@ function HorizontalStatBar({ label, value, max, tone = 0 }: { label: string; val
 }
 
 function SensorResourcesPanel({ resources, history, loading, settings }: { resources: ResourceStatus | null; history: ResourcePoint[]; loading: boolean; settings: Settings }) {
-  const points = history.length >= 2 ? history : demoResourcePoints(resources);
+  const points = history.length >= 2 ? history : flatResourcePoints(resources);
   return <article className="card sensor-resources-card compact-resources"><div className="compact-resources-head"><h2>{t(settings, 'home.sensorResources', 'Sensor Resources')}</h2><p className="muted">{t(settings, 'home.resourceSubtitle', 'Compact resource activity from the OpenSMART host.')}</p></div>{loading ? <PanelLoader settings={settings} /> : <div className="sensor-resource-grid"><MiniResourceMetric label="CPU" value={resources?.cpu_percent || 0} points={points} field="cpu" color="#58d7ff" /><MiniResourceMetric label="Memory" value={resources?.memory_percent || 0} points={points} field="memory" color="#63e6be" /><MiniResourceMetric label="Disk" value={resources?.disk_percent || 0} points={points} field="disk" color="#ffc857" /></div>}</article>;
 }
 
@@ -320,17 +296,11 @@ function MiniAreaChart({ points, field, color }: { points: ResourcePoint[]; fiel
   return <svg className="mini-area-chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"><path d={area} fill={color} opacity="0.18" /><path d={line} fill="none" stroke={color} strokeWidth="2" /></svg>;
 }
 
-function demoTrafficEvents() {
-  return [{ event_type: 'flow', events: 42 }, { event_type: 'dns', events: 31 }, { event_type: 'http', events: 24 }, { event_type: 'tls', events: 18 }];
-}
-
-function demoTrafficProtocols() {
-  return [{ protocol: 'TCP', events: 54 }, { protocol: 'DNS', events: 31 }, { protocol: 'HTTP', events: 24 }, { protocol: 'TLS', events: 18 }];
-}
-
-function demoResourcePoints(resources: ResourceStatus | null): ResourcePoint[] {
-  const cpu = resources?.cpu_percent || 18, memory = resources?.memory_percent || 42, disk = resources?.disk_percent || 33;
-  return Array.from({ length: 12 }, (_, index) => ({ t: String(index), cpu: Math.max(2, cpu + Math.sin(index * .9) * 6), memory: Math.max(2, memory + Math.cos(index * .6) * 4), disk: Math.max(2, disk + Math.sin(index * .35) * 2) }));
+// Fewer than 2 real history points yet (fresh install) — hold a flat line at
+// the current live value instead of inventing a trend.
+function flatResourcePoints(resources: ResourceStatus | null): ResourcePoint[] {
+  const cpu = resources?.cpu_percent || 0, memory = resources?.memory_percent || 0, disk = resources?.disk_percent || 0;
+  return [{ t: '0', cpu, memory, disk }, { t: '1', cpu, memory, disk }];
 }
 
 function SeverityBar({ label, value, max, tone }: { label: string; value: number; max: number; tone: string }) {
@@ -344,7 +314,7 @@ function SeverityBar({ label, value, max, tone }: { label: string; value: number
 }
 
 function FirewallChart({ blocked, allowed }: { blocked: number; allowed: number }) {
-  // Generate 12 demo buckets (2h intervals) that sum approximately to totals
+  // Distribute the two 24h totals across 12 buckets (2h intervals) for the chart shape
   const buckets = useFirewallBuckets(blocked, allowed);
   const maxVal = Math.max(1, ...buckets.map((b) => Math.max(b.blocked, b.allowed)));
   const W = 400;
@@ -409,44 +379,27 @@ function useFirewallBuckets(blocked: number, allowed: number) {
   }, [blocked, allowed]);
 }
 
-function ServiceLink({ label, value, target, modules, onNavigate, isDemo = false, isEmpty = false, disabledNoDemo = false }: { label: string; value: number; target: string; modules: OpenSmartModule[]; onNavigate: (page: string) => void; isDemo?: boolean; isEmpty?: boolean; disabledNoDemo?: boolean }) {
+function ServiceLink({ label, value, target, modules, onNavigate, isEmpty = false, disabled = false }: { label: string; value: number; target: string; modules: OpenSmartModule[]; onNavigate: (page: string) => void; isEmpty?: boolean; disabled?: boolean }) {
   return (
     <button className="service-link" onClick={() => navigateModule(modules, target, onNavigate)}>
       <span>
         {label}
-        {isDemo && <span className="demo-badge-inline" title="Using demo data">DEMO</span>}
-        {disabledNoDemo && <span className="empty-badge" title="Disabled and demo data is off">DISABLED</span>}
-        {isEmpty && <span className="empty-badge" title="Live data source enabled but no values reported">EMPTY</span>}
+        {disabled && <span className="empty-badge" title="Disabled">DISABLED</span>}
+        {isEmpty && <span className="empty-badge" title="Enabled, but no values reported yet">EMPTY</span>}
       </span>
-      <strong>{disabledNoDemo ? '—' : value.toLocaleString()}</strong>
+      <strong>{disabled ? '—' : value.toLocaleString()}</strong>
     </button>
   );
-}
-
-function numberSetting(settings: Settings, key: string) {
-  const value = Number.parseInt(settings[key] || '0', 10);
-  return Number.isFinite(value) ? value : 0;
 }
 
 function maxValue(values: Record<string, number>) {
   return Math.max(1, ...Object.values(values));
 }
 
-function parseFeed(raw = '[]'): FeedItem[] {
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed.slice(0, 5);
-  } catch {
-    return defaultFeed();
-  }
-  return defaultFeed();
-}
-
 function defaultFeed(): FeedItem[] {
   return [
     { title: 'Daily threat review ready', category: 'Operations', body: 'Review high-severity IDS events and firewall block trends from the last 24 hours.', time: 'Today' },
     { title: 'Validate endpoint coverage', category: 'Endpoint', body: 'Confirm managed endpoint counts against expected inventory.', time: 'Today' },
-    { title: 'Demo feed available', category: 'Demo', body: 'Sample feed files are available in the project demo directory.', time: 'Reference' },
   ];
 }
 

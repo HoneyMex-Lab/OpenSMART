@@ -62,28 +62,8 @@ DEFAULT_SETTINGS = {
     "tool_url_proxmox": "",
     "tool_url_wazuh": "",
     "tool_url_graylog": "",
-    "dashboard_ids_alerts_critical": "3",
-    "dashboard_ids_alerts_high": "11",
-    "dashboard_ids_alerts_medium": "24",
-    "dashboard_ids_alerts_low": "38",
-    "dashboard_fw_blocked_packets_24h": "12847",
-    "dashboard_fw_blocked_ips_24h": "214",
-    "dashboard_endpoints_total": "86",
-    "dashboard_vulnerabilities_critical": "5",
-    "dashboard_vulnerabilities_high": "17",
-    "dashboard_vulnerabilities_medium": "42",
-    "dashboard_vulnerabilities_open": "64",
-    "dashboard_vpn_users": "18",
-    "dashboard_lxc_assets": "12",
-    "dashboard_feed_json": "[]",
     "log_file_path": "logs/opensmart.log",
     "worker_threads": "8",
-    "dashboard_use_demo_for_disabled": "false",
-    "dashboard_ids_severity_critical": "5",
-    "dashboard_ids_severity_high": "12",
-    "dashboard_ids_severity_medium": "31",
-    "dashboard_ids_severity_low": "47",
-    "dashboard_fw_allowed_packets_24h": "38210",
     "notification_ids_webhook": "",
     "notification_ids_webhook_status": "not_configured",
     "notification_ids_webhook_error": "",
@@ -707,6 +687,18 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             pass
         for key, value in DEFAULT_SETTINGS.items():
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        # The demo dashboard-metrics feature (fake counters + "fill disabled
+        # panels with demo data" toggle) was removed; drop any rows older
+        # installs seeded so they don't linger as orphaned config.
+        db.execute(
+            "DELETE FROM settings WHERE key IN ("
+            "'dashboard_ids_alerts_critical','dashboard_ids_alerts_high','dashboard_ids_alerts_medium','dashboard_ids_alerts_low',"
+            "'dashboard_ids_severity_critical','dashboard_ids_severity_high','dashboard_ids_severity_medium','dashboard_ids_severity_low',"
+            "'dashboard_fw_blocked_packets_24h','dashboard_fw_blocked_ips_24h','dashboard_fw_allowed_packets_24h',"
+            "'dashboard_endpoints_total','dashboard_vulnerabilities_critical','dashboard_vulnerabilities_high',"
+            "'dashboard_vulnerabilities_medium','dashboard_vulnerabilities_open','dashboard_vpn_users','dashboard_lxc_assets',"
+            "'dashboard_feed_json','dashboard_use_demo_for_disabled')"
+        )
         # Honeynet is the new default theme; flip installs still on the old
         # 'dark' default (leaves an explicitly-chosen non-dark theme alone).
         db.execute("UPDATE settings SET value = 'honeynet' WHERE key = 'theme' AND value = 'dark'")

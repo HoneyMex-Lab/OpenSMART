@@ -45,7 +45,6 @@
       "backend/": "FastAPI app (opensmart/backend/app/), pyproject.toml, uv.lock, requirements.txt fallback.",
       "frontend/": "React + Vite app (opensmart/frontend/src/), package.json, package-lock.json.",
       "scripts/": "App launcher scripts: run_app.sh, dev_backend.sh, dev_frontend.sh, reset_telemetry_db.sh.",
-      "demo/": "Sample dashboard-seeding JSON, manually copy-pasted into Settings; not auto-imported.",
       "containers/run/": "Moved here from the repo-root containers/run/ on 2026-07-05, so the app container's host-path-parity mount (see deployment.phases phase 4) covers it. Per-tool docker-compose.yml + bind-mounted volumes/data/ (never named Docker volumes): opensearch, arkime, suricata, zeek, wireguard, openvpn, wazuh, opensmart, plus vpn/<instance>/ compose projects generated at runtime by backend/app/vpn.py. nginx/ is the tools front-door reverse proxy (serves the app + tool aliases /arkime /wazuh /proxmox /opnsense from one origin on :8080; started by opensmart.sh _start_front_proxy). Started/stopped by backend/app/provisioning.py (and vpn.py) through the docker-socket-proxy sidecar, not by the operator directly."
     },
     "containers/": {
