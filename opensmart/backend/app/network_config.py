@@ -255,7 +255,7 @@ def set_mtu(name: str, mtu: int, *, confirm_seconds: int = _MTU_CONFIRM_DEFAULT_
     token = hostnet.new_token()
     now = datetime.now(timezone.utc)
     expires_at = (now + timedelta(seconds=confirm_seconds)).isoformat()
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dirs()
     with get_db() as db:
         db.execute(
             "INSERT INTO network_interface_applies (name, token, old_mtu, new_mtu, state, actor, applied_at, expires_at) "
@@ -277,12 +277,24 @@ def set_mtu(name: str, mtu: int, *, confirm_seconds: int = _MTU_CONFIRM_DEFAULT_
     return {"token": token, "old_mtu": iface["mtu"], "new_mtu": mtu, "expires_at": expires_at, "session_risk": session_risk}
 
 
+def _ensure_state_dirs() -> None:
+    """Pre-create confirm/cancel/result as the BACKEND's own user, permissive
+    enough (0o777) for the root-run watchdog container to also write into
+    result/ across the UID boundary. Marker files carry no sensitive data —
+    just a token-named presence/absence signal — so this is a deliberate,
+    low-risk tradeoff over matching UIDs between two independently-launched
+    one-off containers."""
+    for sub in ("confirm", "cancel", "result"):
+        path = _STATE_DIR / sub
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o777)
+
+
 def _write_marker(kind: str, token: str) -> None:
     if not hostnet.valid_token(token):
         raise NetworkConfigError("Invalid apply token.")
-    marker_dir = _STATE_DIR / kind
-    marker_dir.mkdir(parents=True, exist_ok=True)
-    (marker_dir / token).write_text("")
+    _ensure_state_dirs()
+    (_STATE_DIR / kind / token).write_text("")
 
 
 def confirm_mtu(token: str) -> None:
