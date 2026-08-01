@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import { api } from '../api';
-import { THEME_OPTIONS } from '../themes';
+import ThemeSwatchPreview from '../components/ThemeSwatchPreview';
+import { DEFAULT_THEME, THEME_OPTIONS } from '../themes';
 import type { HostInterface, HostResources, OpenSmartModule, ProvisionResult, Settings, ToolConfig, User } from '../types';
 import { MODULE_BACKING, NOT_IMPLEMENTED, PROJECT_LABELS, TOOL_BACKING } from './backing';
 import { toolDefinitions } from './toolDefinitions';
@@ -67,8 +68,9 @@ type Props = {
   tools?: ToolConfig[];
   onToolsUpdate?: (tools: ToolConfig[]) => void;
   onComplete?: () => void;
-  user?: User;
-  onUserUpdate?: (user: User) => void;
+  // Read-only — only used to restore the correct live theme (personal
+  // override vs. platform default) if the Theme step is left without saving.
+  user: User;
 };
 
 function mergeConfig(raw: string, defaults: Record<string, string>): string {
@@ -85,7 +87,7 @@ function mergeConfig(raw: string, defaults: Record<string, string>): string {
   return JSON.stringify(config);
 }
 
-export default function WizardPage({ settings, setSettings, modules: modulesProp, onModulesUpdate, tools: toolsProp, onToolsUpdate, onComplete, user, onUserUpdate }: Props) {
+export default function WizardPage({ settings, setSettings, modules: modulesProp, onModulesUpdate, tools: toolsProp, onToolsUpdate, onComplete, user }: Props) {
   const [step, setStep] = useState<StepKey>('basics');
   const [visited, setVisited] = useState<Set<StepKey>>(new Set(['basics']));
   const [appName, setAppName] = useState(settings.platform_title || 'OpenSMART');
@@ -107,7 +109,25 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   const [running, setRunning] = useState(false);
   const [runDone, setRunDone] = useState(false);
   const [runError, setRunError] = useState('');
-  const [theme, setTheme] = useState(user?.theme || '');
+  const [theme, setTheme] = useState(settings.theme || '');
+  // Stays false until the admin actually touches the selector, so arriving on
+  // this step never silently overrides their real applied theme first.
+  const [themePreviewed, setThemePreviewed] = useState(false);
+
+  // Live-preview the picked theme only while on this step and only once
+  // touched; restore the real applied theme (same priority App.tsx uses)
+  // the moment the user leaves the step without saving, or finishes up.
+  useEffect(() => {
+    if (step !== 'theme' || !themePreviewed) return;
+    const preview = theme || DEFAULT_THEME;
+    if (preview === 'dark') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = preview;
+    return () => {
+      const real = user.theme || settings.theme || DEFAULT_THEME;
+      if (real === 'dark') delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = real;
+    };
+  }, [step, theme, themePreviewed, user.theme, settings.theme]);
 
   const modules = modulesProp ?? localModules;
   const handleModulesUpdate = onModulesUpdate ?? setLocalModules;
@@ -351,13 +371,17 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   }
 
   async function enterApp() {
-    if (theme && user && onUserUpdate) {
-      onUserUpdate({ ...user, theme });
+    if (theme && theme !== settings.theme) {
       try {
-        await api.setTheme(theme);
+        // Partial payload — only touches the `theme` key server-side, so it
+        // can't clobber settings saved earlier in this same wizard run.
+        const result = await api.saveSettings({ theme });
+        setSettings(result.settings);
+        await onComplete?.();
+        return;
       } catch {
-        // Non-fatal — entering the app shouldn't block on this; the theme
-        // can still be changed from the Account page afterwards.
+        // Non-fatal — entering the app shouldn't block on this; the default
+        // theme can still be changed from Settings afterwards.
       }
     }
     setSettings({ ...settings, wizard_completed: 'true' });
@@ -617,13 +641,14 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
       {step === 'theme' && (
         <article className="card">
           <h2>Choose your theme</h2>
-          <p className="muted">Pick a look for OpenSMART. This is just your personal preference — you can change it anytime from your Account page.</p>
+          <p className="muted">Pick a default look for OpenSMART. Previewed live below — you (and anyone without their own personal theme) can change it anytime from Settings.</p>
           <label className="account-theme">
             Theme
-            <select value={theme} onChange={(event) => setTheme(event.target.value)}>
+            <select value={theme} onChange={(event) => { setTheme(event.target.value); setThemePreviewed(true); }}>
               <option value="">Use default</option>
               {THEME_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
+            <ThemeSwatchPreview theme={theme || DEFAULT_THEME} />
           </label>
           <div className="config-save-bar">
             <button onClick={enterApp}>Enter {appName.trim() || 'OpenSMART'}</button>

@@ -1554,6 +1554,8 @@ button:disabled { opacity: .65; cursor: wait; }
 .logo-upload-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin: 20px 0; }
 .logo-preview { min-height: 92px; display: grid; place-items: center; border: 1px dashed var(--c-rgba-255-255-255-18); border-radius: 16px; color: var(--c-7890a8); background: var(--c-rgba-0-0-0-16); padding: 10px; }
 .logo-preview img { max-height: 72px; object-fit: contain; }
+.theme-swatch-preview { display: flex; gap: 8px; margin-top: 8px; }
+.theme-swatch { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--c-rgba-255-255-255-18); box-shadow: 0 2px 6px var(--c-rgba-0-0-0-3); }
 .config-card-list { display: grid; gap: 18px; }
 .config-item { display: grid; gap: 16px; }
 .config-heading { display: flex; gap: 14px; align-items: center; }

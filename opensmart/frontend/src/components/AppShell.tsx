@@ -108,7 +108,7 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
     if (page === 'account') return <AccountPage user={user} onUserUpdate={setUser} />;
     if (page === 'status') return <StatusPage />;
     if (page === 'about') return <AboutPage settings={settings} />;
-    if (page === 'webconsole-config') return <SettingsPage settings={settings} setSettings={setSettings} tools={tools} onToolsUpdate={setTools} modules={modules} onModulesUpdate={setModules} />;
+    if (page === 'webconsole-config') return <SettingsPage settings={settings} setSettings={setSettings} tools={tools} onToolsUpdate={setTools} modules={modules} onModulesUpdate={setModules} user={user} />;
     if (page === 'audit') return <AuditPage user={user} />;
     return <AccessPage />;
   }

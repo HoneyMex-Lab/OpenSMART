@@ -1,8 +1,9 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import { api } from '../api';
+import ThemeSwatchPreview from '../components/ThemeSwatchPreview';
 import { languageOptions, t } from '../i18n';
 import { DEFAULT_THEME, THEME_OPTIONS } from '../themes';
-import type { Settings } from '../types';
+import type { Settings, User } from '../types';
 
 const platformFields = ['platform_title', 'sensor_name', 'platform_language', 'failed_login_limit', 'lockout_minutes'];
 
@@ -69,11 +70,30 @@ function ConfirmDialog({ diff, onConfirm, onCancel }: { diff: DiffEntry[]; onCon
   );
 }
 
-export default function AdminConfigPage({ settings, setSettings }: { settings: Settings; setSettings: (settings: Settings) => void }) {
+export default function AdminConfigPage({ settings, setSettings, user }: { settings: Settings; setSettings: (settings: Settings) => void; user: User }) {
   const [draft, setDraft] = useState<Settings>(settings);
   const [message, setMessage] = useState('');
   const [pendingDiff, setPendingDiff] = useState<DiffEntry[] | null>(null);
-  useEffect(() => { setDraft(settings); }, [settings]);
+  // Tracks an in-progress preview pick, separate from `draft.theme` — stays
+  // null until the admin actually touches the selector, so opening this page
+  // never silently overrides someone's real applied theme before interaction.
+  const [previewTheme, setPreviewTheme] = useState<string | null>(null);
+  useEffect(() => { setDraft(settings); setPreviewTheme(null); }, [settings]);
+
+  // Live-preview the picked default theme immediately, without persisting it
+  // until Save is confirmed; restore the real applied theme (the same
+  // priority App.tsx itself uses) once the admin stops previewing or unmounts.
+  useEffect(() => {
+    if (previewTheme === null) return;
+    const preview = previewTheme || DEFAULT_THEME;
+    if (preview === 'dark') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = preview;
+    return () => {
+      const real = user.theme || settings.theme || DEFAULT_THEME;
+      if (real === 'dark') delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = real;
+    };
+  }, [previewTheme, user.theme, settings.theme]);
 
   function requestSave() {
     const diff = computeDiff(settings, draft);
@@ -108,10 +128,11 @@ export default function AdminConfigPage({ settings, setSettings }: { settings: S
               : <label key={field}>{t(draft, `field.${field}`, field)}<input value={draft[field] || ''} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })} /></label>)}
             <label>
               {t(draft, 'field.theme', 'Default theme')}
-              <select value={draft.theme || DEFAULT_THEME} onChange={(event) => setDraft({ ...draft, theme: event.target.value })}>
+              <select value={draft.theme || DEFAULT_THEME} onChange={(event) => { setDraft({ ...draft, theme: event.target.value }); setPreviewTheme(event.target.value); }}>
                 {THEME_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
-              <small className="muted">Applies to the login page and any user who hasn't picked their own theme.</small>
+              <ThemeSwatchPreview theme={draft.theme || DEFAULT_THEME} />
+              <small className="muted">Applies to the login page and any user who hasn't picked their own theme. Previewed live below — only takes effect for others once saved.</small>
             </label>
           </div>
         </article>
