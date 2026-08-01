@@ -838,7 +838,12 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 ("input", 1, "accept", "any", "lo", "", "", "", "Loopback"),
                 ("input", 2, "accept", "any", "", "", "", "established,related", "Existing/related connections"),
                 ("input", 3, "accept", "tcp", "", "", "22", "", "SSH management access"),
-                ("input", 4, "accept", "tcp", "", "", "80,443,8000", "", "Web console / front-door proxy"),
+                # HTTPS front-door gets its own dedicated, always-present rule
+                # (not lumped in with 80/8000) — this is the one port an admin
+                # must never lose access to, so it survives independently of
+                # any edit to the other management-port rules.
+                ("input", 4, "accept", "tcp", "", "", "443", "", "HTTPS web console (always allowed — prevents lockout)"),
+                ("input", 5, "accept", "tcp", "", "", "80,8000", "", "HTTP / direct-access web console"),
                 ("forward", 1, "accept", "any", "docker0,br-*", "", "", "", "Docker bridge traffic (inbound)"),
                 ("forward", 2, "accept", "any", "", "docker0,br-*", "", "", "Docker bridge traffic (outbound)"),
                 ("forward", 3, "accept", "any", "", "", "", "established,related", "Existing/related connections"),

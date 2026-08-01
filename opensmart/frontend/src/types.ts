@@ -426,13 +426,29 @@ export type FirewallRule = {
   description: string;
 };
 
-export type FirewallLiveState = { applied: boolean; detail?: string; raw?: string };
+export type FirewallLiveState = { applied: boolean; detail?: string; raw?: string; dirty?: boolean };
+
+export type FirewallApplyState = 'pending' | 'confirmed' | 'reverted' | 'failed';
+
+export type FirewallApply = {
+  id: number;
+  profile_id: number;
+  token: string;
+  state: FirewallApplyState;
+  actor: string;
+  applied_at: string;
+  expires_at: string;
+  detail: string;
+};
 
 export type FirewallSummary = {
   profiles: FirewallProfile[];
   active_profile: FirewallProfile | null;
   rule_count: number;
   live: FirewallLiveState;
+  pending_apply: FirewallApply | null;
 };
 
 export type FirewallValidateResult = { ok: boolean; detail: string; warnings: string[] };
+
+export type FirewallApplyResult = { token: string; expires_at: string; warnings: string[] };

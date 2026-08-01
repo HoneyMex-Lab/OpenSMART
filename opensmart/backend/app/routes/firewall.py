@@ -79,6 +79,14 @@ class MoveRequest(BaseModel):
     direction: str
 
 
+class ApplyRequest(BaseModel):
+    confirm_seconds: int = Field(default=60, ge=0, le=3600)
+
+
+class TokenPayload(BaseModel):
+    token: str = Field(min_length=1, max_length=64)
+
+
 def _clean(payload: BaseModel) -> dict:
     return {k: v for k, v in payload.model_dump().items() if v is not None}
 
@@ -91,6 +99,7 @@ def summary(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
         "active_profile": profile,
         "rule_count": len(fw.list_rules(profile["id"])) if profile else 0,
         "live": fw.live_state(),
+        "pending_apply": fw.apply_status(),
     }
 
 
@@ -214,3 +223,38 @@ def move_rule(rule_id: int, payload: MoveRequest, admin: Annotated[dict, Depends
 @router.get("/live")
 def live(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
     return fw.live_state()
+
+
+@router.get("/applies")
+def applies(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    return {"applies": fw.list_applies()}
+
+
+@router.post("/profiles/{profile_id}/apply")
+def apply_profile(profile_id: int, payload: ApplyRequest, request: Request, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        result = fw.apply(profile_id, confirm_seconds=payload.confirm_seconds, actor=admin["username"], client_ip=get_client_ip(request))
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_apply", admin["id"], admin["username"], f"profile:{profile_id}", get_client_ip(request), f"token={result['token']}")
+    return result
+
+
+@router.post("/apply/confirm")
+def confirm_apply(payload: TokenPayload, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        fw.confirm_apply(payload.token)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_apply_confirm", admin["id"], admin["username"], "firewall", "", payload.token)
+    return {"ok": True}
+
+
+@router.post("/apply/cancel")
+def cancel_apply(payload: TokenPayload, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        fw.cancel_apply(payload.token)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_apply_cancel", admin["id"], admin["username"], "firewall", "", payload.token)
+    return {"ok": True}

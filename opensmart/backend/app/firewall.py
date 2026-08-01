@@ -1,9 +1,7 @@
 """nftables Firewall module: structured rules stored in SQLite, rendered into
-an nft ruleset and (Phase 4) applied to the host via a commit-confirm
-watchdog — the same safety pattern as network_config.py's live MTU changes.
-This file (Phase 3) covers the data model, the pure renderer, syntax
-validation, static lockout analysis, and read-only live state; apply/confirm/
-cancel land in Phase 4.
+an nft ruleset and applied to the host via a commit-confirm watchdog — the
+same safety pattern as network_config.py's live MTU changes: apply, wait for
+a confirm/cancel marker, auto-revert on timeout.
 
 Everything this module generates lives in one nft table: `inet opensmart_fw`.
 The renderer NEVER emits `flush ruleset` — the host runs Docker, which
@@ -11,13 +9,15 @@ programs its own tables via iptables-nft; a global flush would wipe Docker's
 rules and break every container's networking, including the app's own
 front-door proxy. Table replacement is always the atomic `table inet
 opensmart_fw` / `delete table inet opensmart_fw` / `table inet opensmart_fw {
-... }` idiom instead (see render_profile()).
+... }` idiom instead (see render_profile()), and rollback (apply()) uses the
+exact same idiom around a captured snapshot of whatever was loaded before.
 """
 import ipaddress
 import json
 import logging
 import re
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from . import hostnet
 from .provisioning import CONTAINERS_ROOT
@@ -587,16 +587,208 @@ def _ip_in_expr(client_ip: str, expr: str, negate: bool) -> bool:
     return matched != negate
 
 
-# ── Live state (read-only) ──────────────────────────────────────────────────
+# ── Live state ───────────────────────────────────────────────────────────────
 
 def live_state() -> dict:
-    """Read-only: does the opensmart_fw table exist on the host right now,
-    and if so, what does it look like? Phase 3 has no apply path yet, so this
-    will normally report not_applied until Phase 4 lands."""
+    """Does the opensmart_fw table exist on the host right now, and if so,
+    does it match what the active profile currently renders to (a "dirty"
+    flag — the profile was edited since the last apply, not "someone ran nft
+    by hand", which would need parsing the live JSON structurally)."""
     ok, output = hostnet.run_host(
         f"nft -j list table inet {TABLE_NAME} 2>/dev/null || echo '{{}}'",
         image="opensmart/netadmin", net_admin=True,
     )
     if not ok:
         return {"applied": False, "detail": output}
-    return {"applied": output.strip() not in ("", "{}"), "raw": output}
+    applied = output.strip() not in ("", "{}")
+    dirty = False
+    profile = active_profile()
+    active_path = _STATE_DIR / "active.nft"
+    if applied and profile is not None and active_path.is_file():
+        dirty = active_path.read_text() != render_profile(profile["id"])
+    return {"applied": applied, "raw": output, "dirty": dirty}
+
+
+# ── Apply pipeline (Layer 3: commit-confirm with auto-rollback) ────────────
+
+_APPLY_CONFIRM_MIN_SECONDS = 30
+_APPLY_CONFIRM_MAX_SECONDS = 600
+_APPLY_CONFIRM_DEFAULT_SECONDS = 60
+
+# Positional args: $1=token $2=confirm_seconds $3=state_dir. Never
+# string-interpolated — the token/timeout/dir are validated ints/paths
+# passed as real argv elements (see hostnet.py and firewall.apply()).
+_APPLY_SCRIPT = """
+set -uo pipefail
+TOKEN="$1"; TIMEOUT="$2"; STATE_DIR="$3"
+mkdir -p "$STATE_DIR/confirm" "$STATE_DIR/cancel" "$STATE_DIR/result"
+PENDING="$STATE_DIR/pending-$TOKEN.nft"
+ROLLBACK="$STATE_DIR/rollback-$TOKEN.nft"
+if [ ! -f "$PENDING" ]; then
+  echo "failed:pending ruleset file missing" > "$STATE_DIR/result/$TOKEN"
+  exit 1
+fi
+CURRENT="$(nft list table inet opensmart_fw 2>/dev/null)"
+if [ -n "$CURRENT" ]; then
+  { echo "table inet opensmart_fw"; echo "delete table inet opensmart_fw"; echo "$CURRENT"; } > "$ROLLBACK"
+else
+  echo "delete table inet opensmart_fw" > "$ROLLBACK"
+fi
+if ! nft -f "$PENDING"; then
+  echo "failed:nft -f apply failed" > "$STATE_DIR/result/$TOKEN"
+  exit 1
+fi
+i=0
+while [ "$i" -lt "$TIMEOUT" ]; do
+  if [ -f "$STATE_DIR/confirm/$TOKEN" ]; then
+    cp "$PENDING" "$STATE_DIR/active.nft"
+    echo "confirmed" > "$STATE_DIR/result/$TOKEN"
+    exit 0
+  fi
+  if [ -f "$STATE_DIR/cancel/$TOKEN" ]; then
+    nft -f "$ROLLBACK"
+    echo "reverted" > "$STATE_DIR/result/$TOKEN"
+    exit 0
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+nft -f "$ROLLBACK"
+echo "reverted" > "$STATE_DIR/result/$TOKEN"
+"""
+
+
+def _ensure_apply_state_dirs() -> None:
+    """Same reasoning as network_config._ensure_state_dirs(): 0o700, because
+    a marker's mere presence is the entire authorization decision for the
+    safety net, and the watchdog (root) can read/write regardless of mode."""
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    for sub in ("confirm", "cancel", "result"):
+        path = _STATE_DIR / sub
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o700)
+
+
+def apply(profile_id: int, *, confirm_seconds: int = _APPLY_CONFIRM_DEFAULT_SECONDS, actor: str = "", client_ip: str = "") -> dict:
+    """Validate (Layer 1), analyze (Layer 2, non-blocking — warnings are
+    returned for the UI to show, not raised), then hand off to a detached
+    watchdog that applies the rendered ruleset and auto-reverts unless
+    confirmed within confirm_seconds. Always commit-confirm; no
+    fire-and-forget path exists, by design (see the plan's Decisions)."""
+    if not (_APPLY_CONFIRM_MIN_SECONDS <= confirm_seconds <= _APPLY_CONFIRM_MAX_SECONDS):
+        raise FirewallError(f"Confirm window must be between {_APPLY_CONFIRM_MIN_SECONDS} and {_APPLY_CONFIRM_MAX_SECONDS} seconds.")
+    ok, detail = validate(profile_id)
+    if not ok:
+        raise FirewallError(f"Ruleset failed syntax validation, nothing applied: {detail}")
+    warnings = analyze(profile_id, client_ip=client_ip)
+    rendered = render_profile(profile_id)
+    _ensure_apply_state_dirs()
+    token = hostnet.new_token()
+    pending_path = _STATE_DIR / f"pending-{token}.nft"
+    pending_path.write_text(rendered)
+    now = datetime.now(timezone.utc)
+    expires_at = (now + timedelta(seconds=confirm_seconds)).isoformat()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO firewall_applies (profile_id, token, state, actor, applied_at, expires_at) VALUES (?, ?, 'pending', ?, ?, ?)",
+            (profile_id, token, actor, now.isoformat(), expires_at),
+        )
+        db.commit()
+    ok, detail = hostnet.run_host_detached(
+        f"opensmart-fw-apply-{token[:12]}",
+        _APPLY_SCRIPT,
+        [token, str(confirm_seconds), str(_STATE_DIR)],
+        image="opensmart/netadmin", net_admin=True,
+        mounts={str(_STATE_DIR): str(_STATE_DIR)},
+    )
+    if not ok:
+        with get_db() as db:
+            db.execute("UPDATE firewall_applies SET state = 'failed', detail = ? WHERE token = ?", (detail[:2000], token))
+            db.commit()
+        pending_path.unlink(missing_ok=True)
+        raise FirewallError(f"Could not start the apply watchdog: {detail}")
+    return {"token": token, "expires_at": expires_at, "warnings": warnings}
+
+
+def confirm_apply(token: str) -> None:
+    """'Keep changes' — a local file write, nothing more. No dependency on
+    Docker or the network being reachable, since the whole point is that
+    this must work even when the new ruleset is borderline."""
+    if not hostnet.valid_token(token):
+        raise FirewallError("Invalid apply token.")
+    _ensure_apply_state_dirs()
+    (_STATE_DIR / "confirm" / token).write_text("")
+
+
+def cancel_apply(token: str) -> None:
+    """'Revert now' — same mechanism as an auto-revert, just triggered early."""
+    if not hostnet.valid_token(token):
+        raise FirewallError("Invalid apply token.")
+    _ensure_apply_state_dirs()
+    (_STATE_DIR / "cancel" / token).write_text("")
+
+
+def apply_status() -> dict | None:
+    """The most recent apply overall, reconciled against the watchdog's
+    result marker if one has appeared since we last checked. A CONFIRMED
+    apply also becomes the active profile here (never on reverted/failed) —
+    "switch profile" is just "apply a different profile, then confirm it",
+    per the plan; there is no separate activate step."""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM firewall_applies ORDER BY id DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        if result["state"] == "pending":
+            result_file = _STATE_DIR / "result" / result["token"]
+            if result_file.is_file():
+                outcome_raw = result_file.read_text().strip()
+                outcome, _, detail = outcome_raw.partition(":")
+                new_state = {"confirmed": "confirmed", "reverted": "reverted"}.get(outcome, "failed")
+                db.execute("UPDATE firewall_applies SET state = ?, detail = ? WHERE token = ?", (new_state, detail, result["token"]))
+                if new_state == "confirmed":
+                    db.execute("UPDATE firewall_profiles SET active = 0")
+                    db.execute("UPDATE firewall_profiles SET active = 1, updated_at = ? WHERE id = ?", (now_iso(), result["profile_id"]))
+                db.commit()
+                result["state"] = new_state
+                result["detail"] = detail
+                for prefix in ("pending", "rollback"):
+                    (_STATE_DIR / f"{prefix}-{result['token']}.nft").unlink(missing_ok=True)
+    return result
+
+
+def list_applies(limit: int = 20) -> list[dict]:
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM firewall_applies ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def reapply_active() -> None:
+    """Startup hook. Fail-open by design (see the plan's Decisions): if
+    nothing was ever confirmed, there's nothing to re-apply and the host
+    simply has no OpenSMART table until an admin applies one. If a
+    watchdog was killed mid-apply (host reboot, `docker kill`) before it
+    could revert, the pending row is force-marked reverted here — the
+    active.nft file is only ever written by a CONFIRMED apply, so it's
+    always safe to treat as "the last known-good state" and reload it."""
+    with get_db() as db:
+        pending = db.execute("SELECT id, token FROM firewall_applies WHERE state = 'pending' ORDER BY id DESC LIMIT 1").fetchone()
+        if pending is not None:
+            db.execute(
+                "UPDATE firewall_applies SET state = 'reverted', detail = 'backend restarted mid-apply' WHERE id = ?",
+                (pending["id"],),
+            )
+            db.commit()
+            logger.warning("firewall apply %s was left pending at startup — treating as reverted", pending["token"])
+    active_path = _STATE_DIR / "active.nft"
+    if not active_path.is_file():
+        return
+    ok, detail = hostnet.run_host(
+        'nft -f "$1"', [str(active_path)],
+        image="opensmart/netadmin", net_admin=True,
+        mounts={str(_STATE_DIR): str(_STATE_DIR)},
+    )
+    if not ok:
+        logger.warning("startup firewall re-apply failed: %s", detail[:500])
+    else:
+        logger.info("startup firewall re-apply: active.nft loaded")

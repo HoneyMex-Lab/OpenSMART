@@ -38,6 +38,7 @@ async def startup() -> None:
     _start_resource_sampler()
     _start_wazuh_autohealer()
     _start_network_mtu_reapply()
+    _start_firewall_reapply()
     asyncio.create_task(_retention_loop())
 
 
@@ -176,6 +177,23 @@ def _start_network_mtu_reapply() -> None:
             _log.exception("startup MTU re-apply error")
 
     threading.Thread(target=_reapply, daemon=True, name="network-mtu-reapply").start()
+
+
+def _start_firewall_reapply() -> None:
+    """One-shot: reload the last CONFIRMED firewall ruleset at startup (fail-
+    open by design — nothing loaded until a profile has actually been
+    applied once), and force-revert any apply left 'pending' by a backend
+    restart mid-confirm-window. See firewall.reapply_active()."""
+    from . import firewall
+
+    def _reapply() -> None:
+        _log = logging.getLogger(__name__)
+        try:
+            firewall.reapply_active()
+        except Exception:
+            _log.exception("startup firewall re-apply error")
+
+    threading.Thread(target=_reapply, daemon=True, name="firewall-reapply").start()
 
 
 @app.middleware("http")
