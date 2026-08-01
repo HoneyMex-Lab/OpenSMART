@@ -26,6 +26,12 @@ export default function FirewallPage() {
   const [summary, setSummary] = useState<FirewallSummary | null>(null);
   const [error, setError] = useState('');
   const [now, setNow] = useState(() => Date.now());
+  // Lockout-risk warnings from the apply() call that started the current
+  // pending apply — kept in local state (not persisted server-side) since
+  // they only need to reach the same admin, in the same session, who's
+  // about to decide whether to confirm. Cleared once the apply resolves.
+  const [applyWarnings, setApplyWarnings] = useState<string[]>([]);
+  const [warningsAcked, setWarningsAcked] = useState(false);
 
   async function load() {
     try {
@@ -48,13 +54,23 @@ export default function FirewallPage() {
   async function confirmPending() {
     if (!summary?.pending_apply) return;
     await api.fwConfirmApply(summary.pending_apply.token);
+    setApplyWarnings([]);
+    setWarningsAcked(false);
     await load();
   }
 
   async function revertPending() {
     if (!summary?.pending_apply) return;
     await api.fwCancelApply(summary.pending_apply.token);
+    setApplyWarnings([]);
+    setWarningsAcked(false);
     await load();
+  }
+
+  function onApplied(warnings: string[]) {
+    setApplyWarnings(warnings);
+    setWarningsAcked(false);
+    load();
   }
 
   const TABS: { id: Tab; label: string }[] = [
@@ -86,9 +102,21 @@ export default function FirewallPage() {
           <p>
             Applying profile #{pending.profile_id} — reverting automatically in {secondsLeft(pending.expires_at, now)}s unless confirmed.
           </p>
+          {applyWarnings.length > 0 && (
+            <div className="error-box" role="alert">
+              <p><strong>Possible lockout risk:</strong></p>
+              <ul>
+                {applyWarnings.map((warning) => <li key={warning}>{warning}</li>)}
+              </ul>
+              <label className="vpn-inline-check">
+                <input type="checkbox" checked={warningsAcked} onChange={(event) => setWarningsAcked(event.target.checked)} />
+                I understand the risk above and still want to keep this change
+              </label>
+            </div>
+          )}
           <div className="config-save-bar">
             <button className="btn-secondary" onClick={revertPending}>Revert now</button>
-            <button onClick={confirmPending}>Keep changes</button>
+            <button onClick={confirmPending} disabled={applyWarnings.length > 0 && !warningsAcked}>Keep changes</button>
           </div>
         </article>
       )}
@@ -119,7 +147,7 @@ export default function FirewallPage() {
         {TABS.map((t) => <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>{t.label}</button>)}
       </div>
 
-      {tab === 'overview' && <OverviewTab summary={summary} onChanged={load} applyBusy={!!pending && pending.state === 'pending'} />}
+      {tab === 'overview' && <OverviewTab summary={summary} onChanged={load} onApplied={onApplied} applyBusy={!!pending && pending.state === 'pending'} />}
       {tab === 'rules' && summary?.active_profile && <RulesTab profileId={summary.active_profile.id} onChanged={load} />}
       {tab === 'rules' && !summary?.active_profile && <p className="muted">No active profile.</p>}
       {tab === 'aliases' && <AliasesTab />}
@@ -128,7 +156,7 @@ export default function FirewallPage() {
   );
 }
 
-function OverviewTab({ summary, onChanged, applyBusy }: { summary: FirewallSummary | null; onChanged: () => void; applyBusy: boolean }) {
+function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: FirewallSummary | null; onChanged: () => void; onApplied: (warnings: string[]) => void; applyBusy: boolean }) {
   const [error, setError] = useState('');
   const [newName, setNewName] = useState('');
   const [applying, setApplying] = useState<number | null>(null);
@@ -175,8 +203,8 @@ function OverviewTab({ summary, onChanged, applyBusy }: { summary: FirewallSumma
     setApplying(profile.id);
     setError('');
     try {
-      await api.fwApply(profile.id, 60);
-      onChanged();
+      const result = await api.fwApply(profile.id, 60);
+      onApplied(result.warnings);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Apply failed');
     } finally {

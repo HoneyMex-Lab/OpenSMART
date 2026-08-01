@@ -222,6 +222,16 @@ def delete_profile(profile_id: int) -> None:
     if profile["active"]:
         raise FirewallError("Cannot delete the active profile — activate a different one first.")
     with get_db() as db:
+        # A CONFIRMED apply for this profile writes it to active.nft and
+        # marks it active — checked above. But a still-PENDING apply hasn't
+        # done that yet, so deleting the profile here would leave the
+        # watchdog confirming (or a startup reapply loading) a ruleset with
+        # no corresponding profile row: active=1 goes nowhere, and the Rules/
+        # Advanced tabs (gated on active_profile) can no longer show or edit
+        # what's actually enforced.
+        pending = db.execute("SELECT 1 FROM firewall_applies WHERE profile_id = ? AND state = 'pending'", (profile_id,)).fetchone()
+        if pending:
+            raise FirewallError("This profile has an apply pending confirmation — confirm or cancel it first.")
         db.execute("DELETE FROM firewall_profiles WHERE id = ?", (profile_id,))
         db.commit()
 
@@ -773,6 +783,20 @@ def apply(profile_id: int, *, confirm_seconds: int = _APPLY_CONFIRM_DEFAULT_SECO
     fire-and-forget path exists, by design (see the plan's Decisions)."""
     if not (_APPLY_CONFIRM_MIN_SECONDS <= confirm_seconds <= _APPLY_CONFIRM_MAX_SECONDS):
         raise FirewallError(f"Confirm window must be between {_APPLY_CONFIRM_MIN_SECONDS} and {_APPLY_CONFIRM_MAX_SECONDS} seconds.")
+    # Refuse a second concurrent apply: two overlapping watchdogs each
+    # snapshot "whatever's live" as their OWN rollback target, so watchdog B
+    # would capture watchdog A's not-yet-confirmed ruleset as "the good
+    # state" — the two auto-revert timers then race independently and can
+    # silently defeat each other's commit-confirm outcome. apply_status()
+    # reconciles as a side effect, so this also picks up a just-finished
+    # apply rather than blocking on a stale row. (A rare exact-instant TOCTOU
+    # between two racing apply() calls is not fully closed by this check
+    # alone — acceptable given this is a human-paced admin action, not a
+    # high-frequency path — but the common case of "an apply is already
+    # visibly in flight" is.)
+    existing = apply_status()
+    if existing is not None and existing["state"] == "pending":
+        raise FirewallError(f"Another apply (profile {existing['profile_id']}, token {existing['token'][:12]}…) is still pending — confirm or cancel it first.")
     ok, detail = validate(profile_id)
     if not ok:
         raise FirewallError(f"Ruleset failed syntax validation, nothing applied: {detail}")
@@ -844,7 +868,17 @@ def apply_status() -> dict | None:
                 db.execute("UPDATE firewall_applies SET state = ?, detail = ? WHERE token = ?", (new_state, detail, result["token"]))
                 if new_state == "confirmed":
                     db.execute("UPDATE firewall_profiles SET active = 0")
-                    db.execute("UPDATE firewall_profiles SET active = 1, updated_at = ? WHERE id = ?", (now_iso(), result["profile_id"]))
+                    activated = db.execute("UPDATE firewall_profiles SET active = 1, updated_at = ? WHERE id = ?", (now_iso(), result["profile_id"]))
+                    if activated.rowcount == 0:
+                        # delete_profile() now refuses this while an apply is
+                        # pending, so this should no longer be reachable —
+                        # kept as a loud signal in case some other path
+                        # removes the row (e.g. a future admin action).
+                        logger.error(
+                            "firewall apply %s confirmed for profile %s, which no longer exists — "
+                            "the host is enforcing a ruleset with no corresponding profile row",
+                            result["token"], result["profile_id"],
+                        )
                 db.commit()
                 result["state"] = new_state
                 result["detail"] = detail

@@ -133,7 +133,7 @@ export const api = {
   fwPreview: (profileId: number) => request<{ nft: string }>(`/api/firewall/profiles/${profileId}/preview`),
   fwValidate: (profileId: number) => request<FirewallValidateResult>(`/api/firewall/profiles/${profileId}/validate`, { method: 'POST' }),
   fwLive: () => request<FirewallLiveState>('/api/firewall/live'),
-  fwLogs: (lines = 200) => request<{ lines: string[] }>(`/api/firewall/logs?lines=${lines}`),
+  fwLogs: (lines = 200) => request<{ lines: string[] }>('/api/firewall/logs', { method: 'POST', body: JSON.stringify({ lines }) }),
   fwUpdateRule: (ruleId: number, fields: Partial<FirewallRule>) =>
     request<FirewallRule>(`/api/firewall/rules/${ruleId}`, { method: 'PUT', body: JSON.stringify(fields) }),
   fwCreateRule: (profileId: number, fields: Partial<FirewallRule>) =>

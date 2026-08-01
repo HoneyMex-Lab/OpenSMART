@@ -238,11 +238,18 @@ def live(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
     return fw.live_state()
 
 
-@router.get("/logs")
-def logs(_: Annotated[dict, Depends(require_admin_read)], lines: int = 200) -> dict:
-    if not (1 <= lines <= 2000):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="lines must be between 1 and 2000.")
-    return {"lines": fw.read_logs(lines)}
+class LogsRequest(BaseModel):
+    lines: int = Field(default=200, ge=1, le=2000)
+
+
+@router.post("/logs")
+def logs(payload: LogsRequest, _: Annotated[dict, Depends(require_admin)]) -> dict:
+    # require_admin (not require_admin_read), and POST (not GET): this
+    # spawns a host-networked, CAP_SYSLOG container as a side effect, so a
+    # bare GET (no CSRF token needed, triggerable by a forced top-level
+    # navigation since the session cookie is SameSite=Lax) must not be able
+    # to invoke it — same reasoning as the validate_profile endpoint above.
+    return {"lines": fw.read_logs(payload.lines)}
 
 
 @router.get("/applies")
