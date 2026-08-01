@@ -148,12 +148,17 @@ def preview_profile(profile_id: int, _: Annotated[dict, Depends(require_admin_re
 
 
 @router.post("/profiles/{profile_id}/validate")
-def validate_profile(profile_id: int, request: Request, _: Annotated[dict, Depends(require_admin_read)]) -> dict:
+def validate_profile(profile_id: int, request: Request, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    # require_admin (not require_admin_read): this spawns a host-networked,
+    # NET_ADMIN-capable container, so it needs the same CSRF + password-reset
+    # gate as any other side-effecting action, even though it doesn't itself
+    # mutate firewall state.
     try:
         ok, detail = fw.validate(profile_id)
         warnings = fw.analyze(profile_id, client_ip=get_client_ip(request))
     except fw.FirewallError as error:
         raise _bad(error) from error
+    write_audit_event("firewall_validate", admin["id"], admin["username"], f"profile:{profile_id}", get_client_ip(request), f"ok={ok}")
     return {"ok": ok, "detail": detail, "warnings": warnings}
 
 

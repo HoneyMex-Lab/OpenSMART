@@ -16,9 +16,11 @@ opensmart_fw` / `delete table inet opensmart_fw` / `table inet opensmart_fw {
 import ipaddress
 import json
 import logging
+import re
 import sqlite3
 
 from . import hostnet
+from .provisioning import CONTAINERS_ROOT
 from .database import get_db, now_iso
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,27 @@ TABLE_NAME = "opensmart_fw"
 CHAINS = ("input", "forward", "output")
 _VALID_ACTIONS = {"accept", "drop", "reject"}
 _VALID_FAMILIES = {"inet", "ip", "ip6"}
+_VALID_PROTOCOLS = {"any", "tcp", "udp", "tcp+udp", "icmp", "icmpv6", "esp", "gre", "ah"}
+_VALID_CT_STATES = {"new", "established", "related", "invalid", "untracked"}
+_VALID_REJECT_WITH = {
+    "", "tcp reset", "icmp port-unreachable", "icmp admin-prohibited",
+    "icmpv6 port-unreachable", "icmpv6 admin-prohibited",
+}
 _MANAGEMENT_PORTS = {"22", "80", "443", "8000"}
+
+_STATE_DIR = CONTAINERS_ROOT / "firewall" / "volumes" / "state"
+
+# All of these gate what ends up as literal text inside a generated .nft
+# file that gets fed to `nft -c`/`nft -f` — nftables config is itself a
+# scripting language (`;` separates statements, `#` comments, `{`/`}` open
+# and close blocks), so every field embedded in render_profile() must be
+# validated against a narrow grammar here, not just length-bounded at the
+# API layer. custom_nft is the sole deliberate, documented raw escape hatch.
+_IFACE_RE = re.compile(r"^[A-Za-z0-9_.*-]{1,15}$")
+_PORT_RE = re.compile(r"^\d{1,5}(-\d{1,5})?$")
+_ICMP_TYPE_RE = re.compile(r"^\d{1,3}$")
+_RATE_LIMIT_RE = re.compile(r"^\d+/(second|minute|hour|day)( burst \d+ packets)?$")
+_LOG_PREFIX_RE = re.compile(r"^[A-Za-z0-9 _:.-]{0,60}$")
 
 _RULE_FIELDS = {
     "chain", "position", "enabled", "action", "reject_with", "family", "protocol",
@@ -41,12 +63,114 @@ class FirewallError(Exception):
     """User-facing firewall configuration failure."""
 
 
+def _validate_iface_list(value: str, field: str) -> None:
+    for part in value.split(","):
+        part = part.strip()
+        if part and not _IFACE_RE.match(part):
+            raise FirewallError(f"{field} contains an invalid interface name: '{part}'.")
+
+
+def _validate_addr_list(value: str, field: str) -> None:
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ipaddress.ip_network(part, strict=False)
+            continue
+        except ValueError:
+            pass
+        if "-" in part:
+            start, _, end = part.partition("-")
+            try:
+                ipaddress.ip_address(start.strip())
+                ipaddress.ip_address(end.strip())
+                continue
+            except ValueError:
+                pass
+        raise FirewallError(f"{field} contains an invalid address/CIDR/range: '{part}'.")
+
+
+def _validate_port_list(value: str, field: str) -> None:
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if not _PORT_RE.match(part):
+            raise FirewallError(f"{field} contains an invalid port/range: '{part}'.")
+        bounds = [int(x) for x in part.split("-")]
+        if any(b > 65535 for b in bounds):
+            raise FirewallError(f"{field} port out of range: '{part}'.")
+        if len(bounds) == 2 and bounds[0] > bounds[1]:
+            raise FirewallError(f"{field} range must be low-high: '{part}'.")
+
+
+def _validate_rule_fields(effective: dict) -> None:
+    """Validates the EFFECTIVE field set (existing rule merged with the
+    patch, or the full create payload) — cross-field checks like "ports
+    require a tcp/udp protocol" need the other fields even when only one
+    changed."""
+    if effective.get("action") not in (None, "") and effective["action"] not in _VALID_ACTIONS:
+        raise FirewallError(f"action must be one of {', '.join(sorted(_VALID_ACTIONS))}.")
+    if effective.get("family") not in (None, "") and effective["family"] not in _VALID_FAMILIES:
+        raise FirewallError(f"family must be one of {', '.join(sorted(_VALID_FAMILIES))}.")
+    protocol = effective.get("protocol") or "any"
+    if protocol not in _VALID_PROTOCOLS:
+        raise FirewallError(f"protocol must be one of {', '.join(sorted(_VALID_PROTOCOLS))}.")
+    if effective.get("reject_with", "") not in _VALID_REJECT_WITH:
+        raise FirewallError(f"reject_with must be one of {sorted(_VALID_REJECT_WITH)}.")
+    if effective.get("ct_state"):
+        for state in effective["ct_state"].split(","):
+            if state.strip() not in _VALID_CT_STATES:
+                raise FirewallError(f"ct_state must be a comma-separated list from {', '.join(sorted(_VALID_CT_STATES))}.")
+    if effective.get("icmp_type") and not _ICMP_TYPE_RE.match(effective["icmp_type"]):
+        raise FirewallError("icmp_type must be a plain number.")
+    if effective.get("rate_limit") and not _RATE_LIMIT_RE.match(effective["rate_limit"]):
+        raise FirewallError("rate_limit must look like '10/second' or '10/second burst 20 packets'.")
+    if effective.get("log_prefix") and not _LOG_PREFIX_RE.match(effective["log_prefix"]):
+        raise FirewallError("log_prefix may only contain letters, digits, spaces, and _:.- characters.")
+    if effective.get("iif"):
+        _validate_iface_list(effective["iif"], "iif")
+    if effective.get("oif"):
+        _validate_iface_list(effective["oif"], "oif")
+    if effective.get("src"):
+        _validate_addr_list(effective["src"], "src")
+    if effective.get("dst"):
+        _validate_addr_list(effective["dst"], "dst")
+    if effective.get("sport"):
+        _validate_port_list(effective["sport"], "sport")
+    if effective.get("dport"):
+        _validate_port_list(effective["dport"], "dport")
+    # Silently dropping an unrenderable port/icmp-type match at render time
+    # (protocol doesn't support it) would show the admin a constraint the
+    # kernel never actually applied — reject instead of dropping.
+    if (effective.get("sport") or effective.get("dport")) and protocol not in ("tcp", "udp", "tcp+udp"):
+        raise FirewallError("sport/dport require protocol to be tcp, udp, or tcp+udp.")
+    if effective.get("icmp_type") and protocol not in ("icmp", "icmpv6"):
+        raise FirewallError("icmp_type requires protocol to be icmp or icmpv6.")
+
+
 # ── Profile CRUD ────────────────────────────────────────────────────────────
+
+def _coerce_profile(row: dict) -> dict:
+    return {**row, "active": bool(row["active"])}
+
+
+def _coerce_rule(row: dict) -> dict:
+    return {
+        **row,
+        "enabled": bool(row["enabled"]),
+        "system_rule": bool(row["system_rule"]),
+        "src_negate": bool(row["src_negate"]),
+        "dst_negate": bool(row["dst_negate"]),
+        "log": bool(row["log"]),
+    }
+
 
 def list_profiles() -> list[dict]:
     with get_db() as db:
         rows = db.execute("SELECT * FROM firewall_profiles ORDER BY name").fetchall()
-    return [dict(row) for row in rows]
+    return [_coerce_profile(dict(row)) for row in rows]
 
 
 def get_profile(profile_id: int) -> dict:
@@ -54,7 +178,7 @@ def get_profile(profile_id: int) -> dict:
         row = db.execute("SELECT * FROM firewall_profiles WHERE id = ?", (profile_id,)).fetchone()
     if row is None:
         raise FirewallError(f"Profile {profile_id} not found.")
-    return dict(row)
+    return _coerce_profile(dict(row))
 
 
 def create_profile(name: str, description: str = "") -> dict:
@@ -103,6 +227,10 @@ def delete_profile(profile_id: int) -> None:
 
 
 def clone_profile(profile_id: int, new_name: str) -> dict:
+    """Clones rules with system_rule reset to 0 — cloning is the documented
+    way to customize/remove a safety rule (update_rule/delete_rule refuse to
+    touch system rules directly), so a clone whose copies stayed pinned
+    would make that escape hatch a dead end."""
     source = get_profile(profile_id)
     new_profile = create_profile(new_name, f"Cloned from {source['name']}")
     with get_db() as db:
@@ -110,6 +238,7 @@ def clone_profile(profile_id: int, new_name: str) -> dict:
         now = now_iso()
         for rule in rules:
             data = dict(rule)
+            data["system_rule"] = 0
             columns = [key for key in data if key not in ("id", "profile_id", "created_at", "updated_at")]
             db.execute(
                 f"INSERT INTO firewall_rules (profile_id, {', '.join(columns)}, created_at, updated_at) "
@@ -124,7 +253,7 @@ def clone_profile(profile_id: int, new_name: str) -> dict:
 def active_profile() -> dict | None:
     with get_db() as db:
         row = db.execute("SELECT * FROM firewall_profiles WHERE active = 1 LIMIT 1").fetchone()
-    return dict(row) if row else None
+    return _coerce_profile(dict(row)) if row else None
 
 
 # ── Rule CRUD ────────────────────────────────────────────────────────────────
@@ -133,19 +262,12 @@ def list_rules(profile_id: int) -> list[dict]:
     get_profile(profile_id)
     with get_db() as db:
         rows = db.execute("SELECT * FROM firewall_rules WHERE profile_id = ? ORDER BY chain, position", (profile_id,)).fetchall()
-    return [dict(row) for row in rows]
+    return [_coerce_rule(dict(row)) for row in rows]
 
 
 def _next_position(db: sqlite3.Connection, profile_id: int, chain: str) -> int:
     row = db.execute("SELECT MAX(position) AS max_pos FROM firewall_rules WHERE profile_id = ? AND chain = ?", (profile_id, chain)).fetchone()
     return (row["max_pos"] or 0) + 1
-
-
-def _validate_rule_fields(fields: dict) -> None:
-    if "action" in fields and fields["action"] not in _VALID_ACTIONS:
-        raise FirewallError(f"action must be one of {', '.join(sorted(_VALID_ACTIONS))}.")
-    if "family" in fields and fields["family"] not in _VALID_FAMILIES:
-        raise FirewallError(f"family must be one of {', '.join(sorted(_VALID_FAMILIES))}.")
 
 
 def create_rule(profile_id: int, fields: dict) -> dict:
@@ -155,6 +277,8 @@ def create_rule(profile_id: int, fields: dict) -> dict:
     unknown = set(fields) - _RULE_FIELDS
     if unknown:
         raise FirewallError(f"Unknown field(s): {', '.join(sorted(unknown))}")
+    # `fields` here is a full RuleCreate.model_dump() (every field present,
+    # defaults filled by pydantic), so it's already the "effective" set.
     _validate_rule_fields(fields)
     now = now_iso()
     with get_db() as db:
@@ -178,7 +302,7 @@ def get_rule(rule_id: int) -> dict:
         row = db.execute("SELECT * FROM firewall_rules WHERE id = ?", (rule_id,)).fetchone()
     if row is None:
         raise FirewallError(f"Rule {rule_id} not found.")
-    return dict(row)
+    return _coerce_rule(dict(row))
 
 
 def update_rule(rule_id: int, fields: dict) -> dict:
@@ -188,9 +312,11 @@ def update_rule(rule_id: int, fields: dict) -> dict:
     unknown = set(fields) - _RULE_FIELDS
     if unknown:
         raise FirewallError(f"Unknown field(s): {', '.join(sorted(unknown))}")
-    _validate_rule_fields(fields)
     if not fields:
         return rule
+    # Cross-field checks (e.g. "ports require tcp/udp") need the rule's
+    # OTHER fields too, since an update may only touch one column.
+    _validate_rule_fields({**rule, **fields})
     columns = [f"{key} = ?" for key in fields]
     params = list(fields.values())
     columns.append("updated_at = ?")
@@ -218,14 +344,18 @@ def move_rule(rule_id: int, direction: str) -> dict:
     if direction not in ("up", "down"):
         raise FirewallError("direction must be 'up' or 'down'.")
     rule = get_rule(rule_id)
+    if rule["system_rule"]:
+        raise FirewallError("System safety rules are pinned and cannot be reordered.")
     with get_db() as db:
         neighbor = db.execute(
-            "SELECT id, position FROM firewall_rules WHERE profile_id = ? AND chain = ? AND position "
+            "SELECT id, position, system_rule FROM firewall_rules WHERE profile_id = ? AND chain = ? AND position "
             + (" < ? ORDER BY position DESC LIMIT 1" if direction == "up" else " > ? ORDER BY position ASC LIMIT 1"),
             (rule["profile_id"], rule["chain"], rule["position"]),
         ).fetchone()
         if neighbor is None:
             return rule
+        if neighbor["system_rule"]:
+            raise FirewallError("Cannot move a rule past a pinned system safety rule.")
         db.execute("UPDATE firewall_rules SET position = ? WHERE id = ?", (neighbor["position"], rule_id))
         db.execute("UPDATE firewall_rules SET position = ? WHERE id = ?", (rule["position"], neighbor["id"]))
         db.commit()
@@ -365,10 +495,29 @@ def _json_policies(raw: str) -> dict:
 def validate(profile_id: int) -> tuple[bool, str]:
     """`nft -c` (check mode) against the rendered ruleset, inside a one-off
     host-networked container so interface names and any already-loaded
-    tables resolve exactly as they will at apply time. Nothing is applied."""
+    tables resolve exactly as they will at apply time. Nothing is applied.
+
+    The ruleset is written to a real file (bind-mounted in) rather than
+    embedded in the shell script text — rule fields like custom_nft or a
+    crafted log_prefix could otherwise contain a line matching a heredoc
+    delimiter and break out into arbitrary shell commands inside a
+    NET_ADMIN, host-networked container. Field-level validation
+    (_validate_rule_fields) also blocks the individual characters that would
+    make this possible; this is defense in depth on top of that, not instead
+    of it."""
     rendered = render_profile(profile_id)
-    script = 'cat > /tmp/pending.nft << "OPENSMART_EOF"\n' + rendered + "\nOPENSMART_EOF\nnft -c -f /tmp/pending.nft"
-    ok, output = hostnet.run_host(script, image="opensmart/netadmin", net_admin=True)
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    token = hostnet.new_token()
+    pending_path = _STATE_DIR / f"validate-{token}.nft"
+    pending_path.write_text(rendered)
+    try:
+        ok, output = hostnet.run_host(
+            'nft -c -f "$1"', [str(pending_path)],
+            image="opensmart/netadmin", net_admin=True,
+            mounts={str(_STATE_DIR): str(_STATE_DIR)},
+        )
+    finally:
+        pending_path.unlink(missing_ok=True)
     return ok, output
 
 

@@ -40,8 +40,13 @@ def list_interfaces(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
 
 
 @router.post("/interfaces/rescan")
-def rescan(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
-    return {"interfaces": netcfg.list_interfaces(force=True)}
+def rescan(admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    # require_admin (not require_admin_read): this spawns a host-networked
+    # container and writes rows into the interface registry, so it needs the
+    # same CSRF + password-reset gate as any other mutating action.
+    interfaces = netcfg.list_interfaces(force=True)
+    write_audit_event("network_interfaces_rescan", admin["id"], admin["username"], "interfaces", "", f"{len(interfaces)} interfaces")
+    return {"interfaces": interfaces}
 
 
 @router.put("/interfaces/{name}")

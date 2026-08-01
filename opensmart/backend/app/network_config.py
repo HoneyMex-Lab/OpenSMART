@@ -278,16 +278,20 @@ def set_mtu(name: str, mtu: int, *, confirm_seconds: int = _MTU_CONFIRM_DEFAULT_
 
 
 def _ensure_state_dirs() -> None:
-    """Pre-create confirm/cancel/result as the BACKEND's own user, permissive
-    enough (0o777) for the root-run watchdog container to also write into
-    result/ across the UID boundary. Marker files carry no sensitive data —
-    just a token-named presence/absence signal — so this is a deliberate,
-    low-risk tradeoff over matching UIDs between two independently-launched
-    one-off containers."""
+    """Pre-create confirm/cancel/result as the BACKEND's own user, mode
+    0o700. The watchdog container runs as root (no --user override), and
+    root bypasses standard Unix permission checks entirely, so it can still
+    read/write these directories regardless of the restrictive mode — 0o700
+    exists purely to stop an unrelated, unprivileged local host account from
+    forging a confirm/cancel marker for a token it observed (e.g. via
+    /proc/<pid>/cmdline while the watchdog is running). A marker's mere
+    presence IS the authorization decision for the whole safety net, so the
+    directory must not be world-writable — a prior version used 0o777 for
+    this, which was wrong; found in security review."""
     for sub in ("confirm", "cancel", "result"):
         path = _STATE_DIR / sub
         path.mkdir(parents=True, exist_ok=True)
-        path.chmod(0o777)
+        path.chmod(0o700)
 
 
 def _write_marker(kind: str, token: str) -> None:
