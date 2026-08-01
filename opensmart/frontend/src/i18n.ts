@@ -62,6 +62,7 @@ const es: Record<string, string> = {
   'home.protocols': 'Protocolos',
   'home.loadingPanel': 'Cargando datos...',
   'settings.webInterface': 'Interfaz web',
+  'settings.network': 'Red',
   'settings.modules': 'Módulos OpenSMART',
   'settings.tools': 'Herramientas',
   'settings.notifications': 'Notificaciones',

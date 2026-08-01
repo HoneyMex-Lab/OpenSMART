@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import APP_VERSION, BUILD_VERSION, FRONTEND_DIST_DIR, FRONTEND_ORIGIN, resolve_log_path
 from .database import get_db, init_db, init_network_ids_db, init_network_traffic_db
 from . import retention as _retention
-from .routes import account, audit, auth, modules, network_ids, network_ids_config, network_traffic, opensmart_modules, provisioning, settings, status, tools, users, vpn
+from .routes import account, audit, auth, modules, network_config, network_ids, network_ids_config, network_traffic, opensmart_modules, provisioning, settings, status, tools, users, vpn
 
 app = FastAPI(title="OpenSMART API")
 
@@ -37,6 +37,7 @@ async def startup() -> None:
     await _configure_thread_limiter()
     _start_resource_sampler()
     _start_wazuh_autohealer()
+    _start_network_mtu_reapply()
     asyncio.create_task(_retention_loop())
 
 
@@ -159,6 +160,24 @@ def _start_wazuh_autohealer() -> None:
     t.start()
 
 
+def _start_network_mtu_reapply() -> None:
+    """One-shot: restore any admin-set interface MTU that doesn't survive a
+    reboot/DHCP renewal (see network_config.reapply_mtus — MTU is fail-open by
+    design, so this just re-establishes already-confirmed state, not a new
+    risky change). Runs in a daemon thread since it does blocking docker
+    calls; best-effort so a Docker hiccup at boot can't block API startup."""
+    from . import network_config
+
+    def _reapply() -> None:
+        _log = logging.getLogger(__name__)
+        try:
+            network_config.reapply_mtus()
+        except Exception:
+            _log.exception("startup MTU re-apply error")
+
+    threading.Thread(target=_reapply, daemon=True, name="network-mtu-reapply").start()
+
+
 @app.middleware("http")
 async def security_headers(request, call_next):
     response = await call_next(request)
@@ -181,6 +200,7 @@ app.include_router(tools.router)
 app.include_router(opensmart_modules.router)
 app.include_router(network_ids.router)
 app.include_router(network_ids_config.router)
+app.include_router(network_config.router)
 app.include_router(network_traffic.router)
 app.include_router(status.router)
 app.include_router(users.router)

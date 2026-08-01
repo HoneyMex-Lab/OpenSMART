@@ -39,6 +39,7 @@ DEFAULT_OPENSMART_MODULES = [
     ("Honeypot", "Honeypot telemetry", 0, "{}"),
     ("Access VPN", "Remote access module", 0, "{}"),
     ("LXC Manager", "Container management module", 0, "{}"),
+    ("Firewall", "nftables firewall management", 0, "{}"),
 ]
 
 DEFAULT_SETTINGS = {
@@ -646,6 +647,33 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 ldap_config TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS network_interfaces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                mac TEXT NOT NULL DEFAULT '',
+                alias TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT '' CHECK(role IN ('', 'wan', 'lan', 'dmz', 'mgmt', 'monitor')),
+                mtu_override INTEGER,
+                monitor INTEGER NOT NULL DEFAULT 0,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS network_interface_applies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                old_mtu INTEGER NOT NULL,
+                new_mtu INTEGER NOT NULL,
+                state TEXT NOT NULL CHECK(state IN ('pending', 'confirmed', 'reverted', 'failed')),
+                actor TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT ''
+            );
             """
         )
         db.execute(
@@ -732,6 +760,30 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             WHERE name = 'Network Traffic Monitoring' AND config = '{}'
             """
         )
+        db.execute(
+            """
+            UPDATE opensmart_modules
+            SET config = '{"confirm_seconds":"60","safety_rules":"true","reapply_on_start":"true","ssh_port":"22","management_cidr":""}'
+            WHERE name = 'Firewall' AND config = '{}'
+            """
+        )
+        # Backfill network_interfaces rows from the legacy monitor_interfaces
+        # setting (comma-separated interface names chosen in the Wizard), so
+        # existing installs' capture interfaces carry over as monitor=1 rows
+        # instead of starting with an empty registry.
+        legacy_monitor_row = db.execute("SELECT value FROM settings WHERE key = 'monitor_interfaces'").fetchone()
+        if legacy_monitor_row and legacy_monitor_row["value"].strip(","):
+            now = datetime.now(timezone.utc).isoformat()
+            for iface_name in legacy_monitor_row["value"].strip(",").split(","):
+                iface_name = iface_name.strip()
+                if not iface_name:
+                    continue
+                db.execute(
+                    "INSERT INTO network_interfaces (name, monitor, first_seen_at, last_seen_at, updated_at) "
+                    "VALUES (?, 1, ?, ?, ?) "
+                    "ON CONFLICT(name) DO UPDATE SET monitor = 1, updated_at = excluded.updated_at",
+                    (iface_name, now, now, now),
+                )
         # One-time migration: previously `network_ids_keep_empty_alerts` was a
         # global setting; it is now part of the Network IDS module config.
         # Move any existing value into the module config (only if the module

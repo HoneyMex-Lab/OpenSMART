@@ -675,6 +675,13 @@ _uninstall_purge_data() {
     for dir in "$ROOT_DIR"/opensmart/containers/run/*/volumes/data; do
       [[ -d "$dir" ]] && rm -rf "$dir"
     done
+    # network/firewall have no compose project (rules are enforced by the
+    # host kernel via one-off containers, not a long-running service — see
+    # design notes), so their bind-mounted state/
+    # (MTU apply markers, nft rulesets) isn't under volumes/data/ above.
+    for dir in "$ROOT_DIR"/opensmart/containers/run/*/volumes/state; do
+      [[ -d "$dir" ]] && rm -rf "$dir"
+    done
     [[ -d "$ROOT_DIR/opensmart/containers/run/vpn" ]] && rm -rf "$ROOT_DIR/opensmart/containers/run/vpn"
     rm -f "$ROOT_DIR"/opensmart/backend/opensmart*.db "$ROOT_DIR"/opensmart/backend/opensmart*.db-shm "$ROOT_DIR"/opensmart/backend/opensmart*.db-wal
   } >> "$log" 2>&1

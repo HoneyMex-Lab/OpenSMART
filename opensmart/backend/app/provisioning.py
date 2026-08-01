@@ -63,6 +63,10 @@ MODULE_CONTAINERS: dict[str, list[str] | None] = {
     "Honeypot": None,  # T-Pot, not supported yet
     "Access VPN": ["openvpn", "wireguard"],
     "LXC Manager": None,  # not supported yet
+    # Empty list, not None: real and supported, but enforced by the kernel via
+    # one-off `nft`/`docker run --network host` calls (see firewall.py), not by
+    # a long-running compose container — so there's nothing to start/stop.
+    "Firewall": [],
 }
 
 # Tool name -> required container(s), or None if not applicable.
@@ -164,10 +168,14 @@ def _setting(key: str) -> str:
 
 
 def _monitor_interfaces_env() -> dict[str, str]:
-    """CAPTURE_IFACES for the suricata compose file, from the
-    monitor_interfaces setting (comma-separated, chosen in the Wizard).
-    Falls back to eth0 via the compose file's own default when unset."""
-    value = _setting("monitor_interfaces").strip(",")
+    """CAPTURE_IFACES for the suricata compose file. Prefers the
+    network_interfaces registry (monitor=1 rows); falls back to the legacy
+    monitor_interfaces setting for installs that haven't populated the
+    registry yet. Falls back to eth0 via the compose file's own default when
+    both are unset."""
+    from . import network_config
+    names = network_config.monitor_names()
+    value = ",".join(names) if names else _setting("monitor_interfaces").strip(",")
     return {"CAPTURE_IFACES": value} if value else {}
 
 
@@ -428,14 +436,20 @@ _HOST_IFACES_CACHE: tuple[float, list[dict]] = (0.0, [])
 _HOST_IFACES_TTL_SECONDS = 60
 
 
-def host_interfaces() -> list[dict]:
+_ADDR_MARKER = "===OPENSMART_ADDR==="
+
+
+def host_interfaces(force: bool = False) -> list[dict]:
     global _HOST_IFACES_CACHE
     cached_at, cached = _HOST_IFACES_CACHE
-    if cached and time.time() - cached_at < _HOST_IFACES_TTL_SECONDS:
+    if not force and cached and time.time() - cached_at < _HOST_IFACES_TTL_SECONDS:
         return cached
     try:
         result = subprocess.run(
-            ["docker", "run", "--rm", "--network", "host", "busybox", "ip", "-o", "link", "show"],
+            [
+                "docker", "run", "--rm", "--network", "host", "busybox", "sh", "-c",
+                f"ip -o link show; echo {_ADDR_MARKER}; ip -o addr show",
+            ],
             capture_output=True,
             text=True,
             timeout=60,
@@ -446,23 +460,39 @@ def host_interfaces() -> list[dict]:
     if result.returncode != 0:
         logger.warning("host interface enumeration failed: %s", (result.stderr or "")[:500])
         return cached
+    link_output, _, addr_output = result.stdout.partition(_ADDR_MARKER)
     interfaces: list[dict] = []
-    # busybox `ip -o link show` lines: "2: eth0: <BROADCAST,MULTICAST,UP,...> mtu 1300 ..."
-    for line in result.stdout.splitlines():
+    by_name: dict[str, dict] = {}
+    # busybox `ip -o link show` lines: "2: eth0: <BROADCAST,MULTICAST,UP,...> mtu 1300 ... link/ether aa:bb:cc:dd:ee:ff ..."
+    for line in link_output.splitlines():
         match = re.match(r"\d+:\s+([^:@]+)(?:@\S+)?:\s+<([^>]*)>\s+mtu\s+(\d+)", line)
         if not match:
             continue
         name, flags, mtu = match.group(1).strip(), match.group(2).split(","), int(match.group(3))
         if name == "lo":
             continue
-        interfaces.append({
+        mac_match = re.search(r"link/ether\s+(\S+)", line)
+        entry = {
             "name": name,
             "up": "UP" in flags,
             "mtu": mtu,
+            "mac": mac_match.group(1) if mac_match else "",
             # veth/br/docker interfaces are usually container plumbing, not
             # span/mirror candidates — flagged so the UI can de-emphasize them.
             "virtual": bool(re.match(r"^(veth|br-|docker|virbr|tap|tun|wg)", name)),
-        })
+            "addresses": [],
+        }
+        interfaces.append(entry)
+        by_name[name] = entry
+    # busybox `ip -o addr show` lines: "2: eth0    inet 192.168.1.5/24 brd ... scope global eth0"
+    for line in addr_output.splitlines():
+        match = re.match(r"\d+:\s+(\S+)\s+(inet6?)\s+(\S+)", line)
+        if not match:
+            continue
+        name, family, address = match.groups()
+        entry = by_name.get(name)
+        if entry is not None:
+            entry["addresses"].append({"family": "inet6" if family == "inet6" else "inet", "address": address})
     if interfaces:
         _HOST_IFACES_CACHE = (time.time(), interfaces)
     return interfaces

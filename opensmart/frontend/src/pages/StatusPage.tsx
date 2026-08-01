@@ -9,6 +9,7 @@ const TIMEFRAMES = ['1h', '8h', '1d', '3d', '7d', '1w', '1m'];
 const MODULE_NAMES = new Set([
   'Threat Detection Alerts', 'Network Traffic Monitoring', 'Network IDS',
   'Endpoint', 'Vulnerability Management', 'Honeypot', 'Access VPN', 'LXC Manager',
+  'Firewall',
 ]);
 const TOOL_NAMES = new Set(['OPNsense', 'NTOP', 'Arkime', 'Proxmox', 'Wazuh', 'Graylog']);
 

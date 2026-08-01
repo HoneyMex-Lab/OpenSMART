@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
+import type { AuditEvent, DataInfo, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -88,6 +88,19 @@ export const api = {
   provisionRestart: (name: string) => request<{ name: string; ok: boolean; detail: string }>('/api/provisioning/restart', { method: 'POST', body: JSON.stringify({ name, kind: 'container' }) }),
   hostInterfaces: () => request<{ interfaces: HostInterface[] }>('/api/provisioning/host-interfaces'),
   hostResources: () => request<HostResources>('/api/provisioning/host-resources'),
+  netInterfaces: () => request<{ interfaces: NetworkInterface[] }>('/api/network/interfaces'),
+  netRescan: () => request<{ interfaces: NetworkInterface[] }>('/api/network/interfaces/rescan', { method: 'POST' }),
+  netUpdateInterface: (name: string, fields: Partial<Pick<NetworkInterface, 'alias' | 'description' | 'role' | 'monitor'>>) =>
+    request<NetworkInterface>(`/api/network/interfaces/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(fields) }),
+  netRemapInterface: (name: string, newName: string) =>
+    request<{ ok: boolean }>(`/api/network/interfaces/${encodeURIComponent(name)}/remap`, { method: 'POST', body: JSON.stringify({ new_name: newName }) }),
+  netMtuStatus: (name: string) => request<{ apply: MtuApply | null }>(`/api/network/interfaces/${encodeURIComponent(name)}/mtu/status`),
+  netSetMtu: (name: string, mtu: number, confirmSeconds: number) =>
+    request<MtuApplyResult>(`/api/network/interfaces/${encodeURIComponent(name)}/mtu`, { method: 'POST', body: JSON.stringify({ mtu, confirm_seconds: confirmSeconds }) }),
+  netConfirmMtu: (name: string, token: string) =>
+    request<{ ok: boolean }>(`/api/network/interfaces/${encodeURIComponent(name)}/mtu/confirm`, { method: 'POST', body: JSON.stringify({ token }) }),
+  netCancelMtu: (name: string, token: string) =>
+    request<{ ok: boolean }>(`/api/network/interfaces/${encodeURIComponent(name)}/mtu/cancel`, { method: 'POST', body: JSON.stringify({ token }) }),
   vpnCas: () => request<{ cas: VpnCa[] }>('/api/vpn/cas'),
   vpnCreateCa: (payload: { name: string; cn?: string; description?: string }) => request<{ ca: VpnCa }>('/api/vpn/cas', { method: 'POST', body: JSON.stringify(payload) }),
   vpnDeleteCa: (name: string) => request<{ ok: boolean }>(`/api/vpn/cas/${encodeURIComponent(name)}`, { method: 'DELETE' }),

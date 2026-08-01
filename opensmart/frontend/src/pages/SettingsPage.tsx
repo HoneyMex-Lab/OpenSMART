@@ -1,17 +1,19 @@
 import { useState } from 'react';
-import { Bell, MonitorCog, Puzzle, Wand2, Wrench } from 'lucide-react';
+import { Bell, MonitorCog, Network, Puzzle, Wand2, Wrench } from 'lucide-react';
 import { t } from '../i18n';
 import type { OpenSmartModule, Settings, ToolConfig, User } from '../types';
 import AdminConfigPage from './AdminConfigPage';
+import NetworkConfigPage from './NetworkConfigPage';
 import OpenSmartConfigPage from './OpenSmartConfigPage';
 import NotificationsPage from './NotificationsPage';
 import ToolsConfigPage from './ToolsConfigPage';
 import WizardPage from './WizardPage';
 
-type TabKey = 'web-interface' | 'opensmart-modules' | 'tools' | 'notifications' | 'wizard';
+type TabKey = 'web-interface' | 'network' | 'opensmart-modules' | 'tools' | 'notifications' | 'wizard';
 
 const tabs: { key: TabKey; labelKey: string; fallback: string; icon: typeof MonitorCog }[] = [
   { key: 'web-interface', labelKey: 'settings.webInterface', fallback: 'Web Interface', icon: MonitorCog },
+  { key: 'network', labelKey: 'settings.network', fallback: 'Network', icon: Network },
   { key: 'opensmart-modules', labelKey: 'settings.modules', fallback: 'OpenSMART Modules', icon: Puzzle },
   { key: 'tools', labelKey: 'settings.tools', fallback: 'Tools', icon: Wrench },
   { key: 'notifications', labelKey: 'settings.notifications', fallback: 'Notifications', icon: Bell },
@@ -50,6 +52,7 @@ export default function SettingsPage({ settings, setSettings, tools, onToolsUpda
         })}
       </div>
       {tab === 'web-interface' && <AdminConfigPage settings={settings} setSettings={setSettings} user={user} />}
+      {tab === 'network' && <NetworkConfigPage />}
       {tab === 'opensmart-modules' && <OpenSmartConfigPage modules={modules} onModulesUpdate={onModulesUpdate} />}
       {tab === 'tools' && <ToolsConfigPage settings={settings} setSettings={setSettings} tools={tools} onToolsUpdate={onToolsUpdate} />}
       {tab === 'notifications' && <NotificationsPage settings={settings} setSettings={setSettings} />}

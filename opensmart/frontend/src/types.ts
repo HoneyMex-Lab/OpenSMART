@@ -278,6 +278,46 @@ export type HostInterface = {
   virtual: boolean;
 };
 
+export type InterfaceAddress = { family: 'inet' | 'inet6'; address: string };
+
+export type InterfaceRole = '' | 'wan' | 'lan' | 'dmz' | 'mgmt' | 'monitor';
+
+export type NetworkInterface = {
+  name: string;
+  alias: string;
+  description: string;
+  role: InterfaceRole;
+  mac: string;
+  mac_drift: boolean;
+  up: boolean;
+  virtual: boolean;
+  mtu: number | null;
+  mtu_override: number | null;
+  monitor: boolean;
+  addresses: InterfaceAddress[];
+  present: boolean;
+};
+
+export type MtuApplyState = 'pending' | 'confirmed' | 'reverted' | 'failed';
+
+export type MtuApplyResult = {
+  token: string;
+  old_mtu: number;
+  new_mtu: number;
+  expires_at: string;
+  session_risk: boolean;
+};
+
+export type MtuApply = {
+  name: string;
+  token: string;
+  old_mtu: number;
+  new_mtu: number;
+  state: MtuApplyState;
+  expires_at: string;
+  detail: string;
+};
+
 export type HostResourceTier = 'full' | 'core' | 'minimal';
 
 export type HostResources = {
