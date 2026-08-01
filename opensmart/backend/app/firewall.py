@@ -441,7 +441,11 @@ def _render_rule(rule: dict) -> str:
         tokens.append(f"{protocol} type {rule['icmp_type']}")
     tokens.append("counter")
     if rule["log"]:
-        prefix = rule["log_prefix"] or f"osfw-{rule['id']}: "
+        # Always tag with "osfw" regardless of any custom prefix the admin
+        # set — read_logs() greps kernel messages for exactly this tag, so a
+        # custom prefix without it would make that rule's log lines
+        # invisible to the Advanced tab's log viewer.
+        prefix = f"osfw-{rule['id']}: {rule['log_prefix']}" if rule["log_prefix"] else f"osfw-{rule['id']}: "
         tokens.append(f'log prefix "{prefix}"')
     if rule["rate_limit"]:
         tokens.append(f"limit rate {rule['rate_limit']}")
@@ -607,6 +611,98 @@ def live_state() -> dict:
     if applied and profile is not None and active_path.is_file():
         dirty = active_path.read_text() != render_profile(profile["id"])
     return {"applied": applied, "raw": output, "dirty": dirty}
+
+
+def read_logs(lines: int = 200) -> list[str]:
+    """Rules with `log` enabled write to the kernel ring buffer (there's no
+    other destination for nft's `log` statement) — read it back via `dmesg`,
+    filtered to our own comment tag so this doesn't turn into a firehose of
+    unrelated kernel messages. Needs CAP_SYSLOG (not NET_ADMIN — dmesg reads
+    kernel messages, it doesn't touch the network namespace), so this is the
+    one hostnet call in this module that adds a capability beyond NET_ADMIN's
+    default rather than reusing it."""
+    lines = max(1, min(lines, 2000))
+    ok, output = hostnet.run_host(
+        f'dmesg -T 2>/dev/null | grep -F "osfw" | tail -n {lines} || true',
+        image="opensmart/netadmin", net_admin=False, extra_caps=["SYSLOG"],
+    )
+    if not ok or not output.strip():
+        return []
+    return output.splitlines()
+
+
+# ── Aliases (saved address/port groups) ─────────────────────────────────────
+#
+# Scoped deliberately simple for v1: an alias is just a named, reusable,
+# validated comma-separated value that the rule editor can insert into a
+# rule's src/dst/sport/dport field — NOT an nft named `set` referenced at
+# render time. True nft sets would let the renderer emit `ip saddr @alias`
+# and update membership without re-rendering every rule, but they also mean
+# the renderer must track set-vs-rule dependencies and their own
+# create/update semantics; this simpler "saved value, copied in" version
+# gets the practical benefit (reuse a group of addresses/ports across many
+# rules without retyping them) with no new render-time surface at all — it
+# reuses the exact same _validate_addr_list/_validate_port_list validation
+# already proven for rule fields.
+
+def list_aliases() -> list[dict]:
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM firewall_aliases ORDER BY name").fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_alias(name: str, kind: str, values_csv: str, description: str = "") -> dict:
+    if kind not in ("address", "port"):
+        raise FirewallError("kind must be 'address' or 'port'.")
+    if kind == "address":
+        _validate_addr_list(values_csv, "values")
+    else:
+        _validate_port_list(values_csv, "values")
+    now = now_iso()
+    with get_db() as db:
+        try:
+            cur = db.execute(
+                "INSERT INTO firewall_aliases (name, kind, values_csv, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (name, kind, values_csv, description, now, now),
+            )
+            db.commit()
+        except sqlite3.IntegrityError as error:
+            raise FirewallError(f"An alias named '{name}' already exists.") from error
+    with get_db() as db:
+        row = db.execute("SELECT * FROM firewall_aliases WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def update_alias(alias_id: int, fields: dict) -> dict:
+    unknown = set(fields) - {"name", "values_csv", "description"}
+    if unknown:
+        raise FirewallError(f"Unknown field(s): {', '.join(sorted(unknown))}")
+    with get_db() as db:
+        row = db.execute("SELECT * FROM firewall_aliases WHERE id = ?", (alias_id,)).fetchone()
+        if row is None:
+            raise FirewallError(f"Alias {alias_id} not found.")
+        if "values_csv" in fields:
+            if row["kind"] == "address":
+                _validate_addr_list(fields["values_csv"], "values")
+            else:
+                _validate_port_list(fields["values_csv"], "values")
+        if not fields:
+            return dict(row)
+        columns = [f"{key} = ?" for key in fields]
+        params = [*fields.values(), now_iso(), alias_id]
+        try:
+            db.execute(f"UPDATE firewall_aliases SET {', '.join(columns)}, updated_at = ? WHERE id = ?", params)
+            db.commit()
+        except sqlite3.IntegrityError as error:
+            raise FirewallError("An alias with that name already exists.") from error
+        updated = db.execute("SELECT * FROM firewall_aliases WHERE id = ?", (alias_id,)).fetchone()
+    return dict(updated)
+
+
+def delete_alias(alias_id: int) -> None:
+    with get_db() as db:
+        db.execute("DELETE FROM firewall_aliases WHERE id = ?", (alias_id,))
+        db.commit()
 
 
 # ── Apply pipeline (Layer 3: commit-confirm with auto-rollback) ────────────

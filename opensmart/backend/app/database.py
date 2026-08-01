@@ -726,6 +726,16 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 expires_at TEXT NOT NULL,
                 detail TEXT NOT NULL DEFAULT ''
             );
+
+            CREATE TABLE IF NOT EXISTS firewall_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL CHECK(kind IN ('address', 'port')),
+                values_csv TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         db.execute(

@@ -79,6 +79,19 @@ class MoveRequest(BaseModel):
     direction: str
 
 
+class AliasCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    kind: str
+    values_csv: str = Field(default="", max_length=2000)
+    description: str = Field(default="", max_length=300)
+
+
+class AliasUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    values_csv: str | None = Field(default=None, max_length=2000)
+    description: str | None = Field(default=None, max_length=300)
+
+
 class ApplyRequest(BaseModel):
     confirm_seconds: int = Field(default=60, ge=0, le=3600)
 
@@ -225,6 +238,13 @@ def live(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
     return fw.live_state()
 
 
+@router.get("/logs")
+def logs(_: Annotated[dict, Depends(require_admin_read)], lines: int = 200) -> dict:
+    if not (1 <= lines <= 2000):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="lines must be between 1 and 2000.")
+    return {"lines": fw.read_logs(lines)}
+
+
 @router.get("/applies")
 def applies(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
     return {"applies": fw.list_applies()}
@@ -257,4 +277,37 @@ def cancel_apply(payload: TokenPayload, admin: Annotated[dict, Depends(require_a
     except fw.FirewallError as error:
         raise _bad(error) from error
     write_audit_event("firewall_apply_cancel", admin["id"], admin["username"], "firewall", "", payload.token)
+    return {"ok": True}
+
+
+@router.get("/aliases")
+def list_aliases(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    return {"aliases": fw.list_aliases()}
+
+
+@router.post("/aliases")
+def create_alias(payload: AliasCreate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        alias = fw.create_alias(payload.name, payload.kind, payload.values_csv, payload.description)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_alias_create", admin["id"], admin["username"], f"alias:{alias['id']}", "", payload.name)
+    return alias
+
+
+@router.put("/aliases/{alias_id}")
+def update_alias(alias_id: int, payload: AliasUpdate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+    try:
+        alias = fw.update_alias(alias_id, fields)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_alias_update", admin["id"], admin["username"], f"alias:{alias_id}", "", ", ".join(fields))
+    return alias
+
+
+@router.delete("/aliases/{alias_id}")
+def delete_alias(alias_id: int, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    fw.delete_alias(alias_id)
+    write_audit_event("firewall_alias_delete", admin["id"], admin["username"], f"alias:{alias_id}", "", "")
     return {"ok": True}

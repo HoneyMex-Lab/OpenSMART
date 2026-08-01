@@ -35,10 +35,12 @@ def valid_token(token: str) -> bool:
     return bool(_TOKEN_RE.match(token))
 
 
-def _base_cmd(*, net_admin: bool, mounts: dict[str, str] | None, image: str) -> list[str]:
+def _base_cmd(*, net_admin: bool, mounts: dict[str, str] | None, image: str, extra_caps: list[str] | None = None) -> list[str]:
     cmd = ["docker", "run", "--rm", "--network", "host"]
     if net_admin:
         cmd += ["--cap-add", "NET_ADMIN"]
+    for cap in extra_caps or []:
+        cmd += ["--cap-add", cap]
     for host_path, container_path in (mounts or {}).items():
         cmd += ["-v", f"{host_path}:{container_path}"]
     cmd += ["--entrypoint", "bash", image]
@@ -51,12 +53,15 @@ def run_host(
     *,
     image: str = "opensmart/base",
     net_admin: bool = True,
+    extra_caps: list[str] | None = None,
     mounts: dict[str, str] | None = None,
     timeout: int = _RUN_TIMEOUT_SECONDS,
 ) -> tuple[bool, str]:
     """Synchronous one-off run of `script` (a bash -c string) in the host's
-    network namespace. `args` are available inside the script as $1, $2, ..."""
-    cmd = _base_cmd(net_admin=net_admin, mounts=mounts, image=image)
+    network namespace. `args` are available inside the script as $1, $2, ...
+    `extra_caps` adds capabilities beyond NET_ADMIN (e.g. SYSLOG, to read
+    kernel log messages nft's `log` statements write to)."""
+    cmd = _base_cmd(net_admin=net_admin, mounts=mounts, image=image, extra_caps=extra_caps)
     cmd += ["-c", script, "bash", *(args or [])]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=False)

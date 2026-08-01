@@ -1,8 +1,19 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { FirewallChain, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult } from '../types';
+import type { FirewallAlias, FirewallChain, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult } from '../types';
 
-type Tab = 'overview' | 'rules' | 'advanced';
+type Tab = 'overview' | 'rules' | 'aliases' | 'advanced';
+
+type ServicePreset = { label: string; protocol: string; dport: string };
+
+const SERVICE_PRESETS: ServicePreset[] = [
+  { label: 'HTTP', protocol: 'tcp', dport: '80' },
+  { label: 'HTTPS', protocol: 'tcp', dport: '443' },
+  { label: 'DNS', protocol: 'tcp+udp', dport: '53' },
+  { label: 'SSH', protocol: 'tcp', dport: '22' },
+  { label: 'RDP', protocol: 'tcp', dport: '3389' },
+  { label: 'SMB', protocol: 'tcp', dport: '445' },
+];
 
 const CHAINS: FirewallChain[] = ['input', 'forward', 'output'];
 
@@ -49,6 +60,7 @@ export default function FirewallPage() {
   const TABS: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'rules', label: 'Rules' },
+    { id: 'aliases', label: 'Aliases' },
     { id: 'advanced', label: 'Advanced' },
   ];
 
@@ -110,6 +122,7 @@ export default function FirewallPage() {
       {tab === 'overview' && <OverviewTab summary={summary} onChanged={load} applyBusy={!!pending && pending.state === 'pending'} />}
       {tab === 'rules' && summary?.active_profile && <RulesTab profileId={summary.active_profile.id} onChanged={load} />}
       {tab === 'rules' && !summary?.active_profile && <p className="muted">No active profile.</p>}
+      {tab === 'aliases' && <AliasesTab />}
       {tab === 'advanced' && summary?.active_profile && <AdvancedTab profileId={summary.active_profile.id} />}
     </section>
   );
@@ -352,9 +365,21 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
 }) {
   const portsApplicable = draft.protocol === 'tcp' || draft.protocol === 'udp' || draft.protocol === 'tcp+udp';
   const icmpApplicable = draft.protocol === 'icmp' || draft.protocol === 'icmpv6';
+  const [aliases, setAliases] = useState<FirewallAlias[]>([]);
+
+  useEffect(() => { api.fwAliases().then((result) => setAliases(result.aliases)).catch(() => undefined); }, []);
+
+  const addressAliases = aliases.filter((alias) => alias.kind === 'address');
+  const portAliases = aliases.filter((alias) => alias.kind === 'port');
 
   function set<K extends keyof RuleDraft>(key: K, value: RuleDraft[K]) {
     onChange({ ...draft, [key]: value });
+  }
+
+  function applyPreset(label: string) {
+    const preset = SERVICE_PRESETS.find((p) => p.label === label);
+    if (!preset) return;
+    onChange({ ...draft, protocol: preset.protocol, dport: preset.dport });
   }
 
   return (
@@ -362,6 +387,12 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
       <div className="confirm-dialog card" style={{ maxWidth: 640 }}>
         <h3>{isNew ? 'Add rule' : 'Edit rule'} — {draft.chain}</h3>
         <div className="stack-form">
+          <label>Service preset (optional shortcut)
+            <select value="" onChange={(event) => applyPreset(event.target.value)}>
+              <option value="">— pick a common service —</option>
+              {SERVICE_PRESETS.map((preset) => <option key={preset.label} value={preset.label}>{preset.label}</option>)}
+            </select>
+          </label>
           <label>Action
             <select value={draft.action} onChange={(event) => set('action', event.target.value as FirewallRule['action'])}>
               <option value="accept">accept</option>
@@ -390,10 +421,26 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
           <label>Source address/CIDR (optional)
             <input value={draft.src || ''} onChange={(event) => set('src', event.target.value)} placeholder="10.0.0.0/8" />
           </label>
+          {addressAliases.length > 0 && (
+            <label>Or insert a saved address alias
+              <select value="" onChange={(event) => event.target.value && set('src', event.target.value)}>
+                <option value="">— select alias —</option>
+                {addressAliases.map((alias) => <option key={alias.id} value={alias.values_csv}>{alias.name}</option>)}
+              </select>
+            </label>
+          )}
           <label className="vpn-inline-check"><input type="checkbox" checked={!!draft.src_negate} onChange={(event) => set('src_negate', event.target.checked)} /> Negate source</label>
           <label>Destination address/CIDR (optional)
             <input value={draft.dst || ''} onChange={(event) => set('dst', event.target.value)} placeholder="192.168.1.10" />
           </label>
+          {addressAliases.length > 0 && (
+            <label>Or insert a saved address alias
+              <select value="" onChange={(event) => event.target.value && set('dst', event.target.value)}>
+                <option value="">— select alias —</option>
+                {addressAliases.map((alias) => <option key={alias.id} value={alias.values_csv}>{alias.name}</option>)}
+              </select>
+            </label>
+          )}
           <label className="vpn-inline-check"><input type="checkbox" checked={!!draft.dst_negate} onChange={(event) => set('dst_negate', event.target.checked)} /> Negate destination</label>
           {portsApplicable && (
             <>
@@ -403,6 +450,14 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
               <label>Destination port(s) (optional)
                 <input value={draft.dport || ''} onChange={(event) => set('dport', event.target.value)} placeholder="443" />
               </label>
+              {portAliases.length > 0 && (
+                <label>Or insert a saved port alias (destination)
+                  <select value="" onChange={(event) => event.target.value && set('dport', event.target.value)}>
+                    <option value="">— select alias —</option>
+                    {portAliases.map((alias) => <option key={alias.id} value={alias.values_csv}>{alias.name}</option>)}
+                  </select>
+                </label>
+              )}
             </>
           )}
           {icmpApplicable && (
@@ -456,10 +511,22 @@ function AdvancedTab({ profileId }: { profileId: number }) {
   const [validation, setValidation] = useState<FirewallValidateResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState('');
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [customNft, setCustomNft] = useState('');
+  const [customDirty, setCustomDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   async function load() {
-    try { setNft((await api.fwPreview(profileId)).nft); setError(''); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Failed to load generated ruleset'); }
+    try {
+      setNft((await api.fwPreview(profileId)).nft);
+      const profile = (await api.fwProfiles()).profiles.find((p) => p.id === profileId);
+      setCustomNft(profile?.custom_nft || '');
+      setCustomDirty(false);
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load generated ruleset');
+    }
   }
   useEffect(() => { load(); }, [profileId]);
 
@@ -469,6 +536,27 @@ function AdvancedTab({ profileId }: { profileId: number }) {
     try { setValidation(await api.fwValidate(profileId)); }
     catch (err) { setError(err instanceof Error ? err.message : 'Validation request failed'); }
     finally { setValidating(false); }
+  }
+
+  async function saveCustomNft() {
+    setSaving(true);
+    setError('');
+    try {
+      await api.fwUpdateProfile(profileId, { custom_nft: customNft });
+      setCustomDirty(false);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save custom nft snippet');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function loadLogs() {
+    setLogsLoading(true);
+    try { setLogLines((await api.fwLogs(200)).lines); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Could not read firewall logs'); }
+    finally { setLogsLoading(false); }
   }
 
   return (
@@ -489,9 +577,108 @@ function AdvancedTab({ profileId }: { profileId: number }) {
         </div>
       )}
       <label className="subheading">
+        Custom nft snippet (advanced — appended verbatim inside the generated table, validated with the rest)
+        <textarea
+          className="ids-editor"
+          value={customNft}
+          rows={6}
+          onChange={(event) => { setCustomNft(event.target.value); setCustomDirty(true); }}
+        />
+      </label>
+      {customDirty && (
+        <div className="config-save-bar">
+          <button onClick={saveCustomNft} disabled={saving}>{saving ? 'Saving…' : 'Save snippet'}</button>
+        </div>
+      )}
+      <label className="subheading">
         Generated ruleset (read-only — this is exactly what would be applied)
         <textarea className="ids-editor" value={nft} readOnly rows={20} />
       </label>
+
+      <div className="section-actions">
+        <h4 style={{ margin: 0 }}>Logs</h4>
+        <button className="btn-secondary" onClick={loadLogs} disabled={logsLoading}>{logsLoading ? 'Loading…' : 'Load recent log matches'}</button>
+      </div>
+      <p className="muted">Only rules with "Log matches" enabled produce entries here — read from the kernel log, filtered to this firewall's own tag.</p>
+      {logLines.length > 0 && (
+        <textarea className="ids-editor" value={logLines.join('\n')} readOnly rows={12} />
+      )}
+    </article>
+  );
+}
+
+function AliasesTab() {
+  const [aliases, setAliases] = useState<FirewallAlias[]>([]);
+  const [error, setError] = useState('');
+  const [name, setName] = useState('');
+  const [kind, setKind] = useState<'address' | 'port'>('address');
+  const [values, setValues] = useState('');
+  const [description, setDescription] = useState('');
+
+  async function load() {
+    try { setAliases((await api.fwAliases()).aliases); setError(''); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Failed to load aliases'); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function create() {
+    if (!name.trim() || !values.trim()) return;
+    setError('');
+    try {
+      await api.fwCreateAlias(name.trim(), kind, values.trim(), description.trim());
+      setName(''); setValues(''); setDescription('');
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create alias');
+    }
+  }
+
+  async function remove(alias: FirewallAlias) {
+    if (!window.confirm(`Delete alias "${alias.name}"?`)) return;
+    try {
+      await api.fwDeleteAlias(alias.id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete alias');
+    }
+  }
+
+  return (
+    <article className="card">
+      <p className="muted">
+        Saved groups of addresses or ports you can reuse across rules — picking one in the rule editor fills the
+        field in with these values (not a live nftables set; editing an alias here doesn't retroactively change
+        rules that already copied its values).
+      </p>
+      {error && <p className="error-text">{error}</p>}
+      <table className="status-table">
+        <thead><tr><th>Name</th><th>Kind</th><th>Values</th><th>Description</th><th></th></tr></thead>
+        <tbody>
+          {aliases.map((alias) => (
+            <tr key={alias.id}>
+              <td className="status-table-name">{alias.name}</td>
+              <td>{alias.kind}</td>
+              <td className="status-table-detail muted">{alias.values_csv}</td>
+              <td className="status-table-detail muted">{alias.description || '—'}</td>
+              <td><button className="btn-secondary" onClick={() => remove(alias)}>Delete</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="stack-form">
+        <label>Name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={60} /></label>
+        <label>Kind
+          <select value={kind} onChange={(event) => setKind(event.target.value as 'address' | 'port')}>
+            <option value="address">Address / CIDR</option>
+            <option value="port">Port</option>
+          </select>
+        </label>
+        <label>Values (comma-separated)
+          <input value={values} onChange={(event) => setValues(event.target.value)} placeholder={kind === 'address' ? '10.0.0.0/8, 192.168.1.1' : '80, 443, 8000'} />
+        </label>
+        <label>Description<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={300} /></label>
+        <button onClick={create}>Create alias</button>
+      </div>
     </article>
   );
 }

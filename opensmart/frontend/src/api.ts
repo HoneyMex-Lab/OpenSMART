@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, FirewallApply, FirewallApplyResult, FirewallLiveState, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
+import type { AuditEvent, DataInfo, FirewallAlias, FirewallApply, FirewallApplyResult, FirewallLiveState, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -133,6 +133,7 @@ export const api = {
   fwPreview: (profileId: number) => request<{ nft: string }>(`/api/firewall/profiles/${profileId}/preview`),
   fwValidate: (profileId: number) => request<FirewallValidateResult>(`/api/firewall/profiles/${profileId}/validate`, { method: 'POST' }),
   fwLive: () => request<FirewallLiveState>('/api/firewall/live'),
+  fwLogs: (lines = 200) => request<{ lines: string[] }>(`/api/firewall/logs?lines=${lines}`),
   fwUpdateRule: (ruleId: number, fields: Partial<FirewallRule>) =>
     request<FirewallRule>(`/api/firewall/rules/${ruleId}`, { method: 'PUT', body: JSON.stringify(fields) }),
   fwCreateRule: (profileId: number, fields: Partial<FirewallRule>) =>
@@ -152,4 +153,10 @@ export const api = {
     request<FirewallApplyResult>(`/api/firewall/profiles/${profileId}/apply`, { method: 'POST', body: JSON.stringify({ confirm_seconds: confirmSeconds }) }),
   fwConfirmApply: (token: string) => request<{ ok: boolean }>('/api/firewall/apply/confirm', { method: 'POST', body: JSON.stringify({ token }) }),
   fwCancelApply: (token: string) => request<{ ok: boolean }>('/api/firewall/apply/cancel', { method: 'POST', body: JSON.stringify({ token }) }),
+  fwAliases: () => request<{ aliases: FirewallAlias[] }>('/api/firewall/aliases'),
+  fwCreateAlias: (name: string, kind: 'address' | 'port', valuesCsv: string, description = '') =>
+    request<FirewallAlias>('/api/firewall/aliases', { method: 'POST', body: JSON.stringify({ name, kind, values_csv: valuesCsv, description }) }),
+  fwUpdateAlias: (aliasId: number, fields: Partial<Pick<FirewallAlias, 'name' | 'values_csv' | 'description'>>) =>
+    request<FirewallAlias>(`/api/firewall/aliases/${aliasId}`, { method: 'PUT', body: JSON.stringify(fields) }),
+  fwDeleteAlias: (aliasId: number) => request<{ ok: boolean }>(`/api/firewall/aliases/${aliasId}`, { method: 'DELETE' }),
 };

@@ -452,3 +452,11 @@ export type FirewallSummary = {
 export type FirewallValidateResult = { ok: boolean; detail: string; warnings: string[] };
 
 export type FirewallApplyResult = { token: string; expires_at: string; warnings: string[] };
+
+export type FirewallAlias = {
+  id: number;
+  name: string;
+  kind: 'address' | 'port';
+  values_csv: string;
+  description: string;
+};
