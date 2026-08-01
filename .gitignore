@@ -79,6 +79,15 @@ containers/OpenSMART-Standalone/**/*.sqlite*
 # 2026-07-05 — keep this in sync with that path.
 opensmart/containers/run/**/volumes/data/**
 !opensmart/containers/run/**/volumes/data/.gitkeep
+# Same for volumes/state/ (network interface MTU + firewall apply
+# commit-confirm state — see backend/app/network_config.py and firewall.py).
+# Untracked-but-not-ignored here would get swept into `git stash -u` during
+# a deploy, and files restored by `stash pop` end up owned by whichever user
+# ran git (root, over SSH) instead of the app's own service user — this bit
+# us live on the reference host (PermissionError writing confirm/cancel/pending
+# markers after a deploy).
+opensmart/containers/run/**/volumes/state/**
+!opensmart/containers/run/**/volumes/state/.gitkeep
 opensmart/containers/run/**/*.ovpn
 opensmart/containers/run/**/*.key
 opensmart/containers/run/**/*.crt
