@@ -384,3 +384,55 @@ export type VpnStatus = {
   total_users: number;
   connected: VpnConnection[];
 };
+
+export type FirewallChain = 'input' | 'forward' | 'output';
+export type FirewallAction = 'accept' | 'drop' | 'reject';
+
+export type FirewallProfile = {
+  id: number;
+  name: string;
+  description: string;
+  active: boolean;
+  policies: string;
+  custom_nft: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FirewallRule = {
+  id: number;
+  profile_id: number;
+  chain: FirewallChain;
+  position: number;
+  enabled: boolean;
+  system_rule: boolean;
+  action: FirewallAction;
+  reject_with: string;
+  family: 'inet' | 'ip' | 'ip6';
+  protocol: string;
+  iif: string;
+  oif: string;
+  src: string;
+  src_negate: boolean;
+  dst: string;
+  dst_negate: boolean;
+  sport: string;
+  dport: string;
+  ct_state: string;
+  icmp_type: string;
+  log: boolean;
+  log_prefix: string;
+  rate_limit: string;
+  description: string;
+};
+
+export type FirewallLiveState = { applied: boolean; detail?: string; raw?: string };
+
+export type FirewallSummary = {
+  profiles: FirewallProfile[];
+  active_profile: FirewallProfile | null;
+  rule_count: number;
+  live: FirewallLiveState;
+};
+
+export type FirewallValidateResult = { ok: boolean; detail: string; warnings: string[] };

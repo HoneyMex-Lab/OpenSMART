@@ -1,0 +1,211 @@
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+
+from .. import firewall as fw
+from ..database import write_audit_event
+from ..security import get_client_ip, require_admin, require_admin_read
+
+router = APIRouter(prefix="/api/firewall", tags=["firewall"])
+
+
+def _bad(error: fw.FirewallError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
+
+
+class ProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=300)
+
+
+class ProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=300)
+    policies: str | None = Field(default=None, max_length=2000)
+    custom_nft: str | None = Field(default=None, max_length=200_000)
+
+
+class CloneRequest(BaseModel):
+    new_name: str = Field(min_length=1, max_length=80)
+
+
+class RuleCreate(BaseModel):
+    chain: str
+    position: int | None = None
+    enabled: bool = True
+    action: str = "accept"
+    reject_with: str = Field(default="", max_length=40)
+    family: str = "inet"
+    protocol: str = Field(default="any", max_length=20)
+    iif: str = Field(default="", max_length=200)
+    oif: str = Field(default="", max_length=200)
+    src: str = Field(default="", max_length=500)
+    src_negate: bool = False
+    dst: str = Field(default="", max_length=500)
+    dst_negate: bool = False
+    sport: str = Field(default="", max_length=200)
+    dport: str = Field(default="", max_length=200)
+    ct_state: str = Field(default="", max_length=100)
+    icmp_type: str = Field(default="", max_length=40)
+    log: bool = False
+    log_prefix: str = Field(default="", max_length=60)
+    rate_limit: str = Field(default="", max_length=60)
+    description: str = Field(default="", max_length=300)
+
+
+class RuleUpdate(BaseModel):
+    enabled: bool | None = None
+    action: str | None = None
+    reject_with: str | None = Field(default=None, max_length=40)
+    protocol: str | None = Field(default=None, max_length=20)
+    iif: str | None = Field(default=None, max_length=200)
+    oif: str | None = Field(default=None, max_length=200)
+    src: str | None = Field(default=None, max_length=500)
+    src_negate: bool | None = None
+    dst: str | None = Field(default=None, max_length=500)
+    dst_negate: bool | None = None
+    sport: str | None = Field(default=None, max_length=200)
+    dport: str | None = Field(default=None, max_length=200)
+    ct_state: str | None = Field(default=None, max_length=100)
+    icmp_type: str | None = Field(default=None, max_length=40)
+    log: bool | None = None
+    log_prefix: str | None = Field(default=None, max_length=60)
+    rate_limit: str | None = Field(default=None, max_length=60)
+    description: str | None = Field(default=None, max_length=300)
+
+
+class MoveRequest(BaseModel):
+    direction: str
+
+
+def _clean(payload: BaseModel) -> dict:
+    return {k: v for k, v in payload.model_dump().items() if v is not None}
+
+
+@router.get("/summary")
+def summary(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    profile = fw.active_profile()
+    return {
+        "profiles": fw.list_profiles(),
+        "active_profile": profile,
+        "rule_count": len(fw.list_rules(profile["id"])) if profile else 0,
+        "live": fw.live_state(),
+    }
+
+
+@router.get("/profiles")
+def list_profiles(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    return {"profiles": fw.list_profiles()}
+
+
+@router.post("/profiles")
+def create_profile(payload: ProfileCreate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        profile = fw.create_profile(payload.name, payload.description)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_profile_create", admin["id"], admin["username"], f"profile:{profile['id']}", "", payload.name)
+    return profile
+
+
+@router.put("/profiles/{profile_id}")
+def update_profile(profile_id: int, payload: ProfileUpdate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        profile = fw.update_profile(profile_id, _clean(payload))
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_profile_update", admin["id"], admin["username"], f"profile:{profile_id}", "", ", ".join(_clean(payload)))
+    return profile
+
+
+@router.delete("/profiles/{profile_id}")
+def delete_profile(profile_id: int, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        fw.delete_profile(profile_id)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_profile_delete", admin["id"], admin["username"], f"profile:{profile_id}", "", "")
+    return {"ok": True}
+
+
+@router.post("/profiles/{profile_id}/clone")
+def clone_profile(profile_id: int, payload: CloneRequest, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        profile = fw.clone_profile(profile_id, payload.new_name)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_profile_clone", admin["id"], admin["username"], f"profile:{profile_id}", "", f"-> {payload.new_name}")
+    return profile
+
+
+@router.get("/profiles/{profile_id}/preview")
+def preview_profile(profile_id: int, _: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    try:
+        return {"nft": fw.render_profile(profile_id)}
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+
+
+@router.post("/profiles/{profile_id}/validate")
+def validate_profile(profile_id: int, request: Request, _: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    try:
+        ok, detail = fw.validate(profile_id)
+        warnings = fw.analyze(profile_id, client_ip=get_client_ip(request))
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    return {"ok": ok, "detail": detail, "warnings": warnings}
+
+
+@router.get("/profiles/{profile_id}/rules")
+def list_rules(profile_id: int, _: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    try:
+        return {"rules": fw.list_rules(profile_id)}
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+
+
+@router.post("/profiles/{profile_id}/rules")
+def create_rule(profile_id: int, payload: RuleCreate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    fields = payload.model_dump()
+    try:
+        rule = fw.create_rule(profile_id, fields)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_rule_create", admin["id"], admin["username"], f"profile:{profile_id}:rule:{rule['id']}", "", payload.description)
+    return rule
+
+
+@router.put("/rules/{rule_id}")
+def update_rule(rule_id: int, payload: RuleUpdate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        rule = fw.update_rule(rule_id, _clean(payload))
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_rule_update", admin["id"], admin["username"], f"rule:{rule_id}", "", ", ".join(_clean(payload)))
+    return rule
+
+
+@router.delete("/rules/{rule_id}")
+def delete_rule(rule_id: int, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        fw.delete_rule(rule_id)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_rule_delete", admin["id"], admin["username"], f"rule:{rule_id}", "", "")
+    return {"ok": True}
+
+
+@router.post("/rules/{rule_id}/move")
+def move_rule(rule_id: int, payload: MoveRequest, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    try:
+        rule = fw.move_rule(rule_id, payload.direction)
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event("firewall_rule_move", admin["id"], admin["username"], f"rule:{rule_id}", "", payload.direction)
+    return rule
+
+
+@router.get("/live")
+def live(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    return fw.live_state()

@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
+import type { AuditEvent, DataInfo, FirewallLiveState, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -127,4 +127,12 @@ export const api = {
     const match = disposition.match(/filename="([^"]+)"/);
     return { filename: match ? match[1] : `${name}-${username}.conf`, content: await response.text() };
   },
+  fwSummary: () => request<FirewallSummary>('/api/firewall/summary'),
+  fwProfiles: () => request<{ profiles: FirewallProfile[] }>('/api/firewall/profiles'),
+  fwRules: (profileId: number) => request<{ rules: FirewallRule[] }>(`/api/firewall/profiles/${profileId}/rules`),
+  fwPreview: (profileId: number) => request<{ nft: string }>(`/api/firewall/profiles/${profileId}/preview`),
+  fwValidate: (profileId: number) => request<FirewallValidateResult>(`/api/firewall/profiles/${profileId}/validate`, { method: 'POST' }),
+  fwLive: () => request<FirewallLiveState>('/api/firewall/live'),
+  fwUpdateRule: (ruleId: number, fields: Partial<FirewallRule>) =>
+    request<FirewallRule>(`/api/firewall/rules/${ruleId}`, { method: 'PUT', body: JSON.stringify(fields) }),
 };

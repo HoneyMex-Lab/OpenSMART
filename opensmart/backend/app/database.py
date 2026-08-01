@@ -674,6 +674,58 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 expires_at TEXT NOT NULL,
                 detail TEXT NOT NULL DEFAULT ''
             );
+
+            CREATE TABLE IF NOT EXISTS firewall_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 0,
+                policies TEXT NOT NULL DEFAULT '{"input":"drop","forward":"drop","output":"accept"}',
+                custom_nft TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS firewall_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id INTEGER NOT NULL REFERENCES firewall_profiles(id) ON DELETE CASCADE,
+                chain TEXT NOT NULL CHECK(chain IN ('input', 'forward', 'output')),
+                position INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                system_rule INTEGER NOT NULL DEFAULT 0,
+                action TEXT NOT NULL DEFAULT 'accept' CHECK(action IN ('accept', 'drop', 'reject')),
+                reject_with TEXT NOT NULL DEFAULT '',
+                family TEXT NOT NULL DEFAULT 'inet' CHECK(family IN ('inet', 'ip', 'ip6')),
+                protocol TEXT NOT NULL DEFAULT 'any',
+                iif TEXT NOT NULL DEFAULT '',
+                oif TEXT NOT NULL DEFAULT '',
+                src TEXT NOT NULL DEFAULT '',
+                src_negate INTEGER NOT NULL DEFAULT 0,
+                dst TEXT NOT NULL DEFAULT '',
+                dst_negate INTEGER NOT NULL DEFAULT 0,
+                sport TEXT NOT NULL DEFAULT '',
+                dport TEXT NOT NULL DEFAULT '',
+                ct_state TEXT NOT NULL DEFAULT '',
+                icmp_type TEXT NOT NULL DEFAULT '',
+                log INTEGER NOT NULL DEFAULT 0,
+                log_prefix TEXT NOT NULL DEFAULT '',
+                rate_limit TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_firewall_rules_order ON firewall_rules (profile_id, chain, position);
+
+            CREATE TABLE IF NOT EXISTS firewall_applies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id INTEGER NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                state TEXT NOT NULL CHECK(state IN ('pending', 'confirmed', 'reverted', 'failed')),
+                actor TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT ''
+            );
             """
         )
         db.execute(
@@ -767,6 +819,36 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             WHERE name = 'Firewall' AND config = '{}'
             """
         )
+        # Seed one active "Default" firewall profile with drop policies on
+        # input/forward — safe only because the safety rules below (pinned
+        # first, system_rule=1) are evaluated before that terminal drop, so a
+        # fresh install is locked-down-by-default without locking itself out.
+        # See design notes "Decisions" for why.
+        if db.execute("SELECT 1 FROM firewall_profiles LIMIT 1").fetchone() is None:
+            fw_now = datetime.now(timezone.utc).isoformat()
+            cur = db.execute(
+                "INSERT INTO firewall_profiles (name, description, active, policies, created_at, updated_at) "
+                "VALUES ('Default', 'Seeded on install — safe defaults with management/SSH access preserved.', 1, "
+                "'{\"input\":\"drop\",\"forward\":\"drop\",\"output\":\"accept\"}', ?, ?)",
+                (fw_now, fw_now),
+            )
+            profile_id = cur.lastrowid
+            safety_rules = [
+                # chain, position, action, protocol, iif, oif, dport, ct_state, description
+                ("input", 1, "accept", "any", "lo", "", "", "", "Loopback"),
+                ("input", 2, "accept", "any", "", "", "", "established,related", "Existing/related connections"),
+                ("input", 3, "accept", "tcp", "", "", "22", "", "SSH management access"),
+                ("input", 4, "accept", "tcp", "", "", "80,443,8000", "", "Web console / front-door proxy"),
+                ("forward", 1, "accept", "any", "docker0,br-*", "", "", "", "Docker bridge traffic (inbound)"),
+                ("forward", 2, "accept", "any", "", "docker0,br-*", "", "", "Docker bridge traffic (outbound)"),
+                ("forward", 3, "accept", "any", "", "", "", "established,related", "Existing/related connections"),
+            ]
+            for chain, position, action, protocol, iif, oif, dport, ct_state, description in safety_rules:
+                db.execute(
+                    "INSERT INTO firewall_rules (profile_id, chain, position, system_rule, action, protocol, iif, oif, dport, ct_state, description, created_at, updated_at) "
+                    "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (profile_id, chain, position, action, protocol, iif, oif, dport, ct_state, description, fw_now, fw_now),
+                )
         # Backfill network_interfaces rows from the legacy monitor_interfaces
         # setting (comma-separated interface names chosen in the Wizard), so
         # existing installs' capture interfaces carry over as monitor=1 rows

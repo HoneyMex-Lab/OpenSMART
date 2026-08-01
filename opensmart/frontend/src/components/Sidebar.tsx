@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, BarChart3, Boxes, Bug, ChevronsLeft, ChevronsRight, ClipboardList, Database, Flame, Home, KeyRound, Lock, Monitor, Network, Search, Server, ServerCog, Shield, ShieldAlert, Wrench, type LucideIcon } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Boxes, Bug, ChevronsLeft, ChevronsRight, ClipboardList, Database, Flame, Home, KeyRound, Lock, Monitor, Network, Search, Server, ServerCog, Shield, ShieldAlert, ShieldCheck, Wrench, type LucideIcon } from 'lucide-react';
 import type { OpenSmartModule, Settings, ToolConfig, User } from '../types';
 import { toolDefinitions } from '../pages/toolDefinitions';
 import { t } from '../i18n';
@@ -45,6 +45,7 @@ const moduleIcons: Record<string, LucideIcon> = {
   Honeypot: Flame,
   'Access VPN': KeyRound,
   'LXC Manager': Boxes,
+  Firewall: ShieldCheck,
 };
 
 const toolIcons: Record<string, LucideIcon> = {

@@ -608,15 +608,16 @@ cmd_recreate() {
   fi
 
   # Same reasoning as above: keep the native module images (Suricata, Zeek,
-  # WireGuard, OpenVPN) in sync with the current checkout rather than
-  # silently reusing whatever was tagged opensmart/base|suricata|zeek|
-  # wireguard|openvpn from a previous install.
-  printf 'Rebuilding native module images (base, Suricata, Zeek, WireGuard, OpenVPN)...\n'
+  # WireGuard, OpenVPN, netadmin) in sync with the current checkout rather
+  # than silently reusing whatever was tagged opensmart/base|suricata|zeek|
+  # wireguard|openvpn|netadmin from a previous install.
+  printf 'Rebuilding native module images (base, Suricata, Zeek, WireGuard, OpenVPN, netadmin)...\n'
   if ! _build_native_module_image base \
     || ! _build_native_module_image suricata \
     || ! _build_native_module_image zeek \
     || ! _build_native_module_image wireguard \
-    || ! _build_native_module_image openvpn; then
+    || ! _build_native_module_image openvpn \
+    || ! _build_native_module_image netadmin; then
     printf '✘ Failed to rebuild native module images.\n' >&2
     exit 1
   fi
@@ -1177,26 +1178,28 @@ _build_native_module_image() {
 }
 
 _install_build_native_modules() {
-  # Suricata, Zeek, WireGuard, and OpenVPN
-  # (opensmart/containers/run/{suricata,zeek,wireguard,openvpn}/) ship as
-  # Dockerfile templates, not pre-built/pullable images, so something has to
-  # build them. That can't be the backend's own provisioning.py: it talks to
-  # the host Docker daemon through the docker-socket-proxy sidecar, whose
-  # allowlist deliberately excludes BUILD (see docs/architecture.md's
+  # Suricata, Zeek, WireGuard, OpenVPN, and netadmin
+  # (opensmart/containers/run/{suricata,zeek,wireguard,openvpn}/, plus the
+  # Firewall module's one-off nftables image — see backend/app/hostnet.py)
+  # ship as Dockerfile templates, not pre-built/pullable images, so something
+  # has to build them. That can't be the backend's own provisioning.py: it
+  # talks to the host Docker daemon through the docker-socket-proxy sidecar,
+  # whose allowlist deliberately excludes BUILD (see docs/architecture.md's
   # security section) — letting the app container build arbitrary images on
   # the host is exactly the privilege that proxy exists to withhold. So this
   # runs here instead, host-side, against the real daemon, once per
   # install/recreate; provisioning.py only ever starts/stops images that
-  # already exist. All four build FROM opensmart/base, so it's built first.
-  _step "Building native module images (base, Suricata, Zeek, WireGuard, OpenVPN)"
+  # already exist. All five build FROM opensmart/base, so it's built first.
+  _step "Building native module images (base, Suricata, Zeek, WireGuard, OpenVPN, netadmin)"
   {
     _build_native_module_image base &&
     _build_native_module_image suricata &&
     _build_native_module_image zeek &&
     _build_native_module_image wireguard &&
-    _build_native_module_image openvpn
+    _build_native_module_image openvpn &&
+    _build_native_module_image netadmin
   } >> "$INSTALL_LOG" 2>&1 \
-    || _step_fail "Failed to build native module images (base/Suricata/Zeek/WireGuard/OpenVPN)."
+    || _step_fail "Failed to build native module images (base/Suricata/Zeek/WireGuard/OpenVPN/netadmin)."
   printf 'done\n'
 }
 
