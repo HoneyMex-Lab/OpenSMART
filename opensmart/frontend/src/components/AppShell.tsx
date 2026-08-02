@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ShieldAlert } from 'lucide-react';
 import AboutPage from '../pages/AboutPage';
 import AccessPage from '../pages/AccessPage';
 import AccountPage from '../pages/AccountPage';
@@ -39,6 +40,7 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
   const [tools, setTools] = useState<ToolConfig[]>([]);
   const [modules, setModules] = useState<OpenSmartModule[]>([]);
   const [allowlistOpen, setAllowlistOpen] = useState(false);
+  const [firewallInitialTab, setFirewallInitialTab] = useState<'overview' | 'rules' | 'aliases' | 'advanced'>('overview');
 
   async function refreshCatalogs() {
     const [toolResult, moduleResult] = await Promise.all([api.tools(), api.openSmartModules()]);
@@ -106,7 +108,7 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
     if (module.name === 'Network Traffic Monitoring') return <NetworkTrafficPage settings={settings} />;
     if (module.name === 'Network IDS') return <NetworkIdsPage />;
     if (module.name === 'Access VPN') return <VpnPage />;
-    if (module.name === 'Firewall') return <FirewallPage />;
+    if (module.name === 'Firewall') return <FirewallPage initialTab={firewallInitialTab} />;
     const logo = modulesLogo(module.name);
     return <section className="card hero-card"><div className="detail-heading"><img src={logo} alt="" /><div><p className="status-label"><i className="status-dot enabled" /> enabled</p><h2>{module.name}</h2><p className="muted">Placeholder content for this OpenSMART module. Future releases can render live metrics, alerts, charts, and drill-down tables here.</p></div></div></section>;
   }
@@ -140,14 +142,16 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
           <div className="title-block"><p className="eyebrow">Open Source Security Platform</p><h1>{title}</h1></div>
           {allowlistOpen && (
             <button
-              className="badge warning allowlist-open-banner"
-              title="Web console and/or SSH access has no custom allowlist — open to any network. Click to configure one."
+              className="allowlist-open-banner"
+              title="The web console has no custom network allowlist — it's reachable from any network. Click to configure one."
               onClick={() => {
+                setFirewallInitialTab('rules');
                 const firewallModule = modules.find((m) => m.name === 'Firewall');
                 if (firewallModule) setPage(`module:${firewallModule.id}`);
               }}
             >
-              Open to any network
+              <ShieldAlert size={16} />
+              <span>Platform open to any network — click to set an allowlist</span>
             </button>
           )}
           <div className="user-pill">{user.role}</div>

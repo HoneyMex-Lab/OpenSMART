@@ -22,8 +22,9 @@ function secondsLeft(expiresAt: string, now: number): number {
   return Math.max(0, Math.round((new Date(expiresAt).getTime() - now) / 1000));
 }
 
-export default function FirewallPage() {
-  const [tab, setTab] = useState<Tab>('overview');
+export default function FirewallPage({ initialTab }: { initialTab?: Tab } = {}) {
+  const [tab, setTab] = useState<Tab>(initialTab || 'overview');
+  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
   const [summary, setSummary] = useState<FirewallSummary | null>(null);
   const [error, setError] = useState('');
   const [now, setNow] = useState(() => Date.now());
@@ -72,6 +73,22 @@ export default function FirewallPage() {
     setApplyWarnings(warnings);
     setWarningsAcked(false);
     load();
+  }
+
+  const [applyingActive, setApplyingActive] = useState(false);
+
+  async function applyActiveProfile() {
+    if (!summary?.active_profile) return;
+    setApplyingActive(true);
+    setError('');
+    try {
+      const result = await api.fwApply(summary.active_profile.id, 60);
+      onApplied(result.warnings);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Apply failed');
+    } finally {
+      setApplyingActive(false);
+    }
   }
 
   const TABS: { id: Tab; label: string }[] = [
@@ -128,9 +145,16 @@ export default function FirewallPage() {
           </p>
         </article>
       )}
-      {summary?.live?.dirty && (
+      {summary?.live?.dirty && !(pending && pending.state === 'pending') && (
         <article className="card wizard-notice warning">
-          <p>The active profile has unapplied changes — the live ruleset doesn't match its current rules. Apply to sync.</p>
+          <p>
+            "{summary.active_profile?.name}" has unapplied changes — the live ruleset doesn't match its current
+            rules (a rule was added, edited, deleted, reordered, or toggled since the last apply). Nothing on the
+            host is enforcing these changes yet.
+          </p>
+          <div className="config-save-bar">
+            <button onClick={applyActiveProfile} disabled={applyingActive}>{applyingActive ? 'Applying…' : 'Apply now'}</button>
+          </div>
         </article>
       )}
 
@@ -342,6 +366,10 @@ function RulesTab({ profileId, onChanged }: { profileId: number; onChanged: () =
 
   return (
     <article className="card">
+      <p className="muted">
+        Rule changes here save immediately, but nothing on the host is enforced until you apply the profile — use
+        the "Apply now" banner above (or the Overview tab) once you're done editing.
+      </p>
       {error && <p className="error-text">{error}</p>}
       {editing && (
         <RuleEditor
