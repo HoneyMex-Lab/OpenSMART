@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { FirewallAlias, FirewallChain, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult } from '../types';
+import type { FirewallAlias, FirewallChain, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, NetworkInterface } from '../types';
 
 type Tab = 'overview' | 'rules' | 'aliases' | 'advanced';
 
@@ -387,6 +387,42 @@ function RulesTab({ profileId, onChanged }: { profileId: number; onChanged: () =
   );
 }
 
+function csvToList(value?: string): string[] {
+  return (value || '').split(',').map((v) => v.trim()).filter(Boolean);
+}
+
+function listToCsv(values: string[]): string {
+  return values.join(',');
+}
+
+function InterfaceMultiSelect({ label, value, onChange, interfaces }: {
+  label: string; value?: string; onChange: (value: string) => void; interfaces: NetworkInterface[];
+}) {
+  const selected = csvToList(value);
+  const known = new Set(interfaces.map((iface) => iface.name));
+  const orphans = selected.filter((name) => !known.has(name));
+  return (
+    <label>{label}
+      <select
+        multiple
+        size={Math.min(Math.max(interfaces.length + orphans.length, 1), 5)}
+        value={selected}
+        onChange={(event) => onChange(listToCsv(Array.from(event.target.selectedOptions, (option) => option.value)))}
+      >
+        {interfaces.map((iface) => (
+          <option key={iface.name} value={iface.name}>
+            {(iface.alias ? `${iface.alias} (${iface.name})` : iface.name) + (iface.present ? '' : ' — not present')}
+          </option>
+        ))}
+        {orphans.map((name) => (
+          <option key={name} value={name}>{name} — unknown interface</option>
+        ))}
+      </select>
+      <span className="muted" style={{ fontSize: '0.85em' }}>Ctrl/Cmd-click to select multiple. Leave empty to match any interface.</span>
+    </label>
+  );
+}
+
 function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
   draft: RuleDraft; isNew: boolean;
   onChange: (draft: RuleDraft) => void; onCancel: () => void; onSave: () => void;
@@ -394,8 +430,10 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
   const portsApplicable = draft.protocol === 'tcp' || draft.protocol === 'udp' || draft.protocol === 'tcp+udp';
   const icmpApplicable = draft.protocol === 'icmp' || draft.protocol === 'icmpv6';
   const [aliases, setAliases] = useState<FirewallAlias[]>([]);
+  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([]);
 
   useEffect(() => { api.fwAliases().then((result) => setAliases(result.aliases)).catch(() => undefined); }, []);
+  useEffect(() => { api.netInterfaces().then((result) => setInterfaces(result.interfaces)).catch(() => undefined); }, []);
 
   const addressAliases = aliases.filter((alias) => alias.kind === 'address');
   const portAliases = aliases.filter((alias) => alias.kind === 'port');
@@ -440,12 +478,8 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
               {PROTOCOL_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
           </label>
-          <label>Interface in (comma-separated, optional)
-            <input value={draft.iif || ''} onChange={(event) => set('iif', event.target.value)} placeholder="eth0" />
-          </label>
-          <label>Interface out (comma-separated, optional)
-            <input value={draft.oif || ''} onChange={(event) => set('oif', event.target.value)} placeholder="eth1" />
-          </label>
+          <InterfaceMultiSelect label="Interface in (optional)" value={draft.iif} onChange={(value) => set('iif', value)} interfaces={interfaces} />
+          <InterfaceMultiSelect label="Interface out (optional)" value={draft.oif} onChange={(value) => set('oif', value)} interfaces={interfaces} />
           <label>Source address/CIDR (optional)
             <input value={draft.src || ''} onChange={(event) => set('src', event.target.value)} placeholder="10.0.0.0/8" />
           </label>
