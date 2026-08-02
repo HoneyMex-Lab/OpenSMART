@@ -401,13 +401,19 @@ def move_rule(rule_id: int, direction: str) -> dict:
 def render_profile(profile_id: int) -> str:
     """Pure — no side effects, no docker calls. rules -> engine-specific
     ruleset text, via the profile's engine module (firewall_nft/
-    firewall_iptables)."""
+    firewall_iptables). Engine modules raise plain ValueError for
+    rules they can't represent (e.g. IPv6 fields on the iptables engine,
+    which is IPv4-only in v1) rather than importing FirewallError
+    themselves, to avoid a circular import — translated here."""
     profile = get_profile(profile_id)
     rules = list_rules(profile_id)
     policies = _json_policies(profile["policies"])
     module = _engine_module(profile["engine"])
     render = _engine_capability(module, "render", profile["engine"])
-    return render(rules, policies, profile["custom_nft"])
+    try:
+        return render(rules, policies, profile["custom_nft"])
+    except ValueError as error:
+        raise FirewallError(str(error)) from error
 
 
 def _json_policies(raw: str) -> dict:
