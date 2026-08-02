@@ -159,6 +159,7 @@ export default function FirewallPage() {
 function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: FirewallSummary | null; onChanged: () => void; onApplied: (warnings: string[]) => void; applyBusy: boolean }) {
   const [error, setError] = useState('');
   const [newName, setNewName] = useState('');
+  const [newEngine, setNewEngine] = useState<FirewallProfile['engine']>('nftables');
   const [applying, setApplying] = useState<number | null>(null);
 
   if (!summary) return <p className="muted">Loading…</p>;
@@ -167,7 +168,7 @@ function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: Fi
     if (!newName.trim()) return;
     setError('');
     try {
-      await api.fwCreateProfile(newName.trim());
+      await api.fwCreateProfile(newName.trim(), '', newEngine);
       setNewName('');
       onChanged();
     } catch (err) {
@@ -217,11 +218,12 @@ function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: Fi
       {error && <p className="error-text">{error}</p>}
       <h4>Profiles</h4>
       <table className="status-table">
-        <thead><tr><th>Name</th><th>Status</th><th>Description</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Engine</th><th>Status</th><th>Description</th><th></th></tr></thead>
         <tbody>
           {summary.profiles.map((profile) => (
             <tr key={profile.id}>
               <td className="status-table-name">{profile.name}</td>
+              <td><span className="badge muted">{profile.engine}</span></td>
               <td><span className={`badge ${profile.active ? 'ok-dim' : 'muted'}`}>{profile.active ? 'Active' : 'Inactive'}</span></td>
               <td className="status-table-detail muted">{profile.description || '—'}</td>
               <td>
@@ -241,8 +243,13 @@ function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: Fi
       </table>
       <div className="config-save-bar">
         <input value={newName} placeholder="New profile name" maxLength={80} onChange={(event) => setNewName(event.target.value)} />
+        <select value={newEngine} onChange={(event) => setNewEngine(event.target.value as FirewallProfile['engine'])}>
+          <option value="nftables">nftables</option>
+          <option value="iptables">iptables</option>
+        </select>
         <button onClick={createProfile}>Create profile</button>
       </div>
+      <p className="muted" style={{ fontSize: '0.85em' }}>A profile's engine is fixed once created — clone it to make an editable copy on the same engine.</p>
     </article>
   );
 }

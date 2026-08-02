@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, FirewallAlias, FirewallApply, FirewallApplyResult, FirewallLiveState, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
+import type { AuditEvent, DataInfo, FirewallAlias, FirewallApply, FirewallApplyResult, FirewallEngine, FirewallLiveState, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -141,8 +141,8 @@ export const api = {
   fwDeleteRule: (ruleId: number) => request<{ ok: boolean }>(`/api/firewall/rules/${ruleId}`, { method: 'DELETE' }),
   fwMoveRule: (ruleId: number, direction: 'up' | 'down') =>
     request<FirewallRule>(`/api/firewall/rules/${ruleId}/move`, { method: 'POST', body: JSON.stringify({ direction }) }),
-  fwCreateProfile: (name: string, description = '') =>
-    request<FirewallProfile>('/api/firewall/profiles', { method: 'POST', body: JSON.stringify({ name, description }) }),
+  fwCreateProfile: (name: string, description = '', engine: FirewallEngine = 'nftables') =>
+    request<FirewallProfile>('/api/firewall/profiles', { method: 'POST', body: JSON.stringify({ name, description, engine }) }),
   fwUpdateProfile: (profileId: number, fields: Partial<Pick<FirewallProfile, 'name' | 'description' | 'policies' | 'custom_nft'>>) =>
     request<FirewallProfile>(`/api/firewall/profiles/${profileId}`, { method: 'PUT', body: JSON.stringify(fields) }),
   fwDeleteProfile: (profileId: number) => request<{ ok: boolean }>(`/api/firewall/profiles/${profileId}`, { method: 'DELETE' }),

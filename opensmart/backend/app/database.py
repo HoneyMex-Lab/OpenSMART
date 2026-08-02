@@ -680,6 +680,7 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 name TEXT NOT NULL UNIQUE,
                 description TEXT NOT NULL DEFAULT '',
                 active INTEGER NOT NULL DEFAULT 0,
+                engine TEXT NOT NULL DEFAULT 'nftables',
                 policies TEXT NOT NULL DEFAULT '{"input":"drop","forward":"drop","output":"accept"}',
                 custom_nft TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
@@ -773,6 +774,13 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
         # per-instance PKI, still supported).
         try:
             db.execute("ALTER TABLE vpn_instances ADD COLUMN ca TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        # A profile renders to exactly one engine's ruleset syntax; existing
+        # profiles predate the iptables engine and backfill to 'nftables',
+        # the only engine that has ever existed.
+        try:
+            db.execute("ALTER TABLE firewall_profiles ADD COLUMN engine TEXT NOT NULL DEFAULT 'nftables'")
         except sqlite3.OperationalError:
             pass
         for key, value in DEFAULT_SETTINGS.items():

@@ -1,16 +1,22 @@
-"""nftables Firewall module: structured rules stored in SQLite, rendered into
-an nft ruleset and applied to the host via a commit-confirm watchdog — the
-same safety pattern as network_config.py's live MTU changes: apply, wait for
-a confirm/cancel marker, auto-revert on timeout.
+"""Firewall module: structured rules stored in SQLite, dispatched to a
+per-profile engine (nftables or iptables) that renders them into a real
+ruleset and applies it to the host via a commit-confirm watchdog — the same
+safety pattern as network_config.py's live MTU changes: apply, wait for a
+confirm/cancel marker, auto-revert on timeout.
 
-Everything this module generates lives in one nft table: `inet opensmart_fw`.
-The renderer NEVER emits `flush ruleset` — the host runs Docker, which
-programs its own tables via iptables-nft; a global flush would wipe Docker's
-rules and break every container's networking, including the app's own
-front-door proxy. Table replacement is always the atomic `table inet
-opensmart_fw` / `delete table inet opensmart_fw` / `table inet opensmart_fw {
-... }` idiom instead (see render_profile()), and rollback (apply()) uses the
-exact same idiom around a captured snapshot of whatever was loaded before.
+This file owns all DB access, profile/rule/alias CRUD, structural (Layer 2)
+lockout analysis, and apply bookkeeping — all of it engine-agnostic. The
+engine-specific renderer, syntax validation, live-state query, and apply
+watchdog script live in firewall_nft.py / firewall_iptables.py (see
+_engine_module() below); this module calls into them with already-fetched
+structured data, never the other way around, to avoid a circular import.
+
+A profile's `engine` column fixes it to exactly one engine's ruleset syntax
+for its whole life (see design notes). At most one
+engine's artifacts are ever meant to be loaded in the kernel at a time: every
+apply first tears down the *other* engine's artifacts (see
+CHAINS/_ENGINES and each engine module's teardown_fragment()), so switching
+which engine is active is just an ordinary commit-confirm apply.
 """
 import ipaddress
 import json
@@ -19,14 +25,14 @@ import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from . import hostnet
+from . import firewall_iptables, firewall_nft, hostnet
 from .provisioning import CONTAINERS_ROOT
 from .database import get_db, now_iso
 
 logger = logging.getLogger(__name__)
 
-TABLE_NAME = "opensmart_fw"
 CHAINS = ("input", "forward", "output")
+_ENGINES = {"nftables": firewall_nft, "iptables": firewall_iptables}
 _VALID_ACTIONS = {"accept", "drop", "reject"}
 _VALID_FAMILIES = {"inet", "ip", "ip6"}
 _VALID_PROTOCOLS = {"any", "tcp", "udp", "tcp+udp", "icmp", "icmpv6", "esp", "gre", "ah"}
@@ -61,6 +67,23 @@ _PROFILE_FIELDS = {"name", "description", "policies", "custom_nft"}
 
 class FirewallError(Exception):
     """User-facing firewall configuration failure."""
+
+
+def _engine_module(engine: str):
+    module = _ENGINES.get(engine)
+    if module is None:
+        raise FirewallError(f"Unknown firewall engine '{engine}'. Must be one of {', '.join(sorted(_ENGINES))}.")
+    return module
+
+
+def _engine_capability(module, name: str, engine: str):
+    """Some engine modules don't implement every capability yet (see
+    design notes's phasing) — surface that as a clear
+    FirewallError rather than an AttributeError."""
+    func = getattr(module, name, None)
+    if func is None:
+        raise FirewallError(f"The '{engine}' engine does not support this operation yet.")
+    return func
 
 
 def _validate_iface_list(value: str, field: str) -> None:
@@ -181,13 +204,14 @@ def get_profile(profile_id: int) -> dict:
     return _coerce_profile(dict(row))
 
 
-def create_profile(name: str, description: str = "") -> dict:
+def create_profile(name: str, description: str = "", engine: str = "nftables") -> dict:
+    _engine_module(engine)  # raises FirewallError if not a recognized engine
     now = now_iso()
     with get_db() as db:
         try:
             cur = db.execute(
-                "INSERT INTO firewall_profiles (name, description, active, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
-                (name, description, now, now),
+                "INSERT INTO firewall_profiles (name, description, engine, active, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)",
+                (name, description, engine, now, now),
             )
             db.commit()
         except sqlite3.IntegrityError as error:
@@ -242,7 +266,7 @@ def clone_profile(profile_id: int, new_name: str) -> dict:
     touch system rules directly), so a clone whose copies stayed pinned
     would make that escape hatch a dead end."""
     source = get_profile(profile_id)
-    new_profile = create_profile(new_name, f"Cloned from {source['name']}")
+    new_profile = create_profile(new_name, f"Cloned from {source['name']}", engine=source["engine"])
     with get_db() as db:
         rules = db.execute("SELECT * FROM firewall_rules WHERE profile_id = ? ORDER BY chain, position", (profile_id,)).fetchall()
         now = now_iso()
@@ -372,128 +396,18 @@ def move_rule(rule_id: int, direction: str) -> dict:
     return get_rule(rule_id)
 
 
-# ── Renderer ─────────────────────────────────────────────────────────────────
-
-def _quote(value: str) -> str:
-    return '"' + value.replace('"', '') + '"'
-
-
-def _iface_set(names: str, direction: str) -> str:
-    parts = [n.strip() for n in names.split(",") if n.strip()]
-    if not parts:
-        return ""
-    field = "iifname" if direction == "in" else "oifname"
-    if len(parts) == 1:
-        return f"{field} {_quote(parts[0])}"
-    return f"{field} {{ {', '.join(_quote(p) for p in parts)} }}"
-
-
-def _addr_family(value: str) -> str:
-    """'ip' or 'ip6' depending on whether the first token looks like an IPv6
-    literal/CIDR. Defaults to 'ip' (IPv4) for ranges like '10.0.0.1-10.0.0.9'
-    where ipaddress can't parse the whole expression directly."""
-    first = value.split(",")[0].split("-")[0].strip()
-    try:
-        return "ip6" if ipaddress.ip_network(first, strict=False).version == 6 else "ip"
-    except ValueError:
-        return "ip6" if ":" in first else "ip"
-
-
-def _addr_expr(field: str, value: str, negate: bool) -> str:
-    family = _addr_family(value)
-    parts = [p.strip() for p in value.split(",") if p.strip()]
-    expr = parts[0] if len(parts) == 1 else "{ " + ", ".join(parts) + " }"
-    neg = "!= " if negate else ""
-    return f"{family} {field} {neg}{expr}"
-
-
-def _port_expr(protocol: str, field: str, value: str) -> str:
-    parts = [p.strip() for p in value.split(",") if p.strip()]
-    expr = parts[0] if len(parts) == 1 else "{ " + ", ".join(parts) + " }"
-    # "tcp+udp" needs the protocol-agnostic transport-header field, since a
-    # single nft statement can't match "tcp dport X or udp dport X" otherwise.
-    prefix = "th" if protocol == "tcp+udp" else protocol
-    return f"{prefix} {field} {expr}"
-
-
-def _render_rule(rule: dict) -> str:
-    if not rule["enabled"]:
-        return ""
-    tokens: list[str] = []
-    if rule["iif"]:
-        tokens.append(_iface_set(rule["iif"], "in"))
-    if rule["oif"]:
-        tokens.append(_iface_set(rule["oif"], "out"))
-    protocol = rule["protocol"] or "any"
-    has_port_match = protocol in ("tcp", "udp") and (rule["sport"] or rule["dport"])
-    if protocol == "tcp+udp":
-        # "th dport/sport" below matches either protocol's port field, but
-        # doesn't by itself restrict to tcp/udp packets — needed regardless
-        # of whether a port match follows.
-        tokens.append("meta l4proto { tcp, udp }")
-    elif protocol not in ("any",) and not has_port_match:
-        # A dport/sport match on tcp/udp already implies the protocol (nft's
-        # `tcp`/`udp` keyword carries its own dependency) — an explicit
-        # `meta l4proto` alongside it would be redundant, not incorrect.
-        tokens.append(f"meta l4proto {protocol}")
-    if rule["src"]:
-        tokens.append(_addr_expr("saddr", rule["src"], bool(rule["src_negate"])))
-    if rule["dst"]:
-        tokens.append(_addr_expr("daddr", rule["dst"], bool(rule["dst_negate"])))
-    if rule["sport"] and protocol in ("tcp", "udp", "tcp+udp"):
-        tokens.append(_port_expr(protocol, "sport", rule["sport"]))
-    if rule["dport"] and protocol in ("tcp", "udp", "tcp+udp"):
-        tokens.append(_port_expr(protocol, "dport", rule["dport"]))
-    if rule["ct_state"]:
-        states = ",".join(p.strip() for p in rule["ct_state"].split(",") if p.strip())
-        tokens.append(f"ct state {states}")
-    if rule["icmp_type"] and protocol in ("icmp", "icmpv6"):
-        tokens.append(f"{protocol} type {rule['icmp_type']}")
-    tokens.append("counter")
-    if rule["log"]:
-        # Always tag with "osfw" regardless of any custom prefix the admin
-        # set — read_logs() greps kernel messages for exactly this tag, so a
-        # custom prefix without it would make that rule's log lines
-        # invisible to the Advanced tab's log viewer.
-        prefix = f"osfw-{rule['id']}: {rule['log_prefix']}" if rule["log_prefix"] else f"osfw-{rule['id']}: "
-        tokens.append(f'log prefix "{prefix}"')
-    if rule["rate_limit"]:
-        tokens.append(f"limit rate {rule['rate_limit']}")
-    if rule["action"] == "reject":
-        tokens.append(f"reject with {rule['reject_with']}" if rule["reject_with"] else "reject")
-    else:
-        tokens.append(rule["action"])
-    tokens.append(f'comment "osfw:{rule["id"]}"')
-    return "    " + " ".join(t for t in tokens if t) + ";"
-
+# ── Renderer (dispatched to the profile's engine module) ────────────────────
 
 def render_profile(profile_id: int) -> str:
-    """Pure — no side effects, no docker calls. rules -> nft text. Never
-    emits `flush ruleset`; always the atomic per-table replace idiom so
-    Docker's own iptables-nft tables are left untouched."""
+    """Pure — no side effects, no docker calls. rules -> engine-specific
+    ruleset text, via the profile's engine module (firewall_nft/
+    firewall_iptables)."""
     profile = get_profile(profile_id)
     rules = list_rules(profile_id)
     policies = _json_policies(profile["policies"])
-
-    lines = [
-        f"table inet {TABLE_NAME}",
-        f"delete table inet {TABLE_NAME}",
-        f"table inet {TABLE_NAME} {{",
-    ]
-    for chain in CHAINS:
-        hook = chain  # input/forward/output hooks share their chain name
-        policy = policies.get(chain, "accept")
-        lines.append(f"  chain {chain} {{")
-        lines.append(f"    type filter hook {hook} priority filter; policy {policy};")
-        for rule in [r for r in rules if r["chain"] == chain]:
-            rendered = _render_rule(rule)
-            if rendered:
-                lines.append(rendered)
-        lines.append("  }")
-    lines.append("}")
-    if profile["custom_nft"].strip():
-        lines.append(profile["custom_nft"])
-    return "\n".join(lines) + "\n"
+    module = _engine_module(profile["engine"])
+    render = _engine_capability(module, "render", profile["engine"])
+    return render(rules, policies, profile["custom_nft"])
 
 
 def _json_policies(raw: str) -> dict:
@@ -507,7 +421,7 @@ def _json_policies(raw: str) -> dict:
 # ── Validation (Layer 1: syntax) ─────────────────────────────────────────────
 
 def validate(profile_id: int) -> tuple[bool, str]:
-    """`nft -c` (check mode) against the rendered ruleset, inside a one-off
+    """Syntax/semantic check against the rendered ruleset, inside a one-off
     host-networked container so interface names and any already-loaded
     tables resolve exactly as they will at apply time. Nothing is applied.
 
@@ -519,20 +433,18 @@ def validate(profile_id: int) -> tuple[bool, str]:
     (_validate_rule_fields) also blocks the individual characters that would
     make this possible; this is defense in depth on top of that, not instead
     of it."""
+    profile = get_profile(profile_id)
+    module = _engine_module(profile["engine"])
+    validate_fn = _engine_capability(module, "validate", profile["engine"])
     rendered = render_profile(profile_id)
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
     token = hostnet.new_token()
-    pending_path = _STATE_DIR / f"validate-{token}.nft"
+    pending_path = _STATE_DIR / f"validate-{token}.{module.STATE_EXT}"
     pending_path.write_text(rendered)
     try:
-        ok, output = hostnet.run_host(
-            'nft -c -f "$1"', [str(pending_path)],
-            image="opensmart/netadmin", net_admin=True,
-            mounts={str(_STATE_DIR): str(_STATE_DIR)},
-        )
+        return validate_fn(rendered, pending_path)
     finally:
         pending_path.unlink(missing_ok=True)
-    return ok, output
 
 
 # ── Static lockout analysis (Layer 2) ───────────────────────────────────────
@@ -604,20 +516,24 @@ def _ip_in_expr(client_ip: str, expr: str, negate: bool) -> bool:
 # ── Live state ───────────────────────────────────────────────────────────────
 
 def live_state() -> dict:
-    """Does the opensmart_fw table exist on the host right now, and if so,
-    does it match what the active profile currently renders to (a "dirty"
-    flag — the profile was edited since the last apply, not "someone ran nft
-    by hand", which would need parsing the live JSON structurally)."""
-    ok, output = hostnet.run_host(
-        f"nft -j list table inet {TABLE_NAME} 2>/dev/null || echo '{{}}'",
-        image="opensmart/netadmin", net_admin=True,
-    )
+    """Does the active profile's engine have anything loaded on the host
+    right now, and if so, does it match what that profile currently renders
+    to (a "dirty" flag — the profile was edited since the last apply, not
+    "someone ran nft/iptables by hand", which would need parsing the live
+    state structurally). With no active profile, defaults to the nftables
+    engine purely to answer "is anything of ours loaded" — matches this
+    project's only engine before this feature, and is harmless either way
+    since is_applied() would report False with nothing loaded."""
+    profile = active_profile()
+    engine = profile["engine"] if profile else "nftables"
+    module = _engine_module(engine)
+    live_query = _engine_capability(module, "live_query", engine)
+    ok, output = live_query()
     if not ok:
         return {"applied": False, "detail": output}
-    applied = output.strip() not in ("", "{}")
+    applied = module.is_applied(output)
     dirty = False
-    profile = active_profile()
-    active_path = _STATE_DIR / "active.nft"
+    active_path = _STATE_DIR / f"active.{module.STATE_EXT}"
     if applied and profile is not None and active_path.is_file():
         dirty = active_path.read_text() != render_profile(profile["id"])
     return {"applied": applied, "raw": output, "dirty": dirty}
@@ -721,49 +637,6 @@ _APPLY_CONFIRM_MIN_SECONDS = 30
 _APPLY_CONFIRM_MAX_SECONDS = 600
 _APPLY_CONFIRM_DEFAULT_SECONDS = 60
 
-# Positional args: $1=token $2=confirm_seconds $3=state_dir. Never
-# string-interpolated — the token/timeout/dir are validated ints/paths
-# passed as real argv elements (see hostnet.py and firewall.apply()).
-_APPLY_SCRIPT = """
-set -uo pipefail
-TOKEN="$1"; TIMEOUT="$2"; STATE_DIR="$3"
-mkdir -p "$STATE_DIR/confirm" "$STATE_DIR/cancel" "$STATE_DIR/result"
-PENDING="$STATE_DIR/pending-$TOKEN.nft"
-ROLLBACK="$STATE_DIR/rollback-$TOKEN.nft"
-if [ ! -f "$PENDING" ]; then
-  echo "failed:pending ruleset file missing" > "$STATE_DIR/result/$TOKEN"
-  exit 1
-fi
-CURRENT="$(nft list table inet opensmart_fw 2>/dev/null)"
-if [ -n "$CURRENT" ]; then
-  { echo "table inet opensmart_fw"; echo "delete table inet opensmart_fw"; echo "$CURRENT"; } > "$ROLLBACK"
-else
-  echo "delete table inet opensmart_fw" > "$ROLLBACK"
-fi
-if ! nft -f "$PENDING"; then
-  echo "failed:nft -f apply failed" > "$STATE_DIR/result/$TOKEN"
-  exit 1
-fi
-i=0
-while [ "$i" -lt "$TIMEOUT" ]; do
-  if [ -f "$STATE_DIR/confirm/$TOKEN" ]; then
-    cp "$PENDING" "$STATE_DIR/active.nft"
-    echo "confirmed" > "$STATE_DIR/result/$TOKEN"
-    exit 0
-  fi
-  if [ -f "$STATE_DIR/cancel/$TOKEN" ]; then
-    nft -f "$ROLLBACK"
-    echo "reverted" > "$STATE_DIR/result/$TOKEN"
-    exit 0
-  fi
-  sleep 1
-  i=$((i + 1))
-done
-nft -f "$ROLLBACK"
-echo "reverted" > "$STATE_DIR/result/$TOKEN"
-"""
-
-
 def _ensure_apply_state_dirs() -> None:
     """Same reasoning as network_config._ensure_state_dirs(): 0o700, because
     a marker's mere presence is the entire authorization decision for the
@@ -797,6 +670,11 @@ def apply(profile_id: int, *, confirm_seconds: int = _APPLY_CONFIRM_DEFAULT_SECO
     existing = apply_status()
     if existing is not None and existing["state"] == "pending":
         raise FirewallError(f"Another apply (profile {existing['profile_id']}, token {existing['token'][:12]}…) is still pending — confirm or cancel it first.")
+    profile = get_profile(profile_id)
+    module = _engine_module(profile["engine"])
+    apply_script = getattr(module, "APPLY_SCRIPT", None)
+    if not apply_script:
+        raise FirewallError(f"The '{profile['engine']}' engine does not support apply yet.")
     ok, detail = validate(profile_id)
     if not ok:
         raise FirewallError(f"Ruleset failed syntax validation, nothing applied: {detail}")
@@ -804,7 +682,7 @@ def apply(profile_id: int, *, confirm_seconds: int = _APPLY_CONFIRM_DEFAULT_SECO
     rendered = render_profile(profile_id)
     _ensure_apply_state_dirs()
     token = hostnet.new_token()
-    pending_path = _STATE_DIR / f"pending-{token}.nft"
+    pending_path = _STATE_DIR / f"pending-{token}.{module.STATE_EXT}"
     pending_path.write_text(rendered)
     now = datetime.now(timezone.utc)
     expires_at = (now + timedelta(seconds=confirm_seconds)).isoformat()
@@ -814,9 +692,17 @@ def apply(profile_id: int, *, confirm_seconds: int = _APPLY_CONFIRM_DEFAULT_SECO
             (profile_id, token, actor, now.isoformat(), expires_at),
         )
         db.commit()
+    # At most one engine's artifacts are ever meant to be loaded at once —
+    # every apply first tears down every OTHER registered engine's artifacts
+    # inside the same watchdog run, so switching engines is just an ordinary
+    # apply and the invariant self-heals even if DB/kernel state ever drift.
+    teardown_other_engines = "\n".join(
+        other.teardown_fragment() for name, other in _ENGINES.items() if name != profile["engine"]
+    )
+    script = apply_script.replace("__TEARDOWN_OTHER_ENGINES__", teardown_other_engines)
     ok, detail = hostnet.run_host_detached(
         f"opensmart-fw-apply-{token[:12]}",
-        _APPLY_SCRIPT,
+        script,
         [token, str(confirm_seconds), str(_STATE_DIR)],
         image="opensmart/netadmin", net_admin=True,
         mounts={str(_STATE_DIR): str(_STATE_DIR)},
@@ -883,7 +769,8 @@ def apply_status() -> dict | None:
                 result["state"] = new_state
                 result["detail"] = detail
                 for prefix in ("pending", "rollback"):
-                    (_STATE_DIR / f"{prefix}-{result['token']}.nft").unlink(missing_ok=True)
+                    for module in _ENGINES.values():
+                        (_STATE_DIR / f"{prefix}-{result['token']}.{module.STATE_EXT}").unlink(missing_ok=True)
     return result
 
 
@@ -896,10 +783,10 @@ def list_applies(limit: int = 20) -> list[dict]:
 def reapply_active() -> None:
     """Startup hook. Fail-open by design (see the plan's Decisions): if
     nothing was ever confirmed, there's nothing to re-apply and the host
-    simply has no OpenSMART table until an admin applies one. If a
+    simply has no OpenSMART ruleset until an admin applies one. If a
     watchdog was killed mid-apply (host reboot, `docker kill`) before it
     could revert, the pending row is force-marked reverted here — the
-    active.nft file is only ever written by a CONFIRMED apply, so it's
+    active state file is only ever written by a CONFIRMED apply, so it's
     always safe to treat as "the last known-good state" and reload it."""
     with get_db() as db:
         pending = db.execute("SELECT id, token FROM firewall_applies WHERE state = 'pending' ORDER BY id DESC LIMIT 1").fetchone()
@@ -910,15 +797,15 @@ def reapply_active() -> None:
             )
             db.commit()
             logger.warning("firewall apply %s was left pending at startup — treating as reverted", pending["token"])
-    active_path = _STATE_DIR / "active.nft"
-    if not active_path.is_file():
+    profile = active_profile()
+    engine = profile["engine"] if profile else "nftables"
+    module = _engine_module(engine)
+    reapply_fn = getattr(module, "reapply", None)
+    active_path = _STATE_DIR / f"active.{module.STATE_EXT}"
+    if reapply_fn is None or not active_path.is_file():
         return
-    ok, detail = hostnet.run_host(
-        'nft -f "$1"', [str(active_path)],
-        image="opensmart/netadmin", net_admin=True,
-        mounts={str(_STATE_DIR): str(_STATE_DIR)},
-    )
+    ok, detail = reapply_fn(active_path)
     if not ok:
         logger.warning("startup firewall re-apply failed: %s", detail[:500])
     else:
-        logger.info("startup firewall re-apply: active.nft loaded")
+        logger.info("startup firewall re-apply: active.%s loaded", module.STATE_EXT)

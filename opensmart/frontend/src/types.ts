@@ -388,11 +388,14 @@ export type VpnStatus = {
 export type FirewallChain = 'input' | 'forward' | 'output';
 export type FirewallAction = 'accept' | 'drop' | 'reject';
 
+export type FirewallEngine = 'nftables' | 'iptables';
+
 export type FirewallProfile = {
   id: number;
   name: string;
   description: string;
   active: boolean;
+  engine: FirewallEngine;
   policies: string;
   custom_nft: string;
   created_at: string;

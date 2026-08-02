@@ -17,6 +17,7 @@ def _bad(error: fw.FirewallError) -> HTTPException:
 class ProfileCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=300)
+    engine: str = Field(default="nftables", max_length=20)
 
 
 class ProfileUpdate(BaseModel):
@@ -124,7 +125,7 @@ def list_profiles(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
 @router.post("/profiles")
 def create_profile(payload: ProfileCreate, admin: Annotated[dict, Depends(require_admin)]) -> dict:
     try:
-        profile = fw.create_profile(payload.name, payload.description)
+        profile = fw.create_profile(payload.name, payload.description, engine=payload.engine)
     except fw.FirewallError as error:
         raise _bad(error) from error
     write_audit_event("firewall_profile_create", admin["id"], admin["username"], f"profile:{profile['id']}", "", payload.name)
