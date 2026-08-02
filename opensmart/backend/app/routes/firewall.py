@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from .. import firewall as fw
+from .. import firewall_import as fwi
 from ..database import write_audit_event
 from ..security import get_client_ip, require_admin, require_admin_read
 
@@ -11,6 +12,10 @@ router = APIRouter(prefix="/api/firewall", tags=["firewall"])
 
 
 def _bad(error: fw.FirewallError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
+
+
+def _import_bad(error: fwi.FirewallImportError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
 
 
@@ -101,6 +106,27 @@ class TokenPayload(BaseModel):
     token: str = Field(min_length=1, max_length=64)
 
 
+class ImportParseRequest(BaseModel):
+    engine: str = Field(max_length=20)
+    text: str = Field(max_length=2_000_000)
+
+
+class ImportConfirmRequest(BaseModel):
+    engine: str = Field(max_length=20)
+    profile_name: str = Field(min_length=1, max_length=80)
+    profile_description: str = Field(default="", max_length=300)
+    # Loosely typed on purpose — each row is validated field-by-field by
+    # firewall.create_rule() itself (the same validation any hand-entered
+    # rule goes through), so this endpoint doesn't need its own duplicate
+    # schema. A row may carry a client-side-only "skip": true to omit it.
+    rules: list[dict] = Field(default_factory=list)
+    # Maps an interface name FOUND IN THE IMPORT to an interface name to
+    # actually use ("" means "clear it — match any interface").  Applied to
+    # every rule's iif/oif before creation, never partially — an import
+    # that references an interface the admin didn't map is used as typed.
+    interface_map: dict[str, str] = Field(default_factory=dict)
+
+
 def _clean(payload: BaseModel) -> dict:
     return {k: v for k, v in payload.model_dump().items() if v is not None}
 
@@ -177,6 +203,47 @@ def preview_profile(profile_id: int, _: Annotated[dict, Depends(require_admin_re
         return {"nft": fw.render_profile(profile_id)}
     except fw.FirewallError as error:
         raise _bad(error) from error
+
+
+@router.post("/import/parse")
+def import_parse(payload: ImportParseRequest, _: Annotated[dict, Depends(require_admin)]) -> dict:
+    """Parses an uploaded ruleset into a DRAFT — nothing is saved here. The
+    admin reviews the result (rules/warnings/unsupported/interfaces_found)
+    and, if they proceed, calls /import/confirm with the (possibly edited)
+    rows and an interface mapping."""
+    try:
+        return fwi.parse(payload.engine, payload.text)
+    except fwi.FirewallImportError as error:
+        raise _import_bad(error) from error
+
+
+@router.post("/import/confirm")
+def import_confirm(payload: ImportConfirmRequest, admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    """Creates a NEW profile from the reviewed draft — never merges into an
+    existing one. Every row still goes through firewall.create_rule()'s
+    normal field validation, so a parser output that slipped past parsing
+    but wouldn't actually render/apply is still caught here, same as a
+    hand-entered rule would be."""
+    try:
+        profile = fw.create_profile(payload.profile_name, payload.profile_description, engine=payload.engine)
+        created = 0
+        for row in payload.rules:
+            if row.get("skip"):
+                continue
+            fields = {key: value for key, value in row.items() if key != "skip"}
+            for side in ("iif", "oif"):
+                if fields.get(side):
+                    remapped = [payload.interface_map.get(part.strip(), part.strip()) for part in fields[side].split(",")]
+                    fields[side] = ",".join(part for part in remapped if part)
+            fw.create_rule(profile["id"], fields)
+            created += 1
+    except fw.FirewallError as error:
+        raise _bad(error) from error
+    write_audit_event(
+        "firewall_import", admin["id"], admin["username"], f"profile:{profile['id']}", "",
+        f"engine={payload.engine} rules_created={created}",
+    )
+    return {"profile": profile, "created": created}
 
 
 @router.post("/profiles/{profile_id}/validate")

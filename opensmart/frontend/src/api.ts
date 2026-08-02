@@ -1,4 +1,4 @@
-import type { AuditEvent, DataInfo, FirewallAlias, FirewallApply, FirewallApplyResult, FirewallEngine, FirewallLiveState, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
+import type { AuditEvent, DataInfo, FirewallAlias, FirewallApply, FirewallApplyResult, FirewallEngine, FirewallImportDraft, FirewallImportDraftRule, FirewallImportResult, FirewallLiveState, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, HostInterface, HostResources, IdsSource, IdsSummary, LogonInfo, ModuleConfig, MtuApply, MtuApplyResult, NetworkIdsAlert, NetworkIdsAttackMap, NetworkIdsConfig, NetworkIdsSummary, NetworkInterface, NetworkTrafficConfig, NetworkTrafficSummary, OpenSmartModule, ProvisioningOverview, ProvisionResult, ResourcePoint, ResourceStatus, SchemaCheckResult, SessionInfo, Settings, StatusItem, ToolConfig, User, VpnCa, VpnInstance, VpnSettings, VpnStatus, VpnUser } from './types';
 
 let csrfToken = '';
 
@@ -133,6 +133,13 @@ export const api = {
   fwRules: (profileId: number) => request<{ rules: FirewallRule[] }>(`/api/firewall/profiles/${profileId}/rules`),
   fwPreview: (profileId: number) => request<{ nft: string }>(`/api/firewall/profiles/${profileId}/preview`),
   fwValidate: (profileId: number) => request<FirewallValidateResult>(`/api/firewall/profiles/${profileId}/validate`, { method: 'POST' }),
+  fwImportParse: (engine: FirewallEngine, text: string) =>
+    request<FirewallImportDraft>('/api/firewall/import/parse', { method: 'POST', body: JSON.stringify({ engine, text }) }),
+  fwImportConfirm: (engine: FirewallEngine, profileName: string, profileDescription: string, rules: FirewallImportDraftRule[], interfaceMap: Record<string, string>) =>
+    request<FirewallImportResult>('/api/firewall/import/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ engine, profile_name: profileName, profile_description: profileDescription, rules, interface_map: interfaceMap }),
+    }),
   fwLive: () => request<FirewallLiveState>('/api/firewall/live'),
   fwLogs: (lines = 200) => request<{ lines: string[] }>('/api/firewall/logs', { method: 'POST', body: JSON.stringify({ lines }) }),
   fwUpdateRule: (ruleId: number, fields: Partial<FirewallRule>) =>

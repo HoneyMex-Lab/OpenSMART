@@ -457,6 +457,17 @@ export type FirewallSummary = {
 
 export type FirewallValidateResult = { ok: boolean; detail: string; warnings: string[] };
 
+export type FirewallImportDraftRule = Partial<FirewallRule> & { skip?: boolean };
+
+export type FirewallImportDraft = {
+  rules: FirewallImportDraftRule[];
+  warnings: string[];
+  unsupported: { line: string; reason: string }[];
+  interfaces_found: string[];
+};
+
+export type FirewallImportResult = { profile: FirewallProfile; created: number };
+
 export type FirewallApplyResult = { token: string; expires_at: string; warnings: string[] };
 
 export type FirewallAlias = {

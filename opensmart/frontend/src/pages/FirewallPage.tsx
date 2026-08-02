@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { ChangeEvent, useEffect, useState } from 'react';
 import { api } from '../api';
-import type { FirewallAlias, FirewallChain, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, NetworkInterface } from '../types';
+import type { FirewallAlias, FirewallChain, FirewallEngine, FirewallImportDraft, FirewallImportDraftRule, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, NetworkInterface } from '../types';
 
 type Tab = 'overview' | 'rules' | 'aliases' | 'advanced';
 
@@ -151,7 +151,7 @@ export default function FirewallPage() {
       {tab === 'rules' && summary?.active_profile && <RulesTab profileId={summary.active_profile.id} onChanged={load} />}
       {tab === 'rules' && !summary?.active_profile && <p className="muted">No active profile.</p>}
       {tab === 'aliases' && <AliasesTab />}
-      {tab === 'advanced' && summary?.active_profile && <AdvancedTab profileId={summary.active_profile.id} />}
+      {tab === 'advanced' && summary?.active_profile && <AdvancedTab profileId={summary.active_profile.id} engine={summary.active_profile.engine} onImported={load} />}
     </section>
   );
 }
@@ -605,7 +605,17 @@ function ruleSummary(rule: FirewallRule): string {
   return parts.join(' ') || 'any traffic';
 }
 
-function AdvancedTab({ profileId }: { profileId: number }) {
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function AdvancedTab({ profileId, engine, onImported }: { profileId: number; engine: FirewallEngine; onImported: () => void }) {
   const [nft, setNft] = useState('');
   const [validation, setValidation] = useState<FirewallValidateResult | null>(null);
   const [validating, setValidating] = useState(false);
@@ -615,12 +625,14 @@ function AdvancedTab({ profileId }: { profileId: number }) {
   const [customNft, setCustomNft] = useState('');
   const [customDirty, setCustomDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [profileName, setProfileName] = useState('');
 
   async function load() {
     try {
       setNft((await api.fwPreview(profileId)).nft);
       const profile = (await api.fwProfiles()).profiles.find((p) => p.id === profileId);
       setCustomNft(profile?.custom_nft || '');
+      setProfileName(profile?.name || 'profile');
       setCustomDirty(false);
       setError('');
     } catch (err) {
@@ -628,6 +640,11 @@ function AdvancedTab({ profileId }: { profileId: number }) {
     }
   }
   useEffect(() => { load(); }, [profileId]);
+
+  function exportRuleset() {
+    const extension = engine === 'iptables' ? 'iptables' : 'nft';
+    downloadText(`${profileName || 'firewall-profile'}.${extension}`, nft);
+  }
 
   async function validate() {
     setValidating(true);
@@ -663,7 +680,8 @@ function AdvancedTab({ profileId }: { profileId: number }) {
       {error && <p className="error-text">{error}</p>}
       <div className="config-save-bar">
         <button className="btn-secondary" onClick={load}>Refresh</button>
-        <button onClick={validate} disabled={validating}>{validating ? 'Validating…' : 'Validate now (nft -c)'}</button>
+        <button onClick={validate} disabled={validating}>{validating ? 'Validating…' : `Validate now (${engine === 'iptables' ? 'iptables-restore --test' : 'nft -c'})`}</button>
+        <button className="btn-secondary" onClick={exportRuleset}>Export ruleset</button>
       </div>
       {validation && (
         <div className={validation.ok ? 'wizard-summary-ok' : 'error-box'} role={validation.ok ? undefined : 'alert'}>
@@ -675,24 +693,32 @@ function AdvancedTab({ profileId }: { profileId: number }) {
           )}
         </div>
       )}
-      <label className="subheading">
-        Custom nft snippet (advanced — appended verbatim inside the generated table, validated with the rest)
-        <textarea
-          className="ids-editor"
-          value={customNft}
-          rows={6}
-          onChange={(event) => { setCustomNft(event.target.value); setCustomDirty(true); }}
-        />
-      </label>
-      {customDirty && (
-        <div className="config-save-bar">
-          <button onClick={saveCustomNft} disabled={saving}>{saving ? 'Saving…' : 'Save snippet'}</button>
-        </div>
+      {engine === 'nftables' ? (
+        <>
+          <label className="subheading">
+            Custom nft snippet (advanced — appended verbatim inside the generated table, validated with the rest)
+            <textarea
+              className="ids-editor"
+              value={customNft}
+              rows={6}
+              onChange={(event) => { setCustomNft(event.target.value); setCustomDirty(true); }}
+            />
+          </label>
+          {customDirty && (
+            <div className="config-save-bar">
+              <button onClick={saveCustomNft} disabled={saving}>{saving ? 'Saving…' : 'Save snippet'}</button>
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="muted">The custom-snippet escape hatch is nftables-only in this release.</p>
       )}
       <label className="subheading">
         Generated ruleset (read-only — this is exactly what would be applied)
         <textarea className="ids-editor" value={nft} readOnly rows={20} />
       </label>
+
+      <ImportPanel onImported={onImported} />
 
       <div className="section-actions">
         <h4 style={{ margin: 0 }}>Logs</h4>
@@ -703,6 +729,159 @@ function AdvancedTab({ profileId }: { profileId: number }) {
         <textarea className="ids-editor" value={logLines.join('\n')} readOnly rows={12} />
       )}
     </article>
+  );
+}
+
+function ImportPanel({ onImported }: { onImported: () => void }) {
+  const [importEngine, setImportEngine] = useState<FirewallEngine>('iptables');
+  const [fileText, setFileText] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [draft, setDraft] = useState<FirewallImportDraft | null>(null);
+  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([]);
+  const [interfaceMap, setInterfaceMap] = useState<Record<string, string>>({});
+  const [newProfileName, setNewProfileName] = useState('');
+  const [parsing, setParsing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<{ created: number; profileName: string } | null>(null);
+
+  useEffect(() => { api.netInterfaces().then((res) => setInterfaces(res.interfaces)).catch(() => undefined); }, []);
+
+  function pickFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => setFileText(String(reader.result || ''));
+    reader.readAsText(file);
+  }
+
+  async function parseFile() {
+    if (!fileText.trim()) return;
+    setParsing(true);
+    setError('');
+    setResult(null);
+    try {
+      const parsed = await api.fwImportParse(importEngine, fileText);
+      setDraft(parsed);
+      const known = new Set(interfaces.map((iface) => iface.name));
+      const initialMap: Record<string, string> = {};
+      parsed.interfaces_found.forEach((name) => { if (!known.has(name)) initialMap[name] = ''; });
+      setInterfaceMap(initialMap);
+      setNewProfileName(`Imported ${importEngine} profile`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not parse the file');
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  function toggleSkip(index: number) {
+    if (!draft) return;
+    const rules = draft.rules.map((rule, i) => (i === index ? { ...rule, skip: !rule.skip } : rule));
+    setDraft({ ...draft, rules });
+  }
+
+  async function confirmImport() {
+    if (!draft || !newProfileName.trim()) return;
+    setImporting(true);
+    setError('');
+    try {
+      const res = await api.fwImportConfirm(importEngine, newProfileName.trim(), `Imported from ${fileName || 'uploaded file'}`, draft.rules, interfaceMap);
+      setResult({ created: res.created, profileName: res.profile.name });
+      setDraft(null);
+      setFileText('');
+      setFileName('');
+      onImported();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const knownInterfaceNames = new Set(interfaces.map((iface) => iface.name));
+  const unknownInterfaces = draft ? draft.interfaces_found.filter((name) => !knownInterfaceNames.has(name)) : [];
+
+  return (
+    <div className="config-item">
+      <h4>Import ruleset</h4>
+      <p className="muted">
+        Reads an existing ruleset file, parses it into a reviewable draft, and — after you confirm — creates a{' '}
+        <strong>new</strong> profile from it (never merges into an existing one). Anything this importer doesn't
+        recognize is listed below rather than guessed at.
+      </p>
+      <label>Source engine
+        <select value={importEngine} onChange={(event) => { setImportEngine(event.target.value as FirewallEngine); setDraft(null); }}>
+          <option value="iptables">iptables (iptables-save format)</option>
+          <option value="nftables">nftables (nft -j list ruleset JSON)</option>
+        </select>
+      </label>
+      <label>Ruleset file
+        <input type="file" accept=".txt,.json,.rules,.nft,.iptables" onChange={pickFile} />
+      </label>
+      {fileName && <p className="muted">Selected: {fileName}</p>}
+      <div className="config-save-bar">
+        <button onClick={parseFile} disabled={parsing || !fileText.trim()}>{parsing ? 'Parsing…' : 'Parse'}</button>
+      </div>
+      {error && <p className="error-text">{error}</p>}
+      {result && <p className="wizard-summary-ok">Imported {result.created} rule(s) into new profile "{result.profileName}". Review and apply it from the Overview tab when ready.</p>}
+
+      {draft && (
+        <>
+          <p className="muted">
+            Parsed {draft.rules.length} rule(s). {draft.unsupported.length > 0 && `${draft.unsupported.length} line(s) were not recognized and won't be imported.`}
+          </p>
+          {draft.warnings.length > 0 && (
+            <ul>{draft.warnings.map((warning) => <li key={warning} className="muted">{warning}</li>)}</ul>
+          )}
+          {draft.unsupported.length > 0 && (
+            <table className="status-table">
+              <thead><tr><th>Line</th><th>Reason</th></tr></thead>
+              <tbody>
+                {draft.unsupported.map((item, index) => (
+                  <tr key={index}><td className="status-table-detail muted">{item.line}</td><td className="status-table-detail muted">{item.reason}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {unknownInterfaces.length > 0 && (
+            <>
+              <h4>Map unknown interfaces</h4>
+              <p className="muted">These interface names appear in the import but aren't in this platform's interface registry. Map each to an existing interface, or leave blank to drop that interface from its rule(s).</p>
+              {unknownInterfaces.map((name) => (
+                <label key={name}>{name}
+                  <select value={interfaceMap[name] || ''} onChange={(event) => setInterfaceMap({ ...interfaceMap, [name]: event.target.value })}>
+                    <option value="">— drop (match any interface) —</option>
+                    {interfaces.map((iface) => <option key={iface.name} value={iface.name}>{iface.alias ? `${iface.alias} (${iface.name})` : iface.name}</option>)}
+                  </select>
+                </label>
+              ))}
+            </>
+          )}
+          <table className="status-table">
+            <thead><tr><th>Import</th><th>Chain</th><th>Action</th><th>Match</th><th>Description</th></tr></thead>
+            <tbody>
+              {draft.rules.map((rule, index) => (
+                <tr key={index}>
+                  <td><input type="checkbox" checked={!rule.skip} onChange={() => toggleSkip(index)} /></td>
+                  <td>{rule.chain}</td>
+                  <td>{rule.action}</td>
+                  <td className="status-table-detail muted">{ruleSummary(rule as FirewallRule)}</td>
+                  <td className="status-table-detail muted">{rule.description || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <label>New profile name
+            <input value={newProfileName} onChange={(event) => setNewProfileName(event.target.value)} maxLength={80} />
+          </label>
+          <div className="config-save-bar">
+            <button onClick={confirmImport} disabled={importing || !newProfileName.trim()}>{importing ? 'Importing…' : 'Create profile from import'}</button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
