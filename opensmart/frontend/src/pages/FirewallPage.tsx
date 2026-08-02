@@ -363,27 +363,38 @@ function RulesTab({ profileId, onChanged }: { profileId: number; onChanged: () =
               <table className="status-table">
                 <thead><tr><th>#</th><th>On</th><th>Action</th><th>Match</th><th>Description</th><th></th></tr></thead>
                 <tbody>
-                  {chainRules.map((rule, index) => (
-                    <tr key={rule.id}>
+                  {chainRules.map((rule, index) => {
+                    const isAllowlist = rule.system_rule === 2 || rule.system_rule === 3;
+                    return (
+                    <tr key={rule.id} className={rule.system_rule ? 'status-table-management-row' : ''}>
                       <td>{rule.position}</td>
                       <td>
-                        <button role="switch" aria-checked={rule.enabled} className={`toggle-switch ${rule.enabled ? 'on' : ''}`} onClick={() => toggleEnabled(rule)}>
-                          <span className="toggle-thumb" />
-                        </button>
+                        {isAllowlist ? (
+                          <span className="badge muted" title="Management rules can't be turned off — edit the allowed network instead">Always on</span>
+                        ) : (
+                          <button role="switch" aria-checked={rule.enabled} className={`toggle-switch ${rule.enabled ? 'on' : ''}`} onClick={() => toggleEnabled(rule)}>
+                            <span className="toggle-thumb" />
+                          </button>
+                        )}
                       </td>
-                      <td><span className={`badge ${rule.action === 'accept' ? 'ok-dim' : rule.action === 'drop' ? 'muted' : 'warning'}`}>{rule.action}{rule.system_rule === 2 ? ' · allowlist' : rule.system_rule ? ' · system' : ''}</span></td>
+                      <td>
+                        <span className={`badge ${rule.action === 'accept' ? 'ok-dim' : rule.action === 'drop' ? 'muted' : 'warning'}`}>{rule.action}</span>
+                        {isAllowlist && <span className="badge management-badge">{rule.system_rule === 3 ? 'management · SSH' : 'management · Web'}</span>}
+                        {!isAllowlist && rule.system_rule === 1 && <span className="badge management-badge">management</span>}
+                      </td>
                       <td className="status-table-detail muted">{ruleSummary(rule)}</td>
                       <td className="status-table-detail muted">{rule.description || '—'}</td>
                       <td>
                         <div className="config-save-bar" style={{ margin: 0 }}>
                           {!rule.system_rule && <button className="btn-secondary" onClick={() => moveRule(rule, 'up')} disabled={index === 0}>↑</button>}
                           {!rule.system_rule && <button className="btn-secondary" onClick={() => moveRule(rule, 'down')} disabled={index === chainRules.length - 1}>↓</button>}
-                          {(!rule.system_rule || rule.system_rule === 2) && <button className="btn-secondary" onClick={() => startEdit(rule)}>Edit</button>}
+                          {(!rule.system_rule || isAllowlist) && <button className="btn-secondary" onClick={() => startEdit(rule)}>Edit</button>}
                           {!rule.system_rule && <button className="btn-secondary" onClick={() => deleteRule(rule)}>Delete</button>}
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -456,25 +467,33 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
   }
 
   // Allowlist-managed rules (the initial-Wizard's dedicated SSH/443 rules):
-  // only src/src_negate/enabled are editable server-side — everything else
-  // is rejected by firewall.update_rule(). Show a reduced form rather than
-  // a full editor whose other fields would silently fail to save.
-  if (draft.system_rule === 2) {
+  // only src/src_negate are editable server-side — everything else,
+  // including enabled/disabled, is rejected by firewall.update_rule().
+  // Show a reduced form rather than a full editor whose other fields
+  // would silently fail to save. Tier 2 (Web/443) and tier 3 (SSH/22)
+  // have OPPOSITE empty-network defaults — see firewall.py's
+  // _effective_rules() — so the copy below is tailored per tier rather
+  // than shared, to avoid telling an admin editing the SSH rule that an
+  // empty network "allows every network" when it actually blocks SSH
+  // entirely.
+  if (draft.system_rule === 2 || draft.system_rule === 3) {
+    const restrictive = draft.system_rule === 3;
     return (
       <div className="confirm-overlay">
         <div className="confirm-dialog card" style={{ maxWidth: 640 }}>
           <h3>Edit allowlist — {draft.description}</h3>
           <p className="muted">
-            This rule is managed by the Firewall's allowlist feature — only the allowed network can be changed here.
-            Leave it empty to allow every network (today's default); adding a network restricts this rule to just that
-            network. Clone the profile if you need to customize the chain, protocol, or port.
+            This rule is managed by the Firewall's allowlist feature — only the allowed network can be changed here,
+            and it can't be turned off. {restrictive
+              ? 'Leave it empty and NO SSH connections are allowed (safe default); adding a network restricts SSH to just that network.'
+              : 'Leave it empty to allow every network (today\'s default); adding a network restricts this rule to just that network.'}
+            {' '}Clone the profile if you need to customize the chain, protocol, or port.
           </p>
           <div className="stack-form">
-            <label>Allowed network/host (optional — empty means "allow any")
+            <label>Allowed network/host ({restrictive ? 'optional — empty means "block all SSH"' : 'optional — empty means "allow any"'})
               <input value={draft.src || ''} onChange={(event) => set('src', event.target.value)} placeholder="10.0.0.0/8" />
             </label>
             <label className="vpn-inline-check"><input type="checkbox" checked={!!draft.src_negate} onChange={(event) => set('src_negate', event.target.checked)} /> Negate (allow everyone EXCEPT this network)</label>
-            <label className="vpn-inline-check"><input type="checkbox" checked={!!draft.enabled} onChange={(event) => set('enabled', event.target.checked)} /> Enabled</label>
           </div>
           <div className="confirm-actions">
             <button className="btn-secondary" onClick={onCancel}>Cancel</button>

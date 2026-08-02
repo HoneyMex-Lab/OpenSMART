@@ -711,23 +711,30 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
           <h2>Access allowlist</h2>
           <p className="muted">
             Optionally restrict web console (tcp/443) and SSH (tcp/22) access to a specific network, host, or IP.
-            If you leave a field empty, that port stays open to any network — the platform's current safe default —
-            but it's recommended to add a custom allowlist once you know where you'll be managing this system from.
+            These two ports have different safe defaults: the web console stays open to any network if you leave it
+            blank, while SSH stays closed to everyone until you add a network — you can always change either later
+            from the Firewall page's Rules tab.
           </p>
           {(!sshRule || !webRule) ? (
             <p className="muted">Loading current firewall rules…</p>
           ) : (
             <>
-              <label>Web console (tcp/443) — allowed network/host (optional)
+              <label>Web console (tcp/443) — allowed network/host (optional — blank allows any network)
                 <input value={webAllow} onChange={(event) => setWebAllow(event.target.value)} placeholder="10.0.0.0/8" />
               </label>
-              <label>SSH (tcp/22) — allowed network/host (optional)
+              <label>SSH (tcp/22) — allowed network/host (optional — blank blocks all SSH access)
                 <input value={sshAllow} onChange={(event) => setSshAllow(event.target.value)} placeholder="10.0.0.0/8" />
               </label>
-              {!webAllow.trim() && !sshAllow.trim() && (
+              {!webAllow.trim() && (
                 <p className="wizard-summary-warning">
-                  No custom allowlist set — web console and SSH will remain open to any network. You can add one later
-                  from the Firewall page's Rules tab (look for the rules named "{ALLOWLIST_WEB_NAME}" /
+                  No custom allowlist set for the web console — it will remain open to any network. You can add one
+                  later from the Firewall page's Rules tab (look for the rule named "{ALLOWLIST_WEB_NAME}").
+                </p>
+              )}
+              {!sshAllow.trim() && (
+                <p className="wizard-summary-warning">
+                  No custom allowlist set for SSH — SSH access will be blocked from every network, including your
+                  own. You can add one later from the Firewall page's Rules tab (look for the rule named
                   "{ALLOWLIST_SSH_NAME}").
                 </p>
               )}

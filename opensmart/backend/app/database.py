@@ -852,9 +852,18 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             )
             profile_id = cur.lastrowid
             # system_rule tiers: 1 = fully pinned (position/fields locked,
-            # enable/disable only); 2 = allowlist-managed (src/src_negate
-            # also editable, subject to firewall._validate_allowlist_src —
-            # see earlier revision's Wizard allowlist step and rule manager).
+            # enable/disable only); 2 = allowlist-managed, permissive-when-
+            # empty (Web/443 — an empty src still accepts everyone); 3 =
+            # allowlist-managed, restrictive-when-empty (SSH/22 — an empty
+            # src means the rule matches nothing, see
+            # firewall._effective_rules()). Neither 2 nor 3 can be manually
+            # enabled/disabled — only src/src_negate are editable (see
+            # firewall.update_rule()).
+            #
+            # Only port 443 gets a seeded rule: it's the one real path to
+            # the web console (the app container itself is published
+            # loopback-only, and plain HTTP is redirect-only by default) —
+            # see earlier revision R1.
             safety_rules = [
                 # chain, position, system_rule, action, protocol, iif, oif, dport, ct_state, description
                 ("input", 1, 1, "accept", "any", "lo", "", "", "", "Loopback"),
@@ -862,10 +871,9 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 # These two are the ones the initial-Wizard allowlist step and
                 # the rule manager's "Allowlist management" edit both target —
                 # renaming or duplicating them would break that link (see
-                # firewall.update_rule()'s system_rule=2 handling).
-                ("input", 3, 2, "accept", "tcp", "", "", "22", "", "Allowlist management SSH"),
+                # firewall.update_rule()'s _ALLOWLIST_TIERS handling).
+                ("input", 3, 3, "accept", "tcp", "", "", "22", "", "Allowlist management SSH"),
                 ("input", 4, 2, "accept", "tcp", "", "", "443", "", "Allowlist management Web"),
-                ("input", 5, 1, "accept", "tcp", "", "", "80,8000", "", "HTTP / direct-access web console"),
                 ("forward", 1, 1, "accept", "any", "docker0,br-*", "", "", "", "Docker bridge traffic (inbound)"),
                 ("forward", 2, 1, "accept", "any", "", "docker0,br-*", "", "", "Docker bridge traffic (outbound)"),
                 ("forward", 3, 1, "accept", "any", "", "", "", "established,related", "Existing/related connections"),
@@ -886,13 +894,33 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
         # regardless of what a new rule restricts. Idempotent: only matches
         # rows still at the pre-migration description, so re-running this
         # (or an admin renaming their own copy back) doesn't re-fire.
+        # SSH lands on system_rule=3 (restrictive-when-empty), not 2 — see
+        # firewall._effective_rules() and the R9 requirement this
+        # implements: an SSH allowlist that's never been set means SSH is
+        # blocked, not open, unlike the Web rule.
         db.execute(
-            "UPDATE firewall_rules SET system_rule = 2, description = 'Allowlist management SSH' "
+            "UPDATE firewall_rules SET system_rule = 3, description = 'Allowlist management SSH' "
             "WHERE system_rule = 1 AND description = 'SSH management access'"
         )
         db.execute(
             "UPDATE firewall_rules SET system_rule = 2, description = 'Allowlist management Web' "
             "WHERE system_rule = 1 AND description = 'HTTPS web console (always allowed — prevents lockout)'"
+        )
+        # A later revision (still earlier revision) upgraded the SSH rule again,
+        # from the permissive tier 2 it was first migrated into, to the
+        # restrictive tier 3 above — covers installs that already ran the
+        # migration immediately above this one before tier 3 existed.
+        db.execute(
+            "UPDATE firewall_rules SET system_rule = 3 "
+            "WHERE system_rule = 2 AND description = 'Allowlist management SSH'"
+        )
+        # R1: only port 443 is a real path to the web console (the app
+        # container is published loopback-only; plain HTTP is redirect-only
+        # by default) — the separate always-open 80/8000 rule is removed
+        # rather than just disabled, so it doesn't linger as a phantom row
+        # a future "enable it back" action could resurrect.
+        db.execute(
+            "DELETE FROM firewall_rules WHERE system_rule = 1 AND description = 'HTTP / direct-access web console'"
         )
         # Backfill network_interfaces rows from the legacy monitor_interfaces
         # setting (comma-separated interface names chosen in the Wizard), so

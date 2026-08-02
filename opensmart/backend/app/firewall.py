@@ -41,7 +41,13 @@ _VALID_REJECT_WITH = {
     "", "tcp reset", "icmp port-unreachable", "icmp admin-prohibited",
     "icmpv6 port-unreachable", "icmpv6 admin-prohibited",
 }
-_MANAGEMENT_PORTS = {"22", "80", "443", "8000"}
+_SSH_PORTS = {"22"}
+# Only 443 is a real path to the web console: the app container itself is
+# published loopback-only (127.0.0.1:8000, never reachable over the
+# network), and plain HTTP (80) is redirect-only in this app's default
+# proxy mode — neither is "serving access" the way 443 is.
+_WEB_PORTS = {"443"}
+_MANAGEMENT_PORTS = _SSH_PORTS | _WEB_PORTS
 
 _STATE_DIR = CONTAINERS_ROOT / "firewall" / "volumes" / "state"
 
@@ -129,14 +135,14 @@ def _validate_port_list(value: str, field: str) -> None:
 
 
 def _validate_allowlist_src(value: str) -> None:
-    """Lockout-prevention for system_rule=2 (allowlist-managed) rules: per
-    the issue, adding ANY non-empty src makes the allowlist "effective"
-    (the rule now only accepts from that network, and the drop policy
-    catches everything else) — but 0.0.0.0, 255.255.255.255, ::, or any
-    CIDR expression equivalent to "every address" would give the false
-    impression of a restriction while functionally allowing everyone (or,
-    for 255.255.255.255, being a meaningless "network" to restrict to).
-    This blocks SAVING outright rather than just warning, per the issue —
+    """Lockout-prevention for allowlist-managed rules (system_rule 2 = Web,
+    permissive-when-empty; system_rule 3 = SSH, restrictive-when-empty —
+    see _effective_rules()). Adding a non-empty src always narrows the rule
+    to just that network, on either tier — but 0.0.0.0, 255.255.255.255,
+    ::, or any CIDR expression equivalent to "every address" would give
+    the false impression of a restriction while functionally allowing
+    everyone (or, for 255.255.255.255, being a meaningless "network" to
+    restrict to). This blocks SAVING outright rather than just warning —
     it's a lockout-prevention control, not a cosmetic one."""
     everyone_addresses = {ipaddress.ip_address("0.0.0.0"), ipaddress.ip_address("255.255.255.255"), ipaddress.ip_address("::")}
     for part in value.split(","):
@@ -384,13 +390,17 @@ def active_profile() -> dict | None:
 
 
 def allowlist_status() -> dict:
-    """Whether the platform is currently open to any network on the
-    allowlist-managed ports — drives the global warning banner (see
-    routes/firewall.py's summary() and AppShell.tsx). Only meaningful when
-    the Firewall module is actually enabled and the active profile enforces
-    a drop policy on input; a module that isn't enabled, or a profile that
-    accepts everything by design, has no lockout-prevention story to warn
-    about, so 'open' stays false in either case."""
+    """Whether the web console (system_rule=2, permissive-when-empty) is
+    currently open to any network — drives the global warning banner (see
+    routes/firewall.py's summary() and AppShell.tsx). Deliberately checks
+    system_rule == 2 only, not 3: the SSH management rule (system_rule=3)
+    is restrictive-when-empty (see _effective_rules()), so an empty src
+    there means SSH is BLOCKED, not open — the opposite of what this
+    banner warns about. Only meaningful when the Firewall module is
+    actually enabled and the active profile enforces a drop policy on
+    input; a module that isn't enabled, or a profile that accepts
+    everything by design, has no lockout-prevention story to warn about,
+    so 'open' stays false in either case."""
     with get_db() as db:
         module_row = db.execute("SELECT enabled FROM opensmart_modules WHERE name = 'Firewall'").fetchone()
     if module_row is None or not module_row["enabled"]:
@@ -453,21 +463,28 @@ def get_rule(rule_id: int) -> dict:
     return _coerce_rule(dict(row))
 
 
-_ALLOWLIST_EDITABLE_FIELDS = {"enabled", "src", "src_negate"}
+# Allowlist-managed tiers: 2 = permissive-when-empty (Web/443), 3 =
+# restrictive-when-empty (SSH/22) — see _effective_rules(). Neither can be
+# manually enabled/disabled (that would let an admin silently defeat the
+# restrictive-by-default SSH behavior, or just adds a confusing second
+# on/off switch alongside "did you set a network") — only the network
+# itself is editable, on either tier.
+_ALLOWLIST_TIERS = {2, 3}
+_ALLOWLIST_EDITABLE_FIELDS = {"src", "src_negate"}
 
 
 def update_rule(rule_id: int, fields: dict) -> dict:
     rule = get_rule(rule_id)
     # Compare against ACTUAL changes, not just which keys are present — the
     # frontend's rule editor round-trips the whole rule object (spread from
-    # the loaded row) rather than a diff, so an update to a tier-1/2 rule's
+    # the loaded row) rather than a diff, so an update to a tier-1/2/3 rule's
     # allowed field(s) still carries every other field along at its current,
     # unchanged value. Rejecting on mere presence would make every such save
     # fail; rejecting only on an actual value change preserves the real
     # protection (those other fields still can't be CHANGED) without that
     # false positive.
     changed = {key: value for key, value in fields.items() if rule.get(key) != value}
-    if rule["system_rule"] == 2:
+    if rule["system_rule"] in _ALLOWLIST_TIERS:
         disallowed = set(changed) - _ALLOWLIST_EDITABLE_FIELDS
         if disallowed:
             raise FirewallError(
@@ -484,7 +501,7 @@ def update_rule(rule_id: int, fields: dict) -> dict:
     # Cross-field checks (e.g. "ports require tcp/udp") need the rule's
     # OTHER fields too, since an update may only touch one column.
     _validate_rule_fields({**rule, **fields})
-    if rule["system_rule"] == 2:
+    if rule["system_rule"] in _ALLOWLIST_TIERS:
         _validate_allowlist_src(fields.get("src", rule["src"]))
     columns = [f"{key} = ?" for key in fields]
     params = list(fields.values())
@@ -533,6 +550,20 @@ def move_rule(rule_id: int, direction: str) -> dict:
 
 # ── Renderer (dispatched to the profile's engine module) ────────────────────
 
+def _effective_rules(rules: list[dict]) -> list[dict]:
+    """system_rule=3 (restrictive allowlist — the SSH management rule) has
+    no manual enable/disable (see update_rule()): instead, an empty src IS
+    its "disabled" state — the rule matches nothing, so SSH traffic falls
+    through to the chain's policy (drop, by default) rather than being
+    accepted from anywhere. system_rule=2 (permissive allowlist — the Web
+    management rule) has the opposite default: an empty src still matches
+    everyone. Computed once, here, for every caller that needs to know
+    what a profile ACTUALLY enforces — render_profile() and analyze() both
+    call this rather than each re-deriving it, so the enforcement and the
+    lockout analysis can never drift apart."""
+    return [{**r, "enabled": False} if r["system_rule"] == 3 and not r["src"] else r for r in rules]
+
+
 def render_profile(profile_id: int) -> str:
     """Pure — no side effects, no docker calls. rules -> engine-specific
     ruleset text, via the profile's engine module (firewall_nft/
@@ -541,7 +572,7 @@ def render_profile(profile_id: int) -> str:
     which is IPv4-only in v1) rather than importing FirewallError
     themselves, to avoid a circular import — translated here."""
     profile = get_profile(profile_id)
-    rules = list_rules(profile_id)
+    rules = _effective_rules(list_rules(profile_id))
     policies = _json_policies(profile["policies"])
     module = _engine_module(profile["engine"])
     render = _engine_capability(module, "render", profile["engine"])
@@ -596,20 +627,20 @@ def analyze(profile_id: int, client_ip: str = "") -> list[str]:
     caller (routes/firewall.py) decides whether to require confirmation."""
     profile = get_profile(profile_id)
     policies = _json_policies(profile["policies"])
-    rules = [r for r in list_rules(profile_id) if r["enabled"]]
+    rules = [r for r in _effective_rules(list_rules(profile_id)) if r["enabled"]]
     warnings: list[str] = []
 
     def _has_established_accept(chain: str) -> bool:
         return any(r["chain"] == chain and r["action"] == "accept" and "established" in (r["ct_state"] or "") for r in rules)
 
-    def _has_management_accept(chain: str) -> bool:
+    def _has_port_accept(chain: str, ports: set) -> bool:
         for r in rules:
             if r["chain"] != chain or r["action"] != "accept" or not r["dport"]:
                 continue
             if r["protocol"] not in ("tcp", "tcp+udp", "any"):
                 continue
-            ports = {p.strip() for p in r["dport"].split(",")}
-            if not (ports & _MANAGEMENT_PORTS):
+            rule_ports = {p.strip() for p in r["dport"].split(",")}
+            if not (rule_ports & ports):
                 continue
             if client_ip and r["src"] and not _ip_in_expr(client_ip, r["src"], bool(r["src_negate"])):
                 continue
@@ -619,8 +650,17 @@ def analyze(profile_id: int, client_ip: str = "") -> list[str]:
     for chain in ("input", "forward"):
         if policies.get(chain) == "drop" and not _has_established_accept(chain):
             warnings.append(f"'{chain}' policy is drop with no established/related accept rule ranked before it — return traffic for existing connections may be dropped.")
-    if policies.get("input") == "drop" and not _has_management_accept("input"):
-        warnings.append("'input' policy is drop with no accept rule for management/SSH ports — this may lock out web console and SSH access.")
+    if policies.get("input") == "drop":
+        # Reported separately (not folded into one "management ports"
+        # check) since the two now have different defaults: SSH has no
+        # accept rule at all when its allowlist is empty (see
+        # _effective_rules()), so this is the expected, common case for an
+        # admin who hasn't set an SSH allowlist yet — not a bug, but a real
+        # lockout risk worth a clear, specific warning before applying.
+        if not _has_port_accept("input", _SSH_PORTS):
+            warnings.append("No SSH (tcp/22) accept rule is in effect — SSH connections will be blocked. Add a network to \"Allowlist management SSH\" first if you rely on SSH to manage this host, or acknowledge that SSH access is intentionally closed.")
+        if not _has_port_accept("input", _WEB_PORTS):
+            warnings.append("No web console (tcp/443) accept rule is in effect — this may lock you out of the web UI.")
     if policies.get("forward") == "drop" and not any(r["chain"] == "forward" and r["action"] == "accept" and ("docker0" in r["iif"] or "docker0" in r["oif"] or "br-" in r["iif"] or "br-" in r["oif"]) for r in rules):
         warnings.append("'forward' policy is drop with no Docker bridge accept rule — container-to-network traffic may break.")
     unknown_ifaces = {r["iif"] for r in rules if r["iif"]} | {r["oif"] for r in rules if r["oif"]}

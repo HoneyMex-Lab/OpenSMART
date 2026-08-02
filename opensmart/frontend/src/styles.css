@@ -2060,6 +2060,9 @@ th { color: var(--c-91a2b5); font-size: .78rem; text-transform: uppercase; lette
 .status-table-name { font-weight: 600; color: var(--c-d0e4f7); }
 .status-table-detail { font-size: .82rem; max-width: 320px; }
 .status-table .badge { padding: 3px 10px; font-size: .72rem; }
+.status-table-management-row td { background: var(--c-rgba-185-156-255-11); }
+.status-table-management-row .status-table-detail { color: var(--c-d6c7ff); }
+.badge.management-badge { background: var(--c-rgba-185-156-255-14); color: var(--c-d6c7ff); margin-left: 6px; }
 .containers-table td { font-size: .84rem; }
 .containers-table .restart-btn { padding: 6px 12px; font-size: .78rem; display: inline-flex; align-items: center; }
 .warning-toggle { color: var(--c-ffd487); font-size: .8rem; display: inline-flex; align-items: center; gap: 2px; }

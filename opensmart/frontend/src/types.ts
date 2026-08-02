@@ -409,9 +409,12 @@ export type FirewallRule = {
   position: number;
   enabled: boolean;
   // 0 = fully user-owned; 1 = fixed (locked, enable/disable only);
-  // 2 = allowlist-managed (src/src_negate also editable, subject to
-  // server-side lockout-prevention validation).
-  system_rule: 0 | 1 | 2;
+  // 2 = allowlist-managed, permissive-when-empty (Web/443 — empty src
+  // still accepts everyone); 3 = allowlist-managed, restrictive-when-empty
+  // (SSH/22 — empty src means the rule matches nothing). Neither 2 nor 3
+  // can be manually enabled/disabled — only src/src_negate are editable,
+  // subject to server-side lockout-prevention validation.
+  system_rule: 0 | 1 | 2 | 3;
   action: FirewallAction;
   reject_with: string;
   family: 'inet' | 'ip' | 'ip6';
