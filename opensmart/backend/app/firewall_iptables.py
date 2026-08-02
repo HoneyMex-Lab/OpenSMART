@@ -61,6 +61,22 @@ def _split(value: str) -> list[str]:
     return [p.strip() for p in (value or "").split(",") if p.strip()]
 
 
+def _iface_token(value: str, rule_id) -> str:
+    """nftables' wildcard character is '*' (fnmatch-style, anywhere in the
+    name); iptables' is '+' (prefix-match, and ONLY as the final character —
+    xtables treats a literal '*' as an ordinary, unmatchable character, so
+    passing "br-*" through unchanged would silently match nothing). Translate
+    a single trailing '*' to '+'; anything else involving '*' has no correct
+    iptables translation, so it's rejected rather than silently mis-rendered
+    — this includes the seeded safety rules' "docker0,br-*" value, which is
+    exactly the kind of rule a silent mismatch would be most dangerous for."""
+    if "*" in value[:-1] or (value.count("*") > 1):
+        raise ValueError(f"iptables engine only supports a trailing '*' wildcard in interface names (rule {rule_id}): '{value}'.")
+    if value.endswith("*"):
+        return value[:-1] + "+"
+    return value
+
+
 def _quote(token: str) -> str:
     # Our upstream field validators (firewall._validate_*) already forbid
     # quote characters in every field that reaches here, so this is a
@@ -162,10 +178,23 @@ def _render_rule(rule: dict, chain_name: str) -> list[str]:
         raise ValueError(f"iptables engine does not support reject_with='{rule['reject_with']}' (rule {rule['id']}).")
 
     protocols = ["tcp", "udp"] if protocol == "tcp+udp" else [protocol if protocol != "any" else None]
-    iifs = _split(rule["iif"]) or [None]
-    oifs = _split(rule["oif"]) or [None]
+    iifs = [_iface_token(v, rule["id"]) for v in _split(rule["iif"])] or [None]
+    oifs = [_iface_token(v, rule["id"]) for v in _split(rule["oif"])] or [None]
     srcs = _split(rule["src"]) or [None]
     dsts = _split(rule["dst"]) or [None]
+
+    # Expanding a multi-value field into a cross-product of discrete rules
+    # (see module docstring) is only equivalent to nft's set match for a
+    # POSITIVE match. Negated, it's the opposite: nft's "!= {A, B}" means
+    # "not A AND not B" (De Morgan), but N separate "! A -> accept" / "! B ->
+    # accept" rules mean "not A OR not B" — which every packet satisfies
+    # (nothing is simultaneously equal to both A and B), silently accepting
+    # everything regardless of source/destination. Reject rather than render
+    # something that looks like a restriction but isn't one.
+    if rule["src_negate"] and len(srcs) > 1:
+        raise ValueError(f"iptables engine cannot render a negated multi-value src (rule {rule['id']}) — use a single value or split into separate rules.")
+    if rule["dst_negate"] and len(dsts) > 1:
+        raise ValueError(f"iptables engine cannot render a negated multi-value dst (rule {rule['id']}) — use a single value or split into separate rules.")
 
     lines: list[str] = []
     for proto in protocols:
@@ -208,21 +237,37 @@ def validate(rendered: str, pending_path: Path) -> tuple[bool, str]:
     writes it) — a real file, never a shell heredoc, for the same
     heredoc-injection reasons documented on firewall_nft.validate()."""
     return hostnet.run_host(
-        'iptables-restore --test --noflush "$1"', [str(pending_path)],
+        'iptables-restore -w --test --noflush "$1"', [str(pending_path)],
         image="opensmart/netadmin", net_admin=True,
         mounts={str(pending_path.parent): str(pending_path.parent)},
     )
 
 
 def live_query() -> tuple[bool, str]:
+    """Captures both our custom chains' rule content AND the three jump
+    lines that reach them — is_applied() needs both, since a chain that
+    exists and has rules but isn't jumped to from anywhere filters nothing
+    (see is_applied())."""
+    chains = "|".join(CUSTOM_CHAINS)
     return hostnet.run_host(
-        f"iptables-save -t filter 2>/dev/null | grep -E '^(:({'|'.join(CUSTOM_CHAINS)})|-A ({'|'.join(CUSTOM_CHAINS)}))' || true",
+        f"iptables-save -w -t filter 2>/dev/null | grep -E "
+        f"'^(:({chains})|-A ({chains}) |-A INPUT -j OPENSMART-INPUT$|-A OUTPUT -j OPENSMART-OUTPUT$|-A DOCKER-USER -j OPENSMART-FORWARD$)' || true",
         image="opensmart/netadmin", net_admin=True,
     )
 
 
 def is_applied(raw_output: str) -> bool:
-    return raw_output.strip() != ""
+    """True only if at least one real rule is loaded in one of our custom
+    chains AND all three jump rules are in place — a chain with rules but no
+    jump pointing at it (e.g. left behind by an orphaned watchdog racing a
+    backend restart) filters nothing, and reporting it as "applied" would
+    show a healthy status for a firewall that isn't in the packet path."""
+    lines = raw_output.splitlines()
+    has_content = any(any(line.startswith(f"-A {chain} ") for chain in CUSTOM_CHAINS) for line in lines)
+    has_input_jump = "-A INPUT -j OPENSMART-INPUT" in lines
+    has_output_jump = "-A OUTPUT -j OPENSMART-OUTPUT" in lines
+    has_forward_jump = "-A DOCKER-USER -j OPENSMART-FORWARD" in lines
+    return has_content and has_input_jump and has_output_jump and has_forward_jump
 
 
 # Idempotent: creates the three custom chains if missing (swallows the
@@ -238,17 +283,17 @@ def is_applied(raw_output: str) -> bool:
 # firewall_nft.reapply() to its own apply script).
 _ENSURE_CHAINS_AND_JUMPS = """
 for chain in OPENSMART-INPUT OPENSMART-FORWARD OPENSMART-OUTPUT; do
-  iptables -N "$chain" 2>/dev/null
-  iptables -F "$chain"
+  iptables -w -N "$chain" 2>/dev/null
+  iptables -w -F "$chain"
 done
-if ! iptables -C INPUT -j OPENSMART-INPUT 2>/dev/null; then
-  iptables -I INPUT 1 -j OPENSMART-INPUT || exit 1
+if ! iptables -w -C INPUT -j OPENSMART-INPUT 2>/dev/null; then
+  iptables -w -I INPUT 1 -j OPENSMART-INPUT || exit 1
 fi
-if ! iptables -C OUTPUT -j OPENSMART-OUTPUT 2>/dev/null; then
-  iptables -I OUTPUT 1 -j OPENSMART-OUTPUT || exit 1
+if ! iptables -w -C OUTPUT -j OPENSMART-OUTPUT 2>/dev/null; then
+  iptables -w -I OUTPUT 1 -j OPENSMART-OUTPUT || exit 1
 fi
-if ! iptables -C DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null; then
-  iptables -I DOCKER-USER 1 -j OPENSMART-FORWARD || exit 1
+if ! iptables -w -C DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null; then
+  iptables -w -I DOCKER-USER 1 -j OPENSMART-FORWARD || exit 1
 fi
 """
 
@@ -258,7 +303,7 @@ def reapply(active_path: Path) -> tuple[bool, str]:
     the last confirmed-good ruleset. No timer, no rollback path — same
     fail-open contract as firewall_nft.reapply(); if this fails, the caller
     just logs a warning (see firewall.reapply_active())."""
-    script = _ENSURE_CHAINS_AND_JUMPS + '\niptables-restore --noflush "$1"\n'
+    script = _ENSURE_CHAINS_AND_JUMPS + '\niptables-restore -w --noflush "$1"\n'
     return hostnet.run_host(
         script, [str(active_path)],
         image="opensmart/netadmin", net_admin=True,
@@ -267,27 +312,52 @@ def reapply(active_path: Path) -> tuple[bool, str]:
 
 
 def teardown_fragment() -> str:
-    """Bash, safe to embed inside another engine's apply script to
-    defensively remove this engine's artifacts before that engine's own
-    ruleset is applied. Idempotent; a no-op if nothing of ours is loaded.
-    Defined ahead of this engine's own apply pipeline (Phase 4) so the
-    nftables engine's "at most one engine enforced at a time" invariant is
-    real starting now, not only once iptables can apply anything itself."""
-    lines = [f'iptables -F "{chain}" 2>/dev/null || true' for chain in CUSTOM_CHAINS]
+    """Bash, safe to embed inside another engine's apply script to remove
+    this engine's artifacts once THAT engine's own ruleset is confirmed
+    good — see the APPLY_SCRIPT comment below for why this only ever runs
+    on confirm, never before or during the confirm window. Idempotent; a
+    no-op if nothing of ours is loaded."""
+    lines = [f'iptables -w -F "{chain}" 2>/dev/null || true' for chain in CUSTOM_CHAINS]
     lines += [
-        'iptables -D INPUT -j OPENSMART-INPUT 2>/dev/null || true',
-        'iptables -D OUTPUT -j OPENSMART-OUTPUT 2>/dev/null || true',
-        'iptables -D DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null || true',
+        'iptables -w -D INPUT -j OPENSMART-INPUT 2>/dev/null || true',
+        'iptables -w -D OUTPUT -j OPENSMART-OUTPUT 2>/dev/null || true',
+        'iptables -w -D DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null || true',
     ]
-    lines += [f'iptables -X "{chain}" 2>/dev/null || true' for chain in CUSTOM_CHAINS]
+    lines += [f'iptables -w -X "{chain}" 2>/dev/null || true' for chain in CUSTOM_CHAINS]
     return "\n".join(lines)
 
 
 # Positional args: $1=token $2=confirm_seconds $3=state_dir — same contract
 # as firewall_nft.APPLY_SCRIPT (see that module for why these are never
-# string-interpolated: real argv elements only). __TEARDOWN_OTHER_ENGINES__
-# is replaced by firewall.apply() with the other registered engines'
-# teardown_fragment() text before this script is handed to the watchdog.
+# string-interpolated: real argv elements only).
+#
+# __TEARDOWN_OTHER_ENGINES__ is replaced by firewall.apply() with the other
+# registered engines' teardown_fragment() text — and, critically, it is
+# spliced into the CONFIRM branch below, not run up front. Tearing down the
+# other engine before this one's ruleset is even proven good would mean a
+# cancel/timeout during the confirm window leaves NEITHER engine enforcing
+# anything (this engine reverts to its own prior state, which for a
+# fresh/never-applied engine is "nothing"; the other engine's ruleset is
+# already gone and nothing restores it). Leaving both engines' artifacts
+# loaded simultaneously during the confirm window is fail-safe, not
+# fail-open: nf_tables evaluates every hook registered at a given priority,
+# so a DROP verdict from either engine still drops the packet — the
+# temporary overlap can only make the effective policy MORE restrictive,
+# never less. The other engine is only actually torn down once this
+# engine's ruleset is confirmed, i.e. once it's certain to be the new
+# single source of truth.
+#
+# Every iptables/iptables-restore/iptables-save call takes `-w` (wait for
+# the xtables lock) rather than failing immediately — Docker itself takes
+# this lock on ordinary container start/stop/port-publish, which this very
+# app triggers via provisioning, so a bare (non-`-w`) call can fail under
+# completely routine concurrent activity, not just an attack.
+#
+# `revert()` is defined immediately after the rollback snapshot is
+# captured, BEFORE the first mutation (the chain flush) — every failure
+# path from that point on calls it before exiting, so a mid-setup failure
+# (e.g. a jump insert failing after the chains were already flushed) still
+# restores the prior rules instead of leaving the chains empty-and-live.
 #
 # Rollback here is more involved than nft's single atomic table-replace,
 # because iptables has no equivalent "delete everything, redefine from
@@ -305,7 +375,6 @@ APPLY_SCRIPT = """
 set -uo pipefail
 TOKEN="$1"; TIMEOUT="$2"; STATE_DIR="$3"
 mkdir -p "$STATE_DIR/confirm" "$STATE_DIR/cancel" "$STATE_DIR/result"
-__TEARDOWN_OTHER_ENGINES__
 PENDING="$STATE_DIR/pending-$TOKEN.iptables"
 ROLLBACK="$STATE_DIR/rollback-$TOKEN.iptables"
 JUMPS_ADDED="$STATE_DIR/rollback-$TOKEN.jumps"
@@ -319,62 +388,71 @@ fi
   echo ":OPENSMART-INPUT - [0:0]"
   echo ":OPENSMART-FORWARD - [0:0]"
   echo ":OPENSMART-OUTPUT - [0:0]"
-  iptables-save -t filter 2>/dev/null | grep -E '^-A (OPENSMART-INPUT|OPENSMART-FORWARD|OPENSMART-OUTPUT) '
+  iptables-save -w -t filter 2>/dev/null | grep -E '^-A (OPENSMART-INPUT|OPENSMART-FORWARD|OPENSMART-OUTPUT) '
   echo "COMMIT"
 } > "$ROLLBACK"
+: > "$JUMPS_ADDED"
+
+revert() {
+  for chain in OPENSMART-INPUT OPENSMART-FORWARD OPENSMART-OUTPUT; do
+    iptables -w -F "$chain" 2>/dev/null || true
+  done
+  iptables-restore -w --noflush "$ROLLBACK" 2>/dev/null || true
+  if grep -qx "INPUT" "$JUMPS_ADDED" 2>/dev/null; then
+    iptables -w -D INPUT -j OPENSMART-INPUT 2>/dev/null || true
+  fi
+  if grep -qx "OUTPUT" "$JUMPS_ADDED" 2>/dev/null; then
+    iptables -w -D OUTPUT -j OPENSMART-OUTPUT 2>/dev/null || true
+  fi
+  if grep -qx "FORWARD" "$JUMPS_ADDED" 2>/dev/null; then
+    iptables -w -D DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null || true
+  fi
+}
 
 for chain in OPENSMART-INPUT OPENSMART-FORWARD OPENSMART-OUTPUT; do
-  iptables -N "$chain" 2>/dev/null
-  iptables -F "$chain"
+  iptables -w -N "$chain" 2>/dev/null
+  if ! iptables -w -F "$chain"; then
+    echo "failed:could not flush $chain" > "$STATE_DIR/result/$TOKEN"
+    revert
+    exit 1
+  fi
 done
 
-: > "$JUMPS_ADDED"
-if ! iptables -C INPUT -j OPENSMART-INPUT 2>/dev/null; then
-  if ! iptables -I INPUT 1 -j OPENSMART-INPUT; then
+if ! iptables -w -C INPUT -j OPENSMART-INPUT 2>/dev/null; then
+  if ! iptables -w -I INPUT 1 -j OPENSMART-INPUT; then
     echo "failed:could not insert INPUT jump rule" > "$STATE_DIR/result/$TOKEN"
+    revert
     exit 1
   fi
   echo "INPUT" >> "$JUMPS_ADDED"
 fi
-if ! iptables -C OUTPUT -j OPENSMART-OUTPUT 2>/dev/null; then
-  if ! iptables -I OUTPUT 1 -j OPENSMART-OUTPUT; then
+if ! iptables -w -C OUTPUT -j OPENSMART-OUTPUT 2>/dev/null; then
+  if ! iptables -w -I OUTPUT 1 -j OPENSMART-OUTPUT; then
     echo "failed:could not insert OUTPUT jump rule" > "$STATE_DIR/result/$TOKEN"
+    revert
     exit 1
   fi
   echo "OUTPUT" >> "$JUMPS_ADDED"
 fi
-if ! iptables -C DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null; then
-  if ! iptables -I DOCKER-USER 1 -j OPENSMART-FORWARD; then
+if ! iptables -w -C DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null; then
+  if ! iptables -w -I DOCKER-USER 1 -j OPENSMART-FORWARD; then
     echo "failed:could not insert DOCKER-USER jump rule (is Docker running?)" > "$STATE_DIR/result/$TOKEN"
+    revert
     exit 1
   fi
   echo "FORWARD" >> "$JUMPS_ADDED"
 fi
 
-if ! iptables-restore --noflush "$PENDING"; then
+if ! iptables-restore -w --noflush "$PENDING"; then
   echo "failed:iptables-restore apply failed" > "$STATE_DIR/result/$TOKEN"
+  revert
   exit 1
 fi
-
-revert() {
-  for chain in OPENSMART-INPUT OPENSMART-FORWARD OPENSMART-OUTPUT; do
-    iptables -F "$chain" 2>/dev/null || true
-  done
-  iptables-restore --noflush "$ROLLBACK" 2>/dev/null || true
-  if grep -qx "INPUT" "$JUMPS_ADDED" 2>/dev/null; then
-    iptables -D INPUT -j OPENSMART-INPUT 2>/dev/null || true
-  fi
-  if grep -qx "OUTPUT" "$JUMPS_ADDED" 2>/dev/null; then
-    iptables -D OUTPUT -j OPENSMART-OUTPUT 2>/dev/null || true
-  fi
-  if grep -qx "FORWARD" "$JUMPS_ADDED" 2>/dev/null; then
-    iptables -D DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null || true
-  fi
-}
 
 i=0
 while [ "$i" -lt "$TIMEOUT" ]; do
   if [ -f "$STATE_DIR/confirm/$TOKEN" ]; then
+    __TEARDOWN_OTHER_ENGINES__
     cp "$PENDING" "$STATE_DIR/active.iptables"
     echo "confirmed" > "$STATE_DIR/result/$TOKEN"
     exit 0

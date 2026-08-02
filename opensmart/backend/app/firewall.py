@@ -89,7 +89,7 @@ def _engine_capability(module, name: str, engine: str):
 def _validate_iface_list(value: str, field: str) -> None:
     for part in value.split(","):
         part = part.strip()
-        if part and not _IFACE_RE.match(part):
+        if part and not _IFACE_RE.fullmatch(part):
             raise FirewallError(f"{field} contains an invalid interface name: '{part}'.")
 
 
@@ -119,7 +119,7 @@ def _validate_port_list(value: str, field: str) -> None:
         part = part.strip()
         if not part:
             continue
-        if not _PORT_RE.match(part):
+        if not _PORT_RE.fullmatch(part):
             raise FirewallError(f"{field} contains an invalid port/range: '{part}'.")
         bounds = [int(x) for x in part.split("-")]
         if any(b > 65535 for b in bounds):
@@ -146,11 +146,11 @@ def _validate_rule_fields(effective: dict) -> None:
         for state in effective["ct_state"].split(","):
             if state.strip() not in _VALID_CT_STATES:
                 raise FirewallError(f"ct_state must be a comma-separated list from {', '.join(sorted(_VALID_CT_STATES))}.")
-    if effective.get("icmp_type") and not _ICMP_TYPE_RE.match(effective["icmp_type"]):
+    if effective.get("icmp_type") and not _ICMP_TYPE_RE.fullmatch(effective["icmp_type"]):
         raise FirewallError("icmp_type must be a plain number.")
-    if effective.get("rate_limit") and not _RATE_LIMIT_RE.match(effective["rate_limit"]):
+    if effective.get("rate_limit") and not _RATE_LIMIT_RE.fullmatch(effective["rate_limit"]):
         raise FirewallError("rate_limit must look like '10/second' or '10/second burst 20 packets'.")
-    if effective.get("log_prefix") and not _LOG_PREFIX_RE.match(effective["log_prefix"]):
+    if effective.get("log_prefix") and not _LOG_PREFIX_RE.fullmatch(effective["log_prefix"]):
         raise FirewallError("log_prefix may only contain letters, digits, spaces, and _:.- characters.")
     if effective.get("iif"):
         _validate_iface_list(effective["iif"], "iif")
@@ -793,10 +793,20 @@ def reapply_active() -> None:
     watchdog was killed mid-apply (host reboot, `docker kill`) before it
     could revert, the pending row is force-marked reverted here — the
     active state file is only ever written by a CONFIRMED apply, so it's
-    always safe to treat as "the last known-good state" and reload it."""
+    always safe to treat as "the last known-good state" and reload it.
+
+    A plain backend restart (not a host reboot) does NOT kill the detached
+    watchdog container — it keeps running in the Docker daemon, independent
+    of the backend process. Left alone, it would eventually fire its own
+    confirm-window timeout and call its engine's revert(), undoing whatever
+    this reapply loads (including removing jump rules it thinks it added,
+    even though those jumps may now be serving the freshly-reloaded
+    ruleset). Kill it explicitly before superseding its state, rather than
+    hoping nothing races it."""
     with get_db() as db:
         pending = db.execute("SELECT id, token FROM firewall_applies WHERE state = 'pending' ORDER BY id DESC LIMIT 1").fetchone()
         if pending is not None:
+            hostnet.kill_container(f"opensmart-fw-apply-{pending['token'][:12]}")
             db.execute(
                 "UPDATE firewall_applies SET state = 'reverted', detail = 'backend restarted mid-apply' WHERE id = ?",
                 (pending["id"],),

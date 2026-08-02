@@ -107,3 +107,17 @@ def run_host_detached(
         logger.warning("hostnet.run_host_detached failed to start %s: %s", name, detail[:1000])
         return False, detail
     return True, result.stdout.strip()
+
+
+def kill_container(name: str, timeout: int = 10) -> None:
+    """Best-effort stop of a still-running detached watchdog — used when a
+    backend restart orphans one mid-apply (see firewall.reapply_active()),
+    so it can't later fire its own revert() against state a fresh startup
+    reapply has already superseded. Never raises: a missing or
+    already-exited container (the common case) is not an error here, and
+    this is itself a fail-open path — if `docker kill` can't be reached,
+    the caller still proceeds with its own recovery."""
+    try:
+        subprocess.run(["docker", "kill", name], capture_output=True, text=True, timeout=timeout, shell=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass

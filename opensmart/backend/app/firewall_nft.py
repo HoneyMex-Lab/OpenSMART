@@ -194,14 +194,22 @@ def teardown_fragment() -> str:
 # Positional args: $1=token $2=confirm_seconds $3=state_dir. Never
 # string-interpolated — the token/timeout/dir are validated ints/paths
 # passed as real argv elements (see hostnet.py and firewall.apply()).
+#
 # __TEARDOWN_OTHER_ENGINES__ is replaced by firewall.apply() with the other
-# registered engines' teardown_fragment() text before this script is handed
-# to the watchdog container.
+# registered engines' teardown_fragment() text — spliced into the CONFIRM
+# branch below, not run up front. Tearing down the other engine before this
+# ruleset is proven good would mean a cancel/timeout leaves NEITHER engine
+# enforcing anything (this engine's own rollback only restores ITS prior
+# state). Both engines' artifacts loaded simultaneously during the confirm
+# window is fail-safe, not fail-open — nf_tables evaluates every hook
+# registered at a given priority, so a DROP verdict from either engine still
+# drops the packet; the overlap can only make the effective policy more
+# restrictive. The other engine is only torn down once this one is
+# confirmed as the new single source of truth.
 APPLY_SCRIPT = """
 set -uo pipefail
 TOKEN="$1"; TIMEOUT="$2"; STATE_DIR="$3"
 mkdir -p "$STATE_DIR/confirm" "$STATE_DIR/cancel" "$STATE_DIR/result"
-__TEARDOWN_OTHER_ENGINES__
 PENDING="$STATE_DIR/pending-$TOKEN.nft"
 ROLLBACK="$STATE_DIR/rollback-$TOKEN.nft"
 if [ ! -f "$PENDING" ]; then
@@ -221,6 +229,7 @@ fi
 i=0
 while [ "$i" -lt "$TIMEOUT" ]; do
   if [ -f "$STATE_DIR/confirm/$TOKEN" ]; then
+    __TEARDOWN_OTHER_ENGINES__
     cp "$PENDING" "$STATE_DIR/active.nft"
     echo "confirmed" > "$STATE_DIR/result/$TOKEN"
     exit 0
