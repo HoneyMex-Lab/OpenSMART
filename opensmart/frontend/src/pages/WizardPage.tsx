@@ -710,7 +710,8 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
         <article className="card">
           <h2>Access allowlist</h2>
           <p className="muted">
-            Optionally restrict web console (tcp/443) and SSH (tcp/22) access to a specific network, host, or IP.
+            This single step covers access for <strong>both</strong> management services this platform exposes —
+            the web console (tcp/443) and SSH (tcp/22) — each with its own optional network/host/IP restriction.
             These two ports have different safe defaults: the web console stays open to any network if you leave it
             blank, while SSH stays closed to everyone until you add a network — you can always change either later
             from the Firewall page's Rules tab.
