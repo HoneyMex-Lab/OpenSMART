@@ -56,11 +56,6 @@ _REJECT_MAP = {
 _UNSUPPORTED_REJECT = {"icmpv6 port-unreachable", "icmpv6 admin-prohibited"}
 _RATE_LIMIT_PARSE_RE = re.compile(r"^(\d+/(?:second|minute|hour|day))(?: burst (\d+) packets)?$")
 
-# Apply support (APPLY_SCRIPT) lands in Phase 4 of the plan above. Until
-# then, firewall.py's dispatch surfaces a clear "not yet supported" error
-# for any attempt to apply an iptables-engine profile.
-APPLY_SCRIPT = None
-
 
 def _split(value: str) -> list[str]:
     return [p.strip() for p in (value or "").split(",") if p.strip()]
@@ -230,6 +225,47 @@ def is_applied(raw_output: str) -> bool:
     return raw_output.strip() != ""
 
 
+# Idempotent: creates the three custom chains if missing (swallows the
+# "already exists" error rather than checking for it, since either outcome
+# leaves the chain present, which is all that matters), always flushes them
+# (iptables-restore --noflush does NOT do this itself — without it, a
+# re-apply would silently APPEND to, not replace, whatever was already
+# loaded), and ensures exactly one jump rule per chain via -C (check) before
+# -I (insert) so re-running this never accumulates duplicate jumps. Used by
+# both the apply watchdog (which additionally records which jumps IT added,
+# for precise rollback) and the plain startup reapply (which doesn't need
+# that, since it never rolls back — same relationship as
+# firewall_nft.reapply() to its own apply script).
+_ENSURE_CHAINS_AND_JUMPS = """
+for chain in OPENSMART-INPUT OPENSMART-FORWARD OPENSMART-OUTPUT; do
+  iptables -N "$chain" 2>/dev/null
+  iptables -F "$chain"
+done
+if ! iptables -C INPUT -j OPENSMART-INPUT 2>/dev/null; then
+  iptables -I INPUT 1 -j OPENSMART-INPUT || exit 1
+fi
+if ! iptables -C OUTPUT -j OPENSMART-OUTPUT 2>/dev/null; then
+  iptables -I OUTPUT 1 -j OPENSMART-OUTPUT || exit 1
+fi
+if ! iptables -C DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null; then
+  iptables -I DOCKER-USER 1 -j OPENSMART-FORWARD || exit 1
+fi
+"""
+
+
+def reapply(active_path: Path) -> tuple[bool, str]:
+    """Startup hook: ensure the custom chains + jump rules exist, then load
+    the last confirmed-good ruleset. No timer, no rollback path — same
+    fail-open contract as firewall_nft.reapply(); if this fails, the caller
+    just logs a warning (see firewall.reapply_active())."""
+    script = _ENSURE_CHAINS_AND_JUMPS + '\niptables-restore --noflush "$1"\n'
+    return hostnet.run_host(
+        script, [str(active_path)],
+        image="opensmart/netadmin", net_admin=True,
+        mounts={str(active_path.parent): str(active_path.parent)},
+    )
+
+
 def teardown_fragment() -> str:
     """Bash, safe to embed inside another engine's apply script to
     defensively remove this engine's artifacts before that engine's own
@@ -245,3 +281,112 @@ def teardown_fragment() -> str:
     ]
     lines += [f'iptables -X "{chain}" 2>/dev/null || true' for chain in CUSTOM_CHAINS]
     return "\n".join(lines)
+
+
+# Positional args: $1=token $2=confirm_seconds $3=state_dir — same contract
+# as firewall_nft.APPLY_SCRIPT (see that module for why these are never
+# string-interpolated: real argv elements only). __TEARDOWN_OTHER_ENGINES__
+# is replaced by firewall.apply() with the other registered engines'
+# teardown_fragment() text before this script is handed to the watchdog.
+#
+# Rollback here is more involved than nft's single atomic table-replace,
+# because iptables has no equivalent "delete everything, redefine from
+# scratch" idiom scoped to just our chains: the custom chains are flushed
+# and reloaded from a snapshot instead of replaced wholesale, and the
+# INPUT/OUTPUT/DOCKER-USER jump rules are only removed on rollback if THIS
+# apply is the one that added them (recorded in $JUMPS_ADDED) — a jump
+# already in place from a prior CONFIRMED apply must survive a cancel/
+# timeout of a later one. A newly-created custom chain that had no rules
+# before this apply is left in place, empty, on rollback rather than
+# deleted (`-X`) — harmless litter cleaned up by any engine's next apply
+# (see teardown_fragment()), not a functional or safety concern since
+# nothing ever jumps to an empty chain.
+APPLY_SCRIPT = """
+set -uo pipefail
+TOKEN="$1"; TIMEOUT="$2"; STATE_DIR="$3"
+mkdir -p "$STATE_DIR/confirm" "$STATE_DIR/cancel" "$STATE_DIR/result"
+__TEARDOWN_OTHER_ENGINES__
+PENDING="$STATE_DIR/pending-$TOKEN.iptables"
+ROLLBACK="$STATE_DIR/rollback-$TOKEN.iptables"
+JUMPS_ADDED="$STATE_DIR/rollback-$TOKEN.jumps"
+if [ ! -f "$PENDING" ]; then
+  echo "failed:pending ruleset file missing" > "$STATE_DIR/result/$TOKEN"
+  exit 1
+fi
+
+{
+  echo "*filter"
+  echo ":OPENSMART-INPUT - [0:0]"
+  echo ":OPENSMART-FORWARD - [0:0]"
+  echo ":OPENSMART-OUTPUT - [0:0]"
+  iptables-save -t filter 2>/dev/null | grep -E '^-A (OPENSMART-INPUT|OPENSMART-FORWARD|OPENSMART-OUTPUT) '
+  echo "COMMIT"
+} > "$ROLLBACK"
+
+for chain in OPENSMART-INPUT OPENSMART-FORWARD OPENSMART-OUTPUT; do
+  iptables -N "$chain" 2>/dev/null
+  iptables -F "$chain"
+done
+
+: > "$JUMPS_ADDED"
+if ! iptables -C INPUT -j OPENSMART-INPUT 2>/dev/null; then
+  if ! iptables -I INPUT 1 -j OPENSMART-INPUT; then
+    echo "failed:could not insert INPUT jump rule" > "$STATE_DIR/result/$TOKEN"
+    exit 1
+  fi
+  echo "INPUT" >> "$JUMPS_ADDED"
+fi
+if ! iptables -C OUTPUT -j OPENSMART-OUTPUT 2>/dev/null; then
+  if ! iptables -I OUTPUT 1 -j OPENSMART-OUTPUT; then
+    echo "failed:could not insert OUTPUT jump rule" > "$STATE_DIR/result/$TOKEN"
+    exit 1
+  fi
+  echo "OUTPUT" >> "$JUMPS_ADDED"
+fi
+if ! iptables -C DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null; then
+  if ! iptables -I DOCKER-USER 1 -j OPENSMART-FORWARD; then
+    echo "failed:could not insert DOCKER-USER jump rule (is Docker running?)" > "$STATE_DIR/result/$TOKEN"
+    exit 1
+  fi
+  echo "FORWARD" >> "$JUMPS_ADDED"
+fi
+
+if ! iptables-restore --noflush "$PENDING"; then
+  echo "failed:iptables-restore apply failed" > "$STATE_DIR/result/$TOKEN"
+  exit 1
+fi
+
+revert() {
+  for chain in OPENSMART-INPUT OPENSMART-FORWARD OPENSMART-OUTPUT; do
+    iptables -F "$chain" 2>/dev/null || true
+  done
+  iptables-restore --noflush "$ROLLBACK" 2>/dev/null || true
+  if grep -qx "INPUT" "$JUMPS_ADDED" 2>/dev/null; then
+    iptables -D INPUT -j OPENSMART-INPUT 2>/dev/null || true
+  fi
+  if grep -qx "OUTPUT" "$JUMPS_ADDED" 2>/dev/null; then
+    iptables -D OUTPUT -j OPENSMART-OUTPUT 2>/dev/null || true
+  fi
+  if grep -qx "FORWARD" "$JUMPS_ADDED" 2>/dev/null; then
+    iptables -D DOCKER-USER -j OPENSMART-FORWARD 2>/dev/null || true
+  fi
+}
+
+i=0
+while [ "$i" -lt "$TIMEOUT" ]; do
+  if [ -f "$STATE_DIR/confirm/$TOKEN" ]; then
+    cp "$PENDING" "$STATE_DIR/active.iptables"
+    echo "confirmed" > "$STATE_DIR/result/$TOKEN"
+    exit 0
+  fi
+  if [ -f "$STATE_DIR/cancel/$TOKEN" ]; then
+    revert
+    echo "reverted" > "$STATE_DIR/result/$TOKEN"
+    exit 0
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+revert
+echo "reverted" > "$STATE_DIR/result/$TOKEN"
+"""
