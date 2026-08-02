@@ -202,6 +202,63 @@ def _validate_rule_fields(effective: dict) -> None:
         raise FirewallError("icmp_type requires protocol to be icmp or icmpv6.")
 
 
+_STRING_RULE_FIELDS = {
+    "chain", "action", "reject_with", "family", "protocol", "iif", "oif", "src", "dst",
+    "sport", "dport", "ct_state", "icmp_type", "log_prefix", "rate_limit", "description",
+}
+_BOOL_RULE_FIELDS = {"enabled", "src_negate", "dst_negate", "log"}
+
+
+def _check_row_types(row: dict) -> str | None:
+    """_validate_rule_fields() and the field-list validators all assume
+    strings/bools (their only other caller is a Pydantic model that already
+    guarantees this) — a row from an untyped source like an import draft
+    could carry any JSON scalar. Checked separately, up front, so a bad
+    type reads as a clean validation message instead of an unhandled
+    TypeError/AttributeError deep inside a regex or a .split() call."""
+    for key in _STRING_RULE_FIELDS:
+        if key in row and row[key] is not None and not isinstance(row[key], str):
+            return f"{key} must be a string."
+    for key in _BOOL_RULE_FIELDS:
+        if key in row and row[key] is not None and not isinstance(row[key], bool):
+            return f"{key} must be true/false."
+    if "position" in row and row["position"] is not None and not isinstance(row["position"], int):
+        return "position must be a whole number."
+    return None
+
+
+def validate_import_rows(rows: list[dict]) -> list[str]:
+    """Pre-flight check for a batch import (routes/firewall.py's
+    import_confirm()): every non-skipped row is checked the SAME way
+    create_rule() would check it, WITHOUT creating anything. An import
+    batch either fully succeeds or reports every problem up front — it
+    must never partially create a profile and then silently stop partway
+    through the rules, since nothing about the parser's own output
+    guarantees these rows pass this app's normal field-grammar rules (real
+    iptables-save output includes constructs, like the interface '+'
+    wildcard, this schema doesn't itself use)."""
+    errors: list[str] = []
+    for index, row in enumerate(rows):
+        if row.get("skip"):
+            continue
+        if "chain" not in row or row.get("chain") not in CHAINS:
+            errors.append(f"row {index}: chain must be one of {', '.join(CHAINS)}.")
+            continue
+        unknown = set(row) - _RULE_FIELDS - {"skip"}
+        if unknown:
+            errors.append(f"row {index}: unknown field(s) {', '.join(sorted(unknown))}.")
+            continue
+        type_error = _check_row_types(row)
+        if type_error:
+            errors.append(f"row {index}: {type_error}")
+            continue
+        try:
+            _validate_rule_fields(row)
+        except FirewallError as error:
+            errors.append(f"row {index}: {error}")
+    return errors
+
+
 # ── Profile CRUD ────────────────────────────────────────────────────────────
 
 def _coerce_profile(row: dict) -> dict:

@@ -220,10 +220,19 @@ def import_parse(payload: ImportParseRequest, _: Annotated[dict, Depends(require
 @router.post("/import/confirm")
 def import_confirm(payload: ImportConfirmRequest, admin: Annotated[dict, Depends(require_admin)]) -> dict:
     """Creates a NEW profile from the reviewed draft — never merges into an
-    existing one. Every row still goes through firewall.create_rule()'s
-    normal field validation, so a parser output that slipped past parsing
-    but wouldn't actually render/apply is still caught here, same as a
-    hand-entered rule would be."""
+    existing one. Every row is validated UP FRONT, before anything is
+    created — a batch import must never partially succeed (some rows
+    imported, the rest silently dropped by a mid-loop failure) since
+    nothing about the parser's output guarantees every row already passes
+    this app's normal field-grammar rules. If validation somehow still
+    fails after that (or any other unexpected error), the profile — if one
+    was already created — is removed rather than left behind empty or
+    partial."""
+    errors = fw.validate_import_rows(payload.rules)
+    if errors:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="; ".join(errors[:20]) + (f" (+{len(errors) - 20} more)" if len(errors) > 20 else ""))
+
+    profile = None
     try:
         profile = fw.create_profile(payload.profile_name, payload.profile_description, engine=payload.engine)
         created = 0
@@ -238,12 +247,28 @@ def import_confirm(payload: ImportConfirmRequest, admin: Annotated[dict, Depends
             fw.create_rule(profile["id"], fields)
             created += 1
     except fw.FirewallError as error:
+        if profile is not None:
+            _cleanup_failed_import(profile["id"])
         raise _bad(error) from error
+    except Exception as error:
+        if profile is not None:
+            _cleanup_failed_import(profile["id"])
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Import failed: {error}") from error
     write_audit_event(
         "firewall_import", admin["id"], admin["username"], f"profile:{profile['id']}", "",
         f"engine={payload.engine} rules_created={created}",
     )
     return {"profile": profile, "created": created}
+
+
+def _cleanup_failed_import(profile_id: int) -> None:
+    """Best-effort — a freshly created, never-applied profile has no
+    pending apply, so this should always succeed; swallow a failure here
+    rather than mask the real error that triggered the cleanup."""
+    try:
+        fw.delete_profile(profile_id)
+    except fw.FirewallError:
+        pass
 
 
 @router.post("/profiles/{profile_id}/validate")

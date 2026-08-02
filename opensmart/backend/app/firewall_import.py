@@ -36,6 +36,12 @@ _REJECT_IPTABLES_TO_OURS = {
 _SUPPORTED_PROTOCOLS = {"tcp", "udp", "icmp", "all"}
 _OSFW_ID_COMMENT_RE = re.compile(r"^osfw:\d+$")
 _OSFW_LOG_PREFIX_RE = re.compile(r"^osfw-\d+:\s?")
+# Matches database.py's seeded-profile default — a chain policy from the
+# SOURCE ruleset is never carried into the imported profile (this schema's
+# "policy" is a per-profile setting the admin sets separately), so a
+# non-default source policy is worth calling out explicitly rather than
+# silently landing on a different effective policy than the file had.
+_DEFAULT_POLICIES = {"input": "drop", "forward": "drop", "output": "accept"}
 
 _EMPTY_RULE = {
     "enabled": True, "action": "", "reject_with": "", "family": "inet", "protocol": "any",
@@ -182,7 +188,16 @@ def parse_iptables_save(text: str) -> dict:
             in_filter = False
             continue
         if line.startswith(":"):
-            continue  # chain declaration/policy line — nothing to import from this
+            parts = line[1:].split()
+            if len(parts) >= 2:
+                our_chain = _OUR_CHAINS.get(parts[0])
+                policy_word = parts[1].lower()
+                if our_chain and policy_word != "-" and policy_word != _DEFAULT_POLICIES[our_chain]:
+                    warnings.append(
+                        f"Chain '{parts[0]}' policy '{parts[1]}' was not imported — the new profile will use "
+                        f"this app's default policy '{_DEFAULT_POLICIES[our_chain]}' for '{our_chain}'; adjust it after import if needed."
+                    )
+            continue  # chain declaration/policy line — nothing else to import from this
         if not line.startswith("-A "):
             unsupported.append({"line": raw_line, "reason": "not a -A rule or recognized directive"})
             continue
@@ -202,7 +217,11 @@ def parse_iptables_save(text: str) -> dict:
             warnings.append(f"Skipped rule in chain '{chain_name}' — only INPUT/FORWARD/OUTPUT (or this app's own OPENSMART-* chains) are imported.")
             continue
         chain = _OUR_CHAINS[chain_name]
-        parsed = _parse_iptables_rule_tokens(rest)
+        try:
+            parsed = _parse_iptables_rule_tokens(rest)
+        except Exception as error:  # noqa: BLE001 — fail closed per-line, never crash the whole import (mirrors parse_nft_json's same backstop)
+            unsupported.append({"line": raw_line, "reason": f"could not parse ({type(error).__name__}) — not imported"})
+            continue
         if parsed is None:
             unsupported.append({"line": raw_line, "reason": "uses a match/target this importer doesn't recognize"})
             continue
@@ -446,15 +465,21 @@ def _parse_nft_rule_expr(expr_list: list[dict]) -> dict | None:
 
 
 def parse_nft_json(text: str) -> dict:
+    # A pathologically deeply-nested JSON document (a "JSON bomb" of nested
+    # arrays) can blow the interpreter's recursion limit inside json.loads
+    # itself — that's a shape of "not valid JSON we can handle", not a
+    # crash, so it's reported the same way as a JSONDecodeError.
     try:
         data = json.loads(text)
     except json.JSONDecodeError as error:
         raise FirewallImportError(f"Not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise FirewallImportError("JSON is too deeply nested to parse.") from error
     entries = data.get("nftables") if isinstance(data, dict) else None
     if not isinstance(entries, list):
         raise FirewallImportError("Not `nft -j list ruleset` output — expected a top-level 'nftables' array.")
 
-    chain_hooks: dict[tuple[str, str], str] = {}  # (table, chain-name) -> our chain key
+    chain_hooks: dict[tuple, str] = {}  # (table, chain-name) -> our chain key
     rules: list[dict] = []
     warnings: list[str] = []
     unsupported: list[dict] = []
@@ -463,37 +488,55 @@ def parse_nft_json(text: str) -> dict:
 
     for entry in entries:
         chain = entry.get("chain") if isinstance(entry, dict) else None
-        if chain and chain.get("hook") in _NFT_CHAIN_HOOKS:
-            chain_hooks[(chain.get("table"), chain.get("name"))] = _NFT_CHAIN_HOOKS[chain["hook"]]
+        if isinstance(chain, dict) and chain.get("hook") in _NFT_CHAIN_HOOKS:
+            our_chain = _NFT_CHAIN_HOOKS[chain["hook"]]
+            chain_hooks[(chain.get("table"), chain.get("name"))] = our_chain
+            policy = chain.get("policy")
+            if isinstance(policy, str) and policy != _DEFAULT_POLICIES[our_chain]:
+                warnings.append(
+                    f"Chain '{chain.get('name')}' policy '{policy}' was not imported — the new profile will use "
+                    f"this app's default policy '{_DEFAULT_POLICIES[our_chain]}' for '{our_chain}'; adjust it after import if needed."
+                )
 
     for entry in entries:
         rule_obj = entry.get("rule") if isinstance(entry, dict) else None
-        if rule_obj is None:
+        if not isinstance(rule_obj, dict):
             continue
-        key = (rule_obj.get("table"), rule_obj.get("chain"))
-        our_chain = chain_hooks.get(key)
-        if our_chain is None:
-            warnings.append(f"Skipped rule in chain '{rule_obj.get('chain')}' (table {rule_obj.get('table')}) — only input/forward/output base chains are imported.")
-            continue
-        expr = rule_obj.get("expr")
-        if not isinstance(expr, list):
-            unsupported.append({"line": json.dumps(rule_obj), "reason": "rule has no expr array"})
-            continue
-        parsed = _parse_nft_rule_expr(expr)
-        if parsed is None:
-            unsupported.append({"line": json.dumps(rule_obj), "reason": "uses a match/statement this importer doesn't recognize"})
-            continue
-        # A rule's description is a top-level `rule.comment` field, not part
-        # of `expr` — this app's own id tag ("osfw:<id>") isn't a real
-        # description and is dropped rather than imported as one.
-        comment = rule_obj.get("comment")
-        if isinstance(comment, str) and comment and not _OSFW_ID_COMMENT_RE.match(comment):
-            parsed["description"] = comment
-        position[our_chain] += 1
-        parsed["chain"] = our_chain
-        parsed["position"] = position[our_chain]
-        interfaces_found.update(_interfaces_of(parsed))
-        rules.append(parsed)
+        # This importer's contract is "recognized shapes become rules,
+        # anything else is reported as unsupported" — never an unhandled
+        # exception. _parse_nft_rule_expr() and its helpers return None for
+        # every shape they anticipated (see their own docstrings/comments),
+        # but the sheer variety of what a hand-edited or differently-
+        # versioned nft JSON file could contain makes a residual
+        # try/except the honest backstop for that contract, not a
+        # substitute for the None-returning checks already in place.
+        try:
+            key = (rule_obj.get("table"), rule_obj.get("chain"))
+            our_chain = chain_hooks.get(key)
+            if our_chain is None:
+                warnings.append(f"Skipped rule in chain '{rule_obj.get('chain')}' (table {rule_obj.get('table')}) — only input/forward/output base chains are imported.")
+                continue
+            expr = rule_obj.get("expr")
+            if not isinstance(expr, list):
+                unsupported.append({"line": json.dumps(rule_obj)[:2000], "reason": "rule has no expr array"})
+                continue
+            parsed = _parse_nft_rule_expr(expr)
+            if parsed is None:
+                unsupported.append({"line": json.dumps(rule_obj)[:2000], "reason": "uses a match/statement this importer doesn't recognize"})
+                continue
+            # A rule's description is a top-level `rule.comment` field, not
+            # part of `expr` — this app's own id tag ("osfw:<id>") isn't a
+            # real description and is dropped rather than imported as one.
+            comment = rule_obj.get("comment")
+            if isinstance(comment, str) and comment and not _OSFW_ID_COMMENT_RE.match(comment):
+                parsed["description"] = comment
+            position[our_chain] += 1
+            parsed["chain"] = our_chain
+            parsed["position"] = position[our_chain]
+            interfaces_found.update(_interfaces_of(parsed))
+            rules.append(parsed)
+        except Exception as error:  # noqa: BLE001 — see comment above: fail closed per-rule, never crash the whole import
+            unsupported.append({"line": json.dumps(rule_obj)[:2000], "reason": f"could not parse ({type(error).__name__}) — not imported"})
 
     return {"rules": rules, "warnings": warnings, "unsupported": unsupported, "interfaces_found": sorted(interfaces_found)}
 
