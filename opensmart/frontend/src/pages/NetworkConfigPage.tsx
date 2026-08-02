@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { promptDialog } from '../components/Dialog';
 import type { InterfaceRole, MtuApply, NetworkInterface } from '../types';
 
 const ROLE_OPTIONS: { value: InterfaceRole; label: string }[] = [
@@ -147,7 +148,7 @@ export default function NetworkConfigPage() {
   }
 
   async function remap(oldName: string) {
-    const newName = window.prompt(`Which currently-detected interface should take over "${oldName}"'s alias, role, and monitor setting?`, '');
+    const newName = await promptDialog(`Which currently-detected interface should take over "${oldName}"'s alias, role, and monitor setting?`, '');
     if (!newName) return;
     try {
       await api.netRemapInterface(oldName, newName.trim());

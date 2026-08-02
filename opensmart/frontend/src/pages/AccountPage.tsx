@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
+import { confirmDialog } from '../components/Dialog';
 import { THEME_OPTIONS } from '../themes';
 import type { LogonInfo, SessionInfo, User } from '../types';
 
@@ -28,7 +29,7 @@ export default function AccountPage({ user, onUserUpdate }: Props) {
   }, []);
 
   async function terminateOtherSessions() {
-    if (!window.confirm('Terminate all other sessions for this account?')) return;
+    if (!(await confirmDialog('Terminate all other sessions for this account?'))) return;
     const result = await api.terminateOtherSessions();
     setSessions(result.sessions);
     setLogons(result.logons);

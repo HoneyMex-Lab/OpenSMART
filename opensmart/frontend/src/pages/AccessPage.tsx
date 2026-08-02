@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
+import { confirmDialog } from '../components/Dialog';
 import type { Role, User } from '../types';
 
 type UserForm = {
@@ -46,7 +47,7 @@ export default function AccessPage() {
   }
 
   async function updateUser(user: User, changes: Partial<User> & { password?: string }, confirmMessage?: string) {
-    if (confirmMessage && !window.confirm(confirmMessage)) return;
+    if (confirmMessage && !(await confirmDialog(confirmMessage))) return;
     const result = await api.updateUser({
       id: user.id,
       role: changes.role || user.role,
@@ -85,7 +86,7 @@ export default function AccessPage() {
   }
 
   async function remove(id: number) {
-    if (!window.confirm('Delete this user?')) return;
+    if (!(await confirmDialog('Delete this user?', { danger: true }))) return;
     const result = await api.deleteUser(id);
     setUsers(result.users);
   }

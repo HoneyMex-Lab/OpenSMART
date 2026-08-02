@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { promptDialog } from '../components/Dialog';
 import type { IdsSource, IdsSummary } from '../types';
 
 type Tab = 'rulesets' | 'detection' | 'classification' | 'advanced';
@@ -93,7 +94,7 @@ function RulesetsTab({ onChanged }: { onChanged: () => void }) {
     setError('');
     let params: Record<string, string> = {};
     if (!source.enabled && source.subscription) {
-      const code = window.prompt(`"${source.name}" is a subscription ruleset. Enter its access code / secret-code (leave blank if none):`, '');
+      const code = await promptDialog(`"${source.name}" is a subscription ruleset. Enter its access code / secret-code (leave blank if none):`, '');
       if (code === null) return;
       if (code.trim()) params = { 'secret-code': code.trim() };
     }

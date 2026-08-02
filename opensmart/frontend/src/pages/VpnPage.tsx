@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
+import { confirmDialog, promptDialog } from '../components/Dialog';
 import type { VpnCa, VpnConnection, VpnInstance, VpnSettings, VpnStatus, VpnUser } from '../types';
 
 const LDAP_FIELDS: { key: string; label: string; placeholder: string; required?: boolean }[] = [
@@ -110,7 +111,7 @@ export default function VpnPage() {
   }
 
   async function remove(name: string) {
-    if (!window.confirm(`Delete VPN instance '${name}'? All its certificates, keys and client configs are destroyed.`)) return;
+    if (!(await confirmDialog(`Delete VPN instance '${name}'? All its certificates, keys and client configs are destroyed.`, { danger: true }))) return;
     setBusy(name);
     setError('');
     try {
@@ -251,7 +252,7 @@ function CaManager({ cas, onChanged }: { cas: VpnCa[]; onChanged: () => void }) 
   }
 
   async function remove(name: string) {
-    if (!window.confirm(`Delete CA '${name}'? Its certificate and every user certificate it issued are destroyed.`)) return;
+    if (!(await confirmDialog(`Delete CA '${name}'? Its certificate and every user certificate it issued are destroyed.`, { danger: true }))) return;
     setBusy(name);
     setError('');
     try {
@@ -427,7 +428,7 @@ function UsersTab({ instance, onChanged }: { instance: VpnInstance; onChanged: (
   }
 
   async function setUserPassword(name: string) {
-    const next = window.prompt(`Set the VPN password for '${name}' (4–128 characters). Leave blank to clear it.`);
+    const next = await promptDialog(`Set the VPN password for '${name}' (4–128 characters). Leave blank to clear it.`);
     if (next === null) return;
     setWorking(true);
     setError('');
@@ -455,7 +456,7 @@ function UsersTab({ instance, onChanged }: { instance: VpnInstance; onChanged: (
   }
 
   async function revoke(name: string) {
-    if (!window.confirm(`Revoke '${name}'? Their VPN access is permanently removed${instance.vpn_type === 'openvpn' ? ' (certificate added to the CRL)' : ''}.`)) return;
+    if (!(await confirmDialog(`Revoke '${name}'? Their VPN access is permanently removed${instance.vpn_type === 'openvpn' ? ' (certificate added to the CRL)' : ''}.`, { danger: true }))) return;
     setWorking(true);
     setError('');
     try {

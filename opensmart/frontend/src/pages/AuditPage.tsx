@@ -3,7 +3,7 @@ import { RefreshCw } from 'lucide-react';
 import { api } from '../api';
 import type { AuditEvent } from '../types';
 
-type Tab = 'events' | 'log';
+type Tab = 'events' | 'log' | 'firewall-log';
 
 interface Props {
   user: { role: string };
@@ -17,6 +17,10 @@ export default function AuditPage({ user }: Props) {
   const [logError, setLogError] = useState<string | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [logN, setLogN] = useState(500);
+  const [fwLogLines, setFwLogLines] = useState<string[]>([]);
+  const [fwLogLoading, setFwLogLoading] = useState(false);
+  const [fwLogError, setFwLogError] = useState<string | null>(null);
+  const [fwLogN, setFwLogN] = useState(200);
 
   useEffect(() => {
     api.audit().then((result) => setEvents(result.events)).catch(() => setEvents([]));
@@ -26,6 +30,7 @@ export default function AuditPage({ user }: Props) {
     // Intentionally reload only on tab switch, not on every logN change —
     // the line-count dropdown is applied via the explicit Refresh button.
     if (tab === 'log') loadLog(logN);
+    if (tab === 'firewall-log') loadFirewallLog(fwLogN);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -44,6 +49,19 @@ export default function AuditPage({ user }: Props) {
     }
   }
 
+  async function loadFirewallLog(lines: number) {
+    setFwLogLoading(true);
+    setFwLogError(null);
+    try {
+      const result = await api.fwLogs(lines);
+      setFwLogLines(result.lines);
+    } catch (err) {
+      setFwLogError(err instanceof Error ? err.message : 'Failed to load firewall log.');
+    } finally {
+      setFwLogLoading(false);
+    }
+  }
+
   function onChangeLogN(value: number) {
     setLogN(value);
   }
@@ -54,6 +72,9 @@ export default function AuditPage({ user }: Props) {
         <button className={tab === 'events' ? 'active' : ''} onClick={() => setTab('events')}>Audit Events</button>
         {user.role === 'admin' && (
           <button className={tab === 'log' ? 'active' : ''} onClick={() => setTab('log')}>Application Log</button>
+        )}
+        {user.role === 'admin' && (
+          <button className={tab === 'firewall-log' ? 'active' : ''} onClick={() => setTab('firewall-log')}>Firewall Log</button>
         )}
       </div>
 
@@ -107,6 +128,32 @@ export default function AuditPage({ user }: Props) {
           {logError && <p className="error-box">{logError}</p>}
           <pre className="audit-log-pre">
             {logLines.length === 0 && !logLoading ? 'No log entries found.' : logLines.join('\n')}
+          </pre>
+        </>
+      )}
+
+      {tab === 'firewall-log' && (
+        <>
+          <div className="audit-log-toolbar">
+            <h2>Firewall Log</h2>
+            <label>
+              Lines
+              <input
+                type="number"
+                min="1"
+                max="2000"
+                value={fwLogN}
+                onChange={(e) => setFwLogN(Number(e.target.value) || 200)}
+              />
+            </label>
+            <button onClick={() => loadFirewallLog(fwLogN)} disabled={fwLogLoading}>
+              <RefreshCw size={14} /> {fwLogLoading ? 'Loading…' : 'Refresh'}
+            </button>
+          </div>
+          <p className="muted">Only firewall rules with "Log matches" enabled produce entries here — read from the kernel log, filtered to this firewall's own tag.</p>
+          {fwLogError && <p className="error-box">{fwLogError}</p>}
+          <pre className="audit-log-pre">
+            {fwLogLines.length === 0 && !fwLogLoading ? 'No log entries found.' : fwLogLines.join('\n')}
           </pre>
         </>
       )}

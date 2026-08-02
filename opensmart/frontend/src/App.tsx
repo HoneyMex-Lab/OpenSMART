@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, setCsrfToken } from './api';
 import AppShell from './components/AppShell';
+import DialogHost from './components/Dialog';
 import ForceChangePasswordPage from './components/ForceChangePasswordPage';
 import LoginPage from './components/LoginPage';
 import { t } from './i18n';
@@ -87,9 +88,17 @@ export default function App() {
     setUser({ ...me.user, csrfToken: me.user.csrfToken });
   }
 
-  if (loading) return <div className="loading">{t(settings, 'common.loadingOpenSMART', 'Loading OpenSMART...')}</div>;
-  if (!user) return <LoginPage settings={settings} onLogin={handleLogin} />;
-  if (user.mustChangePassword) return <ForceChangePasswordPage settings={settings} onChanged={handlePasswordChanged} />;
-  if (user.role === 'admin' && settings.wizard_completed !== 'true') return <WizardPage settings={settings} setSettings={setSettings} onComplete={loadSettings} user={user} />;
-  return <AppShell user={user} setUser={setUser} settings={settings} setSettings={setSettings} onLogout={handleLogout} />;
+  let content;
+  if (loading) content = <div className="loading">{t(settings, 'common.loadingOpenSMART', 'Loading OpenSMART...')}</div>;
+  else if (!user) content = <LoginPage settings={settings} onLogin={handleLogin} />;
+  else if (user.mustChangePassword) content = <ForceChangePasswordPage settings={settings} onChanged={handlePasswordChanged} />;
+  else if (user.role === 'admin' && settings.wizard_completed !== 'true') content = <WizardPage settings={settings} setSettings={setSettings} onComplete={loadSettings} user={user} />;
+  else content = <AppShell user={user} setUser={setUser} settings={settings} setSettings={setSettings} onLogout={handleLogout} />;
+
+  return (
+    <>
+      {content}
+      <DialogHost />
+    </>
+  );
 }

@@ -1,5 +1,6 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import { api } from '../api';
+import { confirmDialog, promptDialog } from '../components/Dialog';
 import type { FirewallAlias, FirewallChain, FirewallEngine, FirewallImportDraft, FirewallImportDraftRule, FirewallProfile, FirewallRule, FirewallSummary, FirewallValidateResult, NetworkInterface } from '../types';
 
 type Tab = 'overview' | 'rules' | 'aliases' | 'advanced';
@@ -177,7 +178,7 @@ function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: Fi
   }
 
   async function cloneProfile(profile: FirewallProfile) {
-    const name = window.prompt(`Name for the clone of "${profile.name}"?`, `${profile.name} copy`);
+    const name = await promptDialog(`Name for the clone of "${profile.name}"?`, `${profile.name} copy`);
     if (!name) return;
     setError('');
     try {
@@ -189,7 +190,7 @@ function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: Fi
   }
 
   async function deleteProfile(profile: FirewallProfile) {
-    if (!window.confirm(`Delete profile "${profile.name}"? This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete profile "${profile.name}"? This cannot be undone.`, { danger: true }))) return;
     setError('');
     try {
       await api.fwDeleteProfile(profile.id);
@@ -200,7 +201,7 @@ function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: Fi
   }
 
   async function applyProfile(profile: FirewallProfile) {
-    if (!window.confirm(`Apply "${profile.name}"? You'll have a confirm window to keep or revert the change.`)) return;
+    if (!(await confirmDialog(`Apply "${profile.name}"? You'll have a confirm window to keep or revert the change.`))) return;
     setApplying(profile.id);
     setError('');
     try {
@@ -301,7 +302,7 @@ function RulesTab({ profileId, onChanged }: { profileId: number; onChanged: () =
   }
 
   async function deleteRule(rule: FirewallRule) {
-    if (!window.confirm('Delete this rule?')) return;
+    if (!(await confirmDialog('Delete this rule?', { danger: true }))) return;
     try {
       await api.fwDeleteRule(rule.id);
       await load();
@@ -639,8 +640,6 @@ function AdvancedTab({ profileId, engine, onImported }: { profileId: number; eng
   const [validation, setValidation] = useState<FirewallValidateResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState('');
-  const [logLines, setLogLines] = useState<string[]>([]);
-  const [logsLoading, setLogsLoading] = useState(false);
   const [customNft, setCustomNft] = useState('');
   const [customDirty, setCustomDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -687,13 +686,6 @@ function AdvancedTab({ profileId, engine, onImported }: { profileId: number; eng
     }
   }
 
-  async function loadLogs() {
-    setLogsLoading(true);
-    try { setLogLines((await api.fwLogs(200)).lines); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Could not read firewall logs'); }
-    finally { setLogsLoading(false); }
-  }
-
   return (
     <article className="card">
       {error && <p className="error-text">{error}</p>}
@@ -738,15 +730,7 @@ function AdvancedTab({ profileId, engine, onImported }: { profileId: number; eng
       </label>
 
       <ImportPanel onImported={onImported} />
-
-      <div className="section-actions">
-        <h4 style={{ margin: 0 }}>Logs</h4>
-        <button className="btn-secondary" onClick={loadLogs} disabled={logsLoading}>{logsLoading ? 'Loading…' : 'Load recent log matches'}</button>
-      </div>
-      <p className="muted">Only rules with "Log matches" enabled produce entries here — read from the kernel log, filtered to this firewall's own tag.</p>
-      {logLines.length > 0 && (
-        <textarea className="ids-editor" value={logLines.join('\n')} readOnly rows={12} />
-      )}
+      <p className="muted">Firewall log matches have moved to Audit &gt; Firewall Log.</p>
     </article>
   );
 }
@@ -931,7 +915,7 @@ function AliasesTab() {
   }
 
   async function remove(alias: FirewallAlias) {
-    if (!window.confirm(`Delete alias "${alias.name}"?`)) return;
+    if (!(await confirmDialog(`Delete alias "${alias.name}"?`, { danger: true }))) return;
     try {
       await api.fwDeleteAlias(alias.id);
       await load();
