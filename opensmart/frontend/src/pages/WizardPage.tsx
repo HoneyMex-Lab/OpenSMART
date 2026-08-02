@@ -2,11 +2,11 @@ import { ChangeEvent, useEffect, useState } from 'react';
 import { api } from '../api';
 import ThemeSwatchPreview from '../components/ThemeSwatchPreview';
 import { DEFAULT_THEME, THEME_OPTIONS } from '../themes';
-import type { HostInterface, HostResources, OpenSmartModule, ProvisionResult, Settings, ToolConfig, User } from '../types';
+import type { FirewallRule, HostInterface, HostResources, OpenSmartModule, ProvisionResult, Settings, ToolConfig, User } from '../types';
 import { MODULE_BACKING, NOT_IMPLEMENTED, PROJECT_LABELS, TOOL_BACKING } from './backing';
 import { toolDefinitions } from './toolDefinitions';
 
-type StepKey = 'basics' | 'network' | 'features' | 'provision' | 'theme';
+type StepKey = 'basics' | 'network' | 'features' | 'provision' | 'theme' | 'allowlist';
 
 const steps: { key: StepKey; label: string }[] = [
   { key: 'basics', label: '1. Basics' },
@@ -14,7 +14,14 @@ const steps: { key: StepKey; label: string }[] = [
   { key: 'features', label: '3. Modules & Tools' },
   { key: 'provision', label: '4. Provision' },
   { key: 'theme', label: '5. Theme' },
+  { key: 'allowlist', label: '6. Access allowlist' },
 ];
+
+// Exact rule names firewall.py's system_rule=2 tier and the seeded Default
+// profile both key off of — see database.py's safety_rules seed and
+// firewall.update_rule()'s allowlist-managed field restrictions.
+const ALLOWLIST_SSH_NAME = 'Allowlist management SSH';
+const ALLOWLIST_WEB_NAME = 'Allowlist management Web';
 
 // Strong working defaults: Suricata+Zeek traffic monitoring, Suricata IDS,
 // OpenVPN remote access, and embedded (iframe) access to Wazuh/Arkime/Proxmox.
@@ -113,6 +120,12 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
   // Stays false until the admin actually touches the selector, so arriving on
   // this step never silently overrides their real applied theme first.
   const [themePreviewed, setThemePreviewed] = useState(false);
+  const [sshRule, setSshRule] = useState<FirewallRule | null>(null);
+  const [webRule, setWebRule] = useState<FirewallRule | null>(null);
+  const [sshAllow, setSshAllow] = useState('');
+  const [webAllow, setWebAllow] = useState('');
+  const [allowlistError, setAllowlistError] = useState('');
+  const [allowlistSaving, setAllowlistSaving] = useState(false);
 
   // Live-preview the picked theme only while on this step and only once
   // touched; restore the real applied theme (same priority App.tsx uses)
@@ -204,6 +217,46 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
     if (step === 'network' && interfaces === null && !ifacesLoading && !ifaceError) loadInterfaces();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
+
+  // The two allowlist rules always exist by this point (seeded unconditionally
+  // at database init, not created by the Wizard) — find them by their fixed
+  // description on the active profile so this step can read/write their
+  // current `src` value through the same validated update path the Rules
+  // page uses.
+  useEffect(() => {
+    if (step !== 'allowlist' || sshRule || webRule) return;
+    api.fwProfiles().then(async ({ profiles }) => {
+      const active = profiles.find((p) => p.active) ?? profiles[0];
+      if (!active) return;
+      const { rules } = await api.fwRules(active.id);
+      const ssh = rules.find((r) => r.description === ALLOWLIST_SSH_NAME) ?? null;
+      const web = rules.find((r) => r.description === ALLOWLIST_WEB_NAME) ?? null;
+      setSshRule(ssh);
+      setWebRule(web);
+      setSshAllow(ssh?.src || '');
+      setWebAllow(web?.src || '');
+    }).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  async function finishAllowlist() {
+    setAllowlistError('');
+    setAllowlistSaving(true);
+    try {
+      if (sshRule && sshAllow.trim() !== (sshRule.src || '')) {
+        await api.fwUpdateRule(sshRule.id, { src: sshAllow.trim() });
+      }
+      if (webRule && webAllow.trim() !== (webRule.src || '')) {
+        await api.fwUpdateRule(webRule.id, { src: webAllow.trim() });
+      }
+      setSettings({ ...settings, wizard_completed: 'true' });
+      await onComplete?.();
+    } catch (err) {
+      setAllowlistError(err instanceof Error ? err.message : 'Could not save the allowlist');
+    } finally {
+      setAllowlistSaving(false);
+    }
+  }
 
   function goTo(next: StepKey) {
     setVisited((prev) => new Set(prev).add(next));
@@ -370,22 +423,19 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
     }
   }
 
-  async function enterApp() {
+  async function saveThemeAndContinue() {
     if (theme && theme !== settings.theme) {
       try {
         // Partial payload — only touches the `theme` key server-side, so it
         // can't clobber settings saved earlier in this same wizard run.
         const result = await api.saveSettings({ theme });
         setSettings(result.settings);
-        await onComplete?.();
-        return;
       } catch {
-        // Non-fatal — entering the app shouldn't block on this; the default
-        // theme can still be changed from Settings afterwards.
+        // Non-fatal — moving on shouldn't block on this; the default theme
+        // can still be changed from Settings afterwards.
       }
     }
-    setSettings({ ...settings, wizard_completed: 'true' });
-    await onComplete?.();
+    goTo('allowlist');
   }
 
   const doneCount = runItems.filter((item) => item.state === 'ok' || item.state === 'warning' || item.state === 'error' || item.state === 'info').length;
@@ -651,7 +701,43 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
             <ThemeSwatchPreview theme={theme || DEFAULT_THEME} />
           </label>
           <div className="config-save-bar">
-            <button onClick={enterApp}>Enter {appName.trim() || 'OpenSMART'}</button>
+            <button onClick={saveThemeAndContinue}>Next: Access allowlist</button>
+          </div>
+        </article>
+      )}
+
+      {step === 'allowlist' && (
+        <article className="card">
+          <h2>Access allowlist</h2>
+          <p className="muted">
+            Optionally restrict web console (tcp/443) and SSH (tcp/22) access to a specific network, host, or IP.
+            If you leave a field empty, that port stays open to any network — the platform's current safe default —
+            but it's recommended to add a custom allowlist once you know where you'll be managing this system from.
+          </p>
+          {(!sshRule || !webRule) ? (
+            <p className="muted">Loading current firewall rules…</p>
+          ) : (
+            <>
+              <label>Web console (tcp/443) — allowed network/host (optional)
+                <input value={webAllow} onChange={(event) => setWebAllow(event.target.value)} placeholder="10.0.0.0/8" />
+              </label>
+              <label>SSH (tcp/22) — allowed network/host (optional)
+                <input value={sshAllow} onChange={(event) => setSshAllow(event.target.value)} placeholder="10.0.0.0/8" />
+              </label>
+              {!webAllow.trim() && !sshAllow.trim() && (
+                <p className="wizard-summary-warning">
+                  No custom allowlist set — web console and SSH will remain open to any network. You can add one later
+                  from the Firewall page's Rules tab (look for the rules named "{ALLOWLIST_WEB_NAME}" /
+                  "{ALLOWLIST_SSH_NAME}").
+                </p>
+              )}
+            </>
+          )}
+          {allowlistError && <p className="error-text">{allowlistError}</p>}
+          <div className="config-save-bar">
+            <button onClick={finishAllowlist} disabled={allowlistSaving || !sshRule || !webRule}>
+              {allowlistSaving ? 'Saving…' : `Enter ${appName.trim() || 'OpenSMART'}`}
+            </button>
           </div>
         </article>
       )}

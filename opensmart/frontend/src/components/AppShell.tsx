@@ -38,6 +38,7 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
   const [collapsed, setCollapsed] = useState(false);
   const [tools, setTools] = useState<ToolConfig[]>([]);
   const [modules, setModules] = useState<OpenSmartModule[]>([]);
+  const [allowlistOpen, setAllowlistOpen] = useState(false);
 
   async function refreshCatalogs() {
     const [toolResult, moduleResult] = await Promise.all([api.tools(), api.openSmartModules()]);
@@ -46,6 +47,21 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
   }
 
   useEffect(() => { refreshCatalogs().catch(() => undefined); }, []);
+
+  // Firewall's allowlist-status endpoint is admin-only (require_admin_read) —
+  // non-admin roles skip the fetch rather than eating a 403 on every page.
+  // Polling (not a one-shot check) keeps the banner honest across the
+  // session as an admin edits or applies rules from the Firewall page.
+  useEffect(() => {
+    if (user.role !== 'admin') return;
+    let cancelled = false;
+    function poll() {
+      api.fwAllowlistStatus().then((result) => { if (!cancelled) setAllowlistOpen(result.open); }).catch(() => undefined);
+    }
+    poll();
+    const interval = setInterval(poll, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [user.role]);
 
   const pageTitles: Record<string, string> = { home: 'Home', 'webconsole-config': 'Settings', 'opensmart-modules': 'OpenSMART Modules' };
   const title = page.startsWith('tool:') ? toolDefinitions[tools.find((tool) => page === `tool:${tool.id}`)?.name || '']?.title || tools.find((tool) => page === `tool:${tool.id}`)?.name || 'Tool'
@@ -122,6 +138,18 @@ export default function AppShell({ user, setUser, settings, setSettings, onLogou
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setCollapsed((value) => !value)}>Menu</button>
           <div className="title-block"><p className="eyebrow">Open Source Security Platform</p><h1>{title}</h1></div>
+          {allowlistOpen && (
+            <button
+              className="badge warning allowlist-open-banner"
+              title="Web console and/or SSH access has no custom allowlist — open to any network. Click to configure one."
+              onClick={() => {
+                const firewallModule = modules.find((m) => m.name === 'Firewall');
+                if (firewallModule) setPage(`module:${firewallModule.id}`);
+              }}
+            >
+              Open to any network
+            </button>
+          )}
           <div className="user-pill">{user.role}</div>
         </header>
         {renderPage()}

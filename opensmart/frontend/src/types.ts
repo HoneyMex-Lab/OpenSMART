@@ -408,7 +408,10 @@ export type FirewallRule = {
   chain: FirewallChain;
   position: number;
   enabled: boolean;
-  system_rule: boolean;
+  // 0 = fully user-owned; 1 = fixed (locked, enable/disable only);
+  // 2 = allowlist-managed (src/src_negate also editable, subject to
+  // server-side lockout-prevention validation).
+  system_rule: 0 | 1 | 2;
   action: FirewallAction;
   reject_with: string;
   family: 'inet' | 'ip' | 'ip6';

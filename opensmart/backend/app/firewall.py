@@ -128,6 +128,35 @@ def _validate_port_list(value: str, field: str) -> None:
             raise FirewallError(f"{field} range must be low-high: '{part}'.")
 
 
+def _validate_allowlist_src(value: str) -> None:
+    """Lockout-prevention for system_rule=2 (allowlist-managed) rules: per
+    the issue, adding ANY non-empty src makes the allowlist "effective"
+    (the rule now only accepts from that network, and the drop policy
+    catches everything else) — but 0.0.0.0, 255.255.255.255, ::, or any
+    CIDR expression equivalent to "every address" would give the false
+    impression of a restriction while functionally allowing everyone (or,
+    for 255.255.255.255, being a meaningless "network" to restrict to).
+    This blocks SAVING outright rather than just warning, per the issue —
+    it's a lockout-prevention control, not a cosmetic one."""
+    everyone_addresses = {ipaddress.ip_address("0.0.0.0"), ipaddress.ip_address("255.255.255.255"), ipaddress.ip_address("::")}
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        addr_part = part.split("/")[0].strip()
+        try:
+            if ipaddress.ip_address(addr_part) in everyone_addresses:
+                raise FirewallError(f"'{part}' is not a usable allowlist entry — it does not meaningfully restrict access.")
+        except ValueError:
+            pass
+        try:
+            network = ipaddress.ip_network(part, strict=False)
+        except ValueError:
+            continue  # shape already validated elsewhere; not this check's job
+        if network.num_addresses == 2 ** network.max_prefixlen:
+            raise FirewallError(f"'{part}' matches every address and cannot be used as an allowlist entry — it defeats the purpose of restricting access.")
+
+
 def _validate_rule_fields(effective: dict) -> None:
     """Validates the EFFECTIVE field set (existing rule merged with the
     patch, or the full create payload) — cross-field checks like "ports
@@ -180,10 +209,17 @@ def _coerce_profile(row: dict) -> dict:
 
 
 def _coerce_rule(row: dict) -> dict:
+    # system_rule is a tier, not a flag: 0 = fully user-owned; 1 = fixed
+    # (position/fields locked, enable/disable only); 2 = allowlist-managed
+    # (position/chain/action/protocol/port locked, but src/src_negate are
+    # editable subject to _validate_allowlist_src — see update_rule()).
+    # Kept as a raw int (not bool()'d) so the frontend can tell 1 and 2
+    # apart; every existing truthiness check (`if rule["system_rule"]`)
+    # still works unchanged since both 1 and 2 are truthy.
     return {
         **row,
         "enabled": bool(row["enabled"]),
-        "system_rule": bool(row["system_rule"]),
+        "system_rule": row["system_rule"],
         "src_negate": bool(row["src_negate"]),
         "dst_negate": bool(row["dst_negate"]),
         "log": bool(row["log"]),
@@ -290,6 +326,27 @@ def active_profile() -> dict | None:
     return _coerce_profile(dict(row)) if row else None
 
 
+def allowlist_status() -> dict:
+    """Whether the platform is currently open to any network on the
+    allowlist-managed ports — drives the global warning banner (see
+    routes/firewall.py's summary() and AppShell.tsx). Only meaningful when
+    the Firewall module is actually enabled and the active profile enforces
+    a drop policy on input; a module that isn't enabled, or a profile that
+    accepts everything by design, has no lockout-prevention story to warn
+    about, so 'open' stays false in either case."""
+    with get_db() as db:
+        module_row = db.execute("SELECT enabled FROM opensmart_modules WHERE name = 'Firewall'").fetchone()
+    if module_row is None or not module_row["enabled"]:
+        return {"open": False}
+    profile = active_profile()
+    if profile is None or _json_policies(profile["policies"]).get("input") != "drop":
+        return {"open": False}
+    allowlist_rules = [r for r in list_rules(profile["id"]) if r["system_rule"] == 2 and r["enabled"]]
+    if not allowlist_rules:
+        return {"open": False}
+    return {"open": any(not r["src"] for r in allowlist_rules)}
+
+
 # ── Rule CRUD ────────────────────────────────────────────────────────────────
 
 def list_rules(profile_id: int) -> list[dict]:
@@ -339,9 +396,28 @@ def get_rule(rule_id: int) -> dict:
     return _coerce_rule(dict(row))
 
 
+_ALLOWLIST_EDITABLE_FIELDS = {"enabled", "src", "src_negate"}
+
+
 def update_rule(rule_id: int, fields: dict) -> dict:
     rule = get_rule(rule_id)
-    if rule["system_rule"] and set(fields) - {"enabled"}:
+    # Compare against ACTUAL changes, not just which keys are present — the
+    # frontend's rule editor round-trips the whole rule object (spread from
+    # the loaded row) rather than a diff, so an update to a tier-1/2 rule's
+    # allowed field(s) still carries every other field along at its current,
+    # unchanged value. Rejecting on mere presence would make every such save
+    # fail; rejecting only on an actual value change preserves the real
+    # protection (those other fields still can't be CHANGED) without that
+    # false positive.
+    changed = {key: value for key, value in fields.items() if rule.get(key) != value}
+    if rule["system_rule"] == 2:
+        disallowed = set(changed) - _ALLOWLIST_EDITABLE_FIELDS
+        if disallowed:
+            raise FirewallError(
+                f"This allowlist-managed rule only allows editing {', '.join(sorted(_ALLOWLIST_EDITABLE_FIELDS))} "
+                f"— clone the profile to customize other fields."
+            )
+    elif rule["system_rule"] and set(changed) - {"enabled"}:
         raise FirewallError("System safety rules can only be enabled/disabled, not edited — clone the profile to customize them.")
     unknown = set(fields) - _RULE_FIELDS
     if unknown:
@@ -351,6 +427,8 @@ def update_rule(rule_id: int, fields: dict) -> dict:
     # Cross-field checks (e.g. "ports require tcp/udp") need the rule's
     # OTHER fields too, since an update may only touch one column.
     _validate_rule_fields({**rule, **fields})
+    if rule["system_rule"] == 2:
+        _validate_allowlist_src(fields.get("src", rule["src"]))
     columns = [f"{key} = ?" for key in fields]
     params = list(fields.values())
     columns.append("updated_at = ?")

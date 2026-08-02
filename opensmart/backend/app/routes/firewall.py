@@ -105,6 +105,15 @@ def _clean(payload: BaseModel) -> dict:
     return {k: v for k, v in payload.model_dump().items() if v is not None}
 
 
+@router.get("/allowlist-status")
+def allowlist_status(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
+    """Cheap, DB-only status for the app-wide "open to any network" warning
+    banner (see AppShell.tsx) — deliberately separate from summary() so
+    every page load doesn't need the full profile/rules/live-state payload
+    (the last of which spawns a one-off container)."""
+    return fw.allowlist_status()
+
+
 @router.get("/summary")
 def summary(_: Annotated[dict, Depends(require_admin_read)]) -> dict:
     profile = fw.active_profile()

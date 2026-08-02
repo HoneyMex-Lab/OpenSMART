@@ -851,27 +851,49 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                 (fw_now, fw_now),
             )
             profile_id = cur.lastrowid
+            # system_rule tiers: 1 = fully pinned (position/fields locked,
+            # enable/disable only); 2 = allowlist-managed (src/src_negate
+            # also editable, subject to firewall._validate_allowlist_src —
+            # see earlier revision's Wizard allowlist step and rule manager).
             safety_rules = [
-                # chain, position, action, protocol, iif, oif, dport, ct_state, description
-                ("input", 1, "accept", "any", "lo", "", "", "", "Loopback"),
-                ("input", 2, "accept", "any", "", "", "", "established,related", "Existing/related connections"),
-                ("input", 3, "accept", "tcp", "", "", "22", "", "SSH management access"),
-                # HTTPS front-door gets its own dedicated, always-present rule
-                # (not lumped in with 80/8000) — this is the one port an admin
-                # must never lose access to, so it survives independently of
-                # any edit to the other management-port rules.
-                ("input", 4, "accept", "tcp", "", "", "443", "", "HTTPS web console (always allowed — prevents lockout)"),
-                ("input", 5, "accept", "tcp", "", "", "80,8000", "", "HTTP / direct-access web console"),
-                ("forward", 1, "accept", "any", "docker0,br-*", "", "", "", "Docker bridge traffic (inbound)"),
-                ("forward", 2, "accept", "any", "", "docker0,br-*", "", "", "Docker bridge traffic (outbound)"),
-                ("forward", 3, "accept", "any", "", "", "", "established,related", "Existing/related connections"),
+                # chain, position, system_rule, action, protocol, iif, oif, dport, ct_state, description
+                ("input", 1, 1, "accept", "any", "lo", "", "", "", "Loopback"),
+                ("input", 2, 1, "accept", "any", "", "", "", "established,related", "Existing/related connections"),
+                # These two are the ones the initial-Wizard allowlist step and
+                # the rule manager's "Allowlist management" edit both target —
+                # renaming or duplicating them would break that link (see
+                # firewall.update_rule()'s system_rule=2 handling).
+                ("input", 3, 2, "accept", "tcp", "", "", "22", "", "Allowlist management SSH"),
+                ("input", 4, 2, "accept", "tcp", "", "", "443", "", "Allowlist management Web"),
+                ("input", 5, 1, "accept", "tcp", "", "", "80,8000", "", "HTTP / direct-access web console"),
+                ("forward", 1, 1, "accept", "any", "docker0,br-*", "", "", "", "Docker bridge traffic (inbound)"),
+                ("forward", 2, 1, "accept", "any", "", "docker0,br-*", "", "", "Docker bridge traffic (outbound)"),
+                ("forward", 3, 1, "accept", "any", "", "", "", "established,related", "Existing/related connections"),
             ]
-            for chain, position, action, protocol, iif, oif, dport, ct_state, description in safety_rules:
+            for chain, position, system_rule, action, protocol, iif, oif, dport, ct_state, description in safety_rules:
                 db.execute(
                     "INSERT INTO firewall_rules (profile_id, chain, position, system_rule, action, protocol, iif, oif, dport, ct_state, description, created_at, updated_at) "
-                    "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (profile_id, chain, position, action, protocol, iif, oif, dport, ct_state, description, fw_now, fw_now),
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (profile_id, chain, position, system_rule, action, protocol, iif, oif, dport, ct_state, description, fw_now, fw_now),
                 )
+        # earlier revision: promote the dedicated SSH/443 safety rules seeded by
+        # earlier revision (system_rule=1, always-open) to the new "allowlist-
+        # managed" tier and rename them to the exact strings the Wizard
+        # allowlist step and rule manager key off of. Repurposing these rules
+        # — rather than adding new, separate ones — is what makes "adding a
+        # custom network makes the allowlist effective" true: a second,
+        # still-always-open accept rule would keep matching everyone
+        # regardless of what a new rule restricts. Idempotent: only matches
+        # rows still at the pre-migration description, so re-running this
+        # (or an admin renaming their own copy back) doesn't re-fire.
+        db.execute(
+            "UPDATE firewall_rules SET system_rule = 2, description = 'Allowlist management SSH' "
+            "WHERE system_rule = 1 AND description = 'SSH management access'"
+        )
+        db.execute(
+            "UPDATE firewall_rules SET system_rule = 2, description = 'Allowlist management Web' "
+            "WHERE system_rule = 1 AND description = 'HTTPS web console (always allowed — prevents lockout)'"
+        )
         # Backfill network_interfaces rows from the legacy monitor_interfaces
         # setting (comma-separated interface names chosen in the Wizard), so
         # existing installs' capture interfaces carry over as monitor=1 rows

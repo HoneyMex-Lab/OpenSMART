@@ -128,6 +128,7 @@ export const api = {
     return { filename: match ? match[1] : `${name}-${username}.conf`, content: await response.text() };
   },
   fwSummary: () => request<FirewallSummary>('/api/firewall/summary'),
+  fwAllowlistStatus: () => request<{ open: boolean }>('/api/firewall/allowlist-status'),
   fwProfiles: () => request<{ profiles: FirewallProfile[] }>('/api/firewall/profiles'),
   fwRules: (profileId: number) => request<{ rules: FirewallRule[] }>(`/api/firewall/profiles/${profileId}/rules`),
   fwPreview: (profileId: number) => request<{ nft: string }>(`/api/firewall/profiles/${profileId}/preview`),

@@ -1489,6 +1489,7 @@ button:disabled { opacity: .65; cursor: wait; }
 .badge.ok { background: var(--c-rgba-99-230-190-14); color: var(--c-63e6be); }
 .badge.ok-dim { background: var(--c-rgba-99-230-190-08); color: var(--c-63e6be); font-weight: 600; }
 .badge.muted { background: var(--c-rgba-255-255-255-07); color: var(--c-7890a8); font-weight: 600; }
+.allowlist-open-banner { border: 1px solid var(--c-rgba-255-200-87-38); cursor: pointer; white-space: nowrap; }
 .status-dot { width: 9px; height: 9px; display: inline-block; flex: 0 0 auto; border-radius: 999px; background: var(--c-63e6be); box-shadow: 0 0 0 3px var(--c-rgba-99-230-190-12); }
 .status-dot.warning { background: var(--c-ffc857); box-shadow: 0 0 0 3px var(--c-rgba-255-200-87-12); }
 .status-dot.disabled { background: var(--c-788394); box-shadow: 0 0 0 3px var(--c-rgba-120-131-148-12); }
