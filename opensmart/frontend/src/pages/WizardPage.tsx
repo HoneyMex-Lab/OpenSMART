@@ -345,18 +345,32 @@ export default function WizardPage({ settings, setSettings, modules: modulesProp
 
       // (Re)start the front-door proxy so it picks up the hostname just
       // saved — its init step re-issues the self-signed certificate for it.
+      // This request is itself proxied THROUGH nginx (the app's own :8000 is
+      // loopback-only), so the backend defers the actual recreate until
+      // after this response is sent (see routes/provisioning.py) rather
+      // than doing it inline — recreating nginx synchronously would block
+      // this very response behind nginx's own shutdown, which previously
+      // got force-killed and reset the connection on every first install
+      // (confirmed live). The response below is therefore optimistic, not a
+      // confirmed outcome; the real result lands as a follow-up audit event.
       updateItem('container:nginx', { state: 'running' });
       try {
         const proxyResult = await api.provisionStart('nginx', 'container');
         updateItem('container:nginx', {
           state: proxyResult.ok ? 'ok' : 'warning',
           detail: proxyResult.ok
-            ? `Serving https://${proxyHostname.trim() || host}/ with a self-signed certificate (accept the browser warning once).`
+            ? `Applying — will serve https://${proxyHostname.trim() || host}/ with a self-signed certificate in a few seconds (accept the browser warning once).`
             : proxyResult.detail || 'Proxy failed to start — tool aliases will be unavailable; the app itself is unaffected.',
         });
       } catch (error) {
         updateItem('container:nginx', { state: 'warning', detail: error instanceof Error ? error.message : 'Proxy failed to start — tool aliases will be unavailable.' });
       }
+
+      // Give the deferred recreate above a moment to actually finish before
+      // firing the next request — observed live at well under 1s once it's
+      // not blocked on an in-flight connection (unlike before this fix), but
+      // this margin avoids racing the brief container-swap window.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
 
       updateItem('finalize', { state: 'running' });
       await api.saveSettings({ ...nextSettings, wizard_completed: 'true' });
