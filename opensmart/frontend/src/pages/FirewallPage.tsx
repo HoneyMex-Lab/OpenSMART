@@ -34,6 +34,17 @@ export default function FirewallPage({ initialTab }: { initialTab?: Tab } = {}) 
   // about to decide whether to confirm. Cleared once the apply resolves.
   const [applyWarnings, setApplyWarnings] = useState<string[]>([]);
   const [warningsAcked, setWarningsAcked] = useState(false);
+  // Which profile the Rules/Advanced tabs are showing — independent of
+  // which one is active. Previously these tabs were hardcoded to
+  // summary.active_profile, so a profile's rules were only visible after
+  // applying it; null here means "no explicit choice yet, fall back to
+  // active" (see viewedProfile below), not "nothing to show".
+  const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
+
+  function viewProfile(id: number, targetTab: Tab = 'rules') {
+    setSelectedProfileId(id);
+    setTab(targetTab);
+  }
 
   async function load() {
     try {
@@ -99,6 +110,13 @@ export default function FirewallPage({ initialTab }: { initialTab?: Tab } = {}) 
   ];
 
   const pending = summary?.pending_apply;
+  const viewedProfile = (selectedProfileId !== null && summary?.profiles.find((p) => p.id === selectedProfileId)) || summary?.active_profile || null;
+  // Selection outlives the profile it points at (deleted from another tab,
+  // or from a second admin's session) — fall back to active rather than
+  // silently rendering stale/empty tabs.
+  useEffect(() => {
+    if (selectedProfileId !== null && summary && !summary.profiles.some((p) => p.id === selectedProfileId)) setSelectedProfileId(null);
+  }, [summary, selectedProfileId]);
 
   return (
     <section className="ids-manager">
@@ -172,16 +190,33 @@ export default function FirewallPage({ initialTab }: { initialTab?: Tab } = {}) 
         {TABS.map((t) => <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>{t.label}</button>)}
       </div>
 
-      {tab === 'overview' && <OverviewTab summary={summary} onChanged={load} onApplied={onApplied} applyBusy={!!pending && pending.state === 'pending'} />}
-      {tab === 'rules' && summary?.active_profile && <RulesTab profileId={summary.active_profile.id} onChanged={load} />}
-      {tab === 'rules' && !summary?.active_profile && <p className="muted">No active profile.</p>}
+      {(tab === 'rules' || tab === 'advanced') && summary && summary.profiles.length > 0 && (
+        <div className="profile-viewer-bar">
+          <label>
+            Viewing profile
+            <select value={viewedProfile?.id ?? ''} onChange={(event) => setSelectedProfileId(Number(event.target.value))}>
+              {summary.profiles.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.engine}){p.active ? ' — active' : ''}</option>)}
+            </select>
+          </label>
+          {viewedProfile && !viewedProfile.active && (
+            <span className="badge warning" title="Rule changes here save immediately but have no effect on the host until this profile is applied">
+              Not the active profile — edits won't take effect until applied
+            </span>
+          )}
+        </div>
+      )}
+
+      {tab === 'overview' && <OverviewTab summary={summary} onChanged={load} onApplied={onApplied} applyBusy={!!pending && pending.state === 'pending'} onViewRules={(id) => viewProfile(id, 'rules')} />}
+      {tab === 'rules' && viewedProfile && <RulesTab key={viewedProfile.id} profileId={viewedProfile.id} onChanged={load} />}
+      {tab === 'rules' && !viewedProfile && <p className="muted">No profiles yet — create one from the Overview tab.</p>}
       {tab === 'aliases' && <AliasesTab />}
-      {tab === 'advanced' && summary?.active_profile && <AdvancedTab profileId={summary.active_profile.id} engine={summary.active_profile.engine} onImported={load} />}
+      {tab === 'advanced' && viewedProfile && <AdvancedTab key={viewedProfile.id} profileId={viewedProfile.id} engine={viewedProfile.engine} onImported={load} />}
+      {tab === 'advanced' && !viewedProfile && <p className="muted">No profiles yet — create one from the Overview tab.</p>}
     </section>
   );
 }
 
-function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: FirewallSummary | null; onChanged: () => void; onApplied: (warnings: string[]) => void; applyBusy: boolean }) {
+function OverviewTab({ summary, onChanged, onApplied, applyBusy, onViewRules }: { summary: FirewallSummary | null; onChanged: () => void; onApplied: (warnings: string[]) => void; applyBusy: boolean; onViewRules: (profileId: number) => void }) {
   const [error, setError] = useState('');
   const [newName, setNewName] = useState('');
   const [newEngine, setNewEngine] = useState<FirewallProfile['engine']>('nftables');
@@ -253,6 +288,7 @@ function OverviewTab({ summary, onChanged, onApplied, applyBusy }: { summary: Fi
               <td className="status-table-detail muted">{profile.description || '—'}</td>
               <td>
                 <div className="config-save-bar" style={{ margin: 0 }}>
+                  <button className="btn-secondary" onClick={() => onViewRules(profile.id)}>View rules</button>
                   {!profile.active && (
                     <button className="btn-secondary" onClick={() => applyProfile(profile)} disabled={applyBusy || applying === profile.id}>
                       {applying === profile.id ? 'Applying…' : 'Apply'}

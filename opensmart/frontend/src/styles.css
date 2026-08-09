@@ -2234,6 +2234,9 @@ th { color: var(--c-91a2b5); font-size: .78rem; text-transform: uppercase; lette
 .ids-manager { display: block; }
 .ids-status-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; font-size: .9rem; }
 .ids-tabs { margin: 14px 0 16px; }
+.profile-viewer-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--c-rgba-255-255-255-1); border-radius: 14px; background: var(--c-rgba-255-255-255-045); font-size: .88rem; }
+.profile-viewer-bar label { display: flex; align-items: center; gap: 8px; color: var(--c-b9c7d8); }
+.profile-viewer-bar select { min-width: 220px; }
 .ids-subhead { margin: 22px 0 8px; font-size: .95rem; }
 .ids-restart-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 10px 0; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--c-rgba-255-196-87-45, rgba(255,196,87,.45)); background: var(--c-rgba-255-200-87-12, rgba(255,200,87,.12)); font-size: .88rem; }
 .ids-file-editor { margin: 6px 0 8px; }
