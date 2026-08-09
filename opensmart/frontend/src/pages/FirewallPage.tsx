@@ -509,7 +509,7 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
     const restrictive = draft.system_rule === 3;
     return (
       <div className="confirm-overlay">
-        <div className="confirm-dialog card" style={{ maxWidth: 640 }}>
+        <div className="confirm-dialog card rule-editor-dialog" style={{ maxWidth: 640 }}>
           <h3>Edit allowlist — {draft.description}</h3>
           <p className="muted">
             This rule is managed by the Firewall's allowlist feature — only the allowed network can be changed here,
@@ -535,7 +535,7 @@ function RuleEditor({ draft, isNew, onChange, onCancel, onSave }: {
 
   return (
     <div className="confirm-overlay">
-      <div className="confirm-dialog card" style={{ maxWidth: 640 }}>
+      <div className="confirm-dialog card rule-editor-dialog" style={{ maxWidth: 640 }}>
         <h3>{isNew ? 'Add rule' : 'Edit rule'} — {draft.chain}</h3>
         <div className="stack-form">
           <label>Service preset (optional shortcut)

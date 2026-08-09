@@ -2056,6 +2056,11 @@ th { color: var(--c-91a2b5); font-size: .78rem; text-transform: uppercase; lette
 .confirm-overlay { position: fixed; inset: 0; background: var(--c-rgba-0-0-0-6); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .confirm-dialog { max-width: 680px; width: 94%; max-height: 80vh; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .confirm-dialog h3 { margin: 0; }
+/* The add/edit-rule card (Firewall Rules tab) sits over the blurred
+   .confirm-overlay backdrop — .card's own near-transparent gradient let
+   that blur show through the form itself, hurting readability. Solid
+   surface here instead; the backdrop blur stays on .confirm-overlay. */
+.rule-editor-dialog { background: var(--c-rgba-8-18-32-92); }
 .confirm-diff { display: flex; flex-direction: column; gap: 6px; font-size: .82rem; }
 .diff-row { display: grid; grid-template-columns: 1fr 1fr auto 1fr; gap: 8px; align-items: start; padding: 6px 8px; border-radius: 6px; background: var(--c-rgba-255-255-255-04); }
 .diff-field { color: var(--c-7dc9ff); font-weight: 600; overflow-wrap: anywhere; }
