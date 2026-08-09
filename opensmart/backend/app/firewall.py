@@ -633,7 +633,16 @@ def analyze(profile_id: int, client_ip: str = "") -> list[str]:
     def _has_established_accept(chain: str) -> bool:
         return any(r["chain"] == chain and r["action"] == "accept" and "established" in (r["ct_state"] or "") for r in rules)
 
-    def _has_port_accept(chain: str, ports: set) -> bool:
+    def _port_accept_state(chain: str, ports: set) -> tuple[bool, list[str]]:
+        """(matches_this_client, configured_networks) for every enabled accept
+        rule on `chain` covering `ports` — regardless of whether client_ip is
+        actually covered. Reporting a plain "no accept rule is in effect" when
+        a rule genuinely exists (just scoped to a network the caller isn't on)
+        is misleading — the rule IS in effect, just not for this caller — so
+        callers use `configured_networks` to say what's actually allowed
+        instead of implying nothing is."""
+        networks: list[str] = []
+        matches = False
         for r in rules:
             if r["chain"] != chain or r["action"] != "accept" or not r["dport"]:
                 continue
@@ -642,10 +651,10 @@ def analyze(profile_id: int, client_ip: str = "") -> list[str]:
             rule_ports = {p.strip() for p in r["dport"].split(",")}
             if not (rule_ports & ports):
                 continue
-            if client_ip and r["src"] and not _ip_in_expr(client_ip, r["src"], bool(r["src_negate"])):
-                continue
-            return True
-        return False
+            networks.append(f"everyone except {r['src']}" if r["src"] and r["src_negate"] else r["src"] or "any network")
+            if not client_ip or not r["src"] or _ip_in_expr(client_ip, r["src"], bool(r["src_negate"])):
+                matches = True
+        return matches, networks
 
     for chain in ("input", "forward"):
         if policies.get(chain) == "drop" and not _has_established_accept(chain):
@@ -657,10 +666,26 @@ def analyze(profile_id: int, client_ip: str = "") -> list[str]:
         # _effective_rules()), so this is the expected, common case for an
         # admin who hasn't set an SSH allowlist yet — not a bug, but a real
         # lockout risk worth a clear, specific warning before applying.
-        if not _has_port_accept("input", _SSH_PORTS):
-            warnings.append("No SSH (tcp/22) accept rule is in effect — SSH connections will be blocked. Add a network to \"Allowlist management SSH\" first if you rely on SSH to manage this host, or acknowledge that SSH access is intentionally closed.")
-        if not _has_port_accept("input", _WEB_PORTS):
-            warnings.append("No web console (tcp/443) accept rule is in effect — this may lock you out of the web UI.")
+        ssh_ok, ssh_networks = _port_accept_state("input", _SSH_PORTS)
+        if not ssh_ok:
+            if ssh_networks:
+                warnings.append(
+                    f"SSH (tcp/22) is only allowed from {', '.join(ssh_networks)}"
+                    + (f" — your current address ({client_ip}) is not in that range" if client_ip else " — this does not cover the address you're connecting from")
+                    + ". Add your network to \"Allowlist management SSH\" first if you rely on SSH from here, or confirm this is intentional."
+                )
+            else:
+                warnings.append("No SSH (tcp/22) accept rule is in effect — SSH connections will be blocked. Add a network to \"Allowlist management SSH\" first if you rely on SSH to manage this host, or acknowledge that SSH access is intentionally closed.")
+        web_ok, web_networks = _port_accept_state("input", _WEB_PORTS)
+        if not web_ok:
+            if web_networks:
+                warnings.append(
+                    f"The web console (tcp/443) is only allowed from {', '.join(web_networks)}"
+                    + (f" — your current address ({client_ip}) is not in that range" if client_ip else " — this does not cover the address you're connecting from")
+                    + ". Add your network to \"Allowlist management Web\" first if you rely on this UI from here, or confirm this is intentional."
+                )
+            else:
+                warnings.append("No web console (tcp/443) accept rule is in effect — this may lock you out of the web UI.")
     if policies.get("forward") == "drop" and not any(r["chain"] == "forward" and r["action"] == "accept" and ("docker0" in r["iif"] or "docker0" in r["oif"] or "br-" in r["iif"] or "br-" in r["oif"]) for r in rules):
         warnings.append("'forward' policy is drop with no Docker bridge accept rule — container-to-network traffic may break.")
     unknown_ifaces = {r["iif"] for r in rules if r["iif"]} | {r["oif"] for r in rules if r["oif"]}
