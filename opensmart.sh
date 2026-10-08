@@ -597,7 +597,7 @@ cmd_recreate() {
   # instance from what's actually in the checkout right now". Without this,
   # `recreate` silently reused whatever image was already tagged
   # "$IMAGE_NAME" on the host, even after `git pull` brought in Dockerfile
-  # changes (confirmed on the reference host: a fix landed in the Dockerfile but
+  # changes (a fix landed in the Dockerfile but
   # a plain `recreate` kept running the pre-fix image until an explicit
   # rebuild). `docker build` still uses normal layer caching, so this is
   # fast when nothing actually changed.
@@ -677,8 +677,7 @@ _uninstall_purge_data() {
       [[ -d "$dir" ]] && rm -rf "$dir"
     done
     # network/firewall have no compose project (rules are enforced by the
-    # host kernel via one-off containers, not a long-running service — see
-    # design notes), so their bind-mounted state/
+    # host kernel via one-off containers, not a long-running service), so their bind-mounted state/
     # (MTU apply markers, nft rulesets) isn't under volumes/data/ above.
     for dir in "$ROOT_DIR"/opensmart/containers/run/*/volumes/state; do
       [[ -d "$dir" ]] && rm -rf "$dir"
@@ -934,8 +933,8 @@ _install_check_host_resources() {
   # fine on modest hardware. This is specifically about the OPTIONAL tool
   # stack: Wazuh (manager+indexer+dashboard) and Arkime's own OpenSearch
   # dependency each run a JVM-based OpenSearch-family indexer, which is
-  # what actually needs real resources — confirmed firsthand on this
-  # project's reference host: both together OOM-loop repeatedly below ~8GB RAM,
+  # what actually needs real resources — observed in practice:
+  # both together OOM-loop repeatedly below ~8GB RAM,
   # and PCAP/index storage fills a tight disk fast.
   #
   # Two recommended tiers (kept in sync by hand with
@@ -1126,8 +1125,8 @@ _install_configure_wazuh_ulimits() {
   # WAZUH_INDEXER_NOFILE_LIMIT in that project's .env). Unprivileged LXC
   # hosts often cap both below what Wazuh asks for; runc then refuses to
   # even start the container ("error setting rlimit type 8/7: operation
-  # not permitted"), leaving it stuck at "Created" forever — confirmed on
-  # the reference host: memlock capped at 8MB, nofile hard limit 524288 (below
+  # not permitted"), leaving it stuck at "Created" forever — observed on a
+  # constrained host: memlock capped at 8MB, nofile hard limit 524288 (below
   # the manager's 655360 default).
   #
   # Unlike vm.max_map_count/tun (namespaced sysctl / device node this

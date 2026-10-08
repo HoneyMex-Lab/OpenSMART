@@ -27,7 +27,7 @@ INGEST_LOCK = threading.Lock()
 # eve_json_path key, so with eve_source=native the UI showed
 # "configured/readable" while every actual ingest run skipped with
 # "path not configured" — the exact default-install pipeline failure
-# found live on the reference host.
+# observed on a default install.
 NATIVE_SURICATA_EVE_PATH = PROJECT_ROOT / "containers" / "run" / "suricata" / "volumes" / "data" / "log" / "eve.json"
 
 

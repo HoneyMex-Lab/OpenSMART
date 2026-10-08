@@ -5,7 +5,7 @@
     "slug": "opensmart-framework",
     "version": "1.0.0",
     "description": "Container-based network security monitoring (NSM) stack for Debian 13 + Docker. Bundles passive sensors (Zeek, Suricata, Arkime), a search/analytics backend (OpenSearch), VPN access (OpenVPN, WireGuard), and a reverse-proxy/landing service (nginx). Delivered as a build tree (Dockerfiles) plus a deployment tree (docker compose stacks).",
-    "purpose": "Initial template for an OpenSMART deployment, validated end-to-end on an LXC reference host.",
+    "purpose": "Initial template for an OpenSMART deployment, validated end-to-end on a Debian 13 LXC host.",
     "generated": "2026-05-31",
     "spec_source": "internal build specification"
   },

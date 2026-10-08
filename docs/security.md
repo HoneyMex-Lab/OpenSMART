@@ -1,6 +1,6 @@
 # Security Notes
 
-This project includes basic local security controls suitable for a prototype. Review and harden before production use.
+This project includes basic local security controls suitable for a v0.3 beta. Review and harden before production use.
 
 ## Passwords
 

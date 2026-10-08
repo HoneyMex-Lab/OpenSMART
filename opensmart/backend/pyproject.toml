@@ -1,7 +1,7 @@
 [project]
 name = "opensmart-backend"
 version = "0.2.0"
-description = "OpenSMART prototype FastAPI backend"
+description = "OpenSMART FastAPI backend"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi==0.115.6",

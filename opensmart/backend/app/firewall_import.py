@@ -3,7 +3,7 @@ subset of each engine's native export format into DRAFT structured rows —
 never saved directly, always reviewed and explicitly confirmed by an admin
 before becoming a real profile (see routes/firewall.py's import endpoints).
 
-Scope, on purpose (see design notes's Decisions):
+Scope, on purpose:
 - iptables: only the canonical `iptables-save` block format (`*filter` /
   `:CHAIN POLICY [pkts:bytes]` / `-A CHAIN <matches> -j <target>` / `COMMIT`).
   Raw `iptables -A ...` shell-command lists are out of scope — reliably
@@ -239,7 +239,7 @@ def parse_iptables_save(text: str) -> dict:
 # ── nftables JSON import (`nft -j list ruleset`) ────────────────────────────
 #
 # Shapes below are taken from REAL `nft -j list ruleset` output (verified
-# live against nft 1.1.3 on the reference host, both the actual seeded profile
+# against nft 1.1.3, both the actual seeded profile
 # and a scratch table covering every field this importer handles), not
 # guessed at — nft's JSON is more particular than it first looks:
 # - A rule's description is a top-level `rule.comment` string, NOT part of

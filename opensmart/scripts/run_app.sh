@@ -340,8 +340,7 @@ run_health_checks() {
     # available. Passing --project here (as before) made uv resolve and sync
     # the whole backend dependency set just to print a version string, so a
     # flaky network on first install could hang or fail this check even
-    # though Python 3.13 was present the whole time (confirmed on the test
-    # server: `uv python list` found it instantly, but this check hung for
+    # though Python 3.13 was present the whole time (observed: `uv python list` found it instantly, but this check hung for
     # minutes). The real dependency sync still happens further down via
     # `uv sync`, where a network failure is the correct thing to fail on.
     _py_ver="$(uv run --no-project --python "$BACKEND_PYTHON" python --version 2>/dev/null || true)"

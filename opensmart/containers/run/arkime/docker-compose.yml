@@ -3,7 +3,7 @@ services:
   # has no trouble writing to a bind-mounted ./volumes/data regardless of its
   # host-side owner — real root bypasses Unix permission checks. That
   # assumption broke on a host where the Docker daemon itself runs inside an
-  # unprivileged container (confirmed on the reference host: capture's "root"
+  # unprivileged container (observed: capture's "root"
   # resolved to a UID that is NOT actually privileged against the host
   # filesystem, so `mkdir /data/raw` failed with Permission denied and the
   # capture container crash-looped — RestartCount in the thousands, exiting

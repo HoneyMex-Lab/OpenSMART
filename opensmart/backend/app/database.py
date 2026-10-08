@@ -841,7 +841,6 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
         # input/forward — safe only because the safety rules below (pinned
         # first, system_rule=1) are evaluated before that terminal drop, so a
         # fresh install is locked-down-by-default without locking itself out.
-        # See design notes "Decisions" for why.
         if db.execute("SELECT 1 FROM firewall_profiles LIMIT 1").fetchone() is None:
             fw_now = datetime.now(timezone.utc).isoformat()
             cur = db.execute(
@@ -862,8 +861,7 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             #
             # Only port 443 gets a seeded rule: it's the one real path to
             # the web console (the app container itself is published
-            # loopback-only, and plain HTTP is redirect-only by default) —
-            # see earlier revision R1.
+            # loopback-only, and plain HTTP is redirect-only by default).
             safety_rules = [
                 # chain, position, system_rule, action, protocol, iif, oif, dport, ct_state, description
                 ("input", 1, 1, "accept", "any", "lo", "", "", "", "Loopback"),
@@ -884,8 +882,8 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (profile_id, chain, position, system_rule, action, protocol, iif, oif, dport, ct_state, description, fw_now, fw_now),
                 )
-        # earlier revision: promote the dedicated SSH/443 safety rules seeded by
-        # earlier revision (system_rule=1, always-open) to the new "allowlist-
+        # Migration: promote the dedicated SSH/443 safety rules seeded earlier
+        # (system_rule=1, always-open) to the new "allowlist-
         # managed" tier and rename them to the exact strings the Wizard
         # allowlist step and rule manager key off of. Repurposing these rules
         # — rather than adding new, separate ones — is what makes "adding a
@@ -906,7 +904,7 @@ def init_db(bootstrap_admin_user: bool = True) -> None:
             "UPDATE firewall_rules SET system_rule = 2, description = 'Allowlist management Web' "
             "WHERE system_rule = 1 AND description = 'HTTPS web console (always allowed — prevents lockout)'"
         )
-        # A later revision (still earlier revision) upgraded the SSH rule again,
+        # A later revision upgraded the SSH rule again,
         # from the permissive tier 2 it was first migrated into, to the
         # restrictive tier 3 above — covers installs that already ran the
         # migration immediately above this one before tier 3 existed.

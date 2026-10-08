@@ -48,20 +48,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Agent sessions
-docs/agent-handoff/
-
-# Local-only coding-agent runtime config
-.opencode/
-.agents/
-opencode.json
-opencode.jsonc
-
-# Local-only coding-agent process files (never tracked)
-/agent guidance file
-/agent guidance file
-/design notes
-
 # OpenSMART-Standalone builder generated runtime artifacts
 containers/OpenSMART-Standalone/**/volumes/data/**
 !containers/OpenSMART-Standalone/**/volumes/data/.gitkeep
@@ -83,8 +69,8 @@ opensmart/containers/run/**/volumes/data/**
 # commit-confirm state — see backend/app/network_config.py and firewall.py).
 # Untracked-but-not-ignored here would get swept into `git stash -u` during
 # a deploy, and files restored by `stash pop` end up owned by whichever user
-# ran git (root, over SSH) instead of the app's own service user — this bit
-# us live on the reference host (PermissionError writing confirm/cancel/pending
+# ran git (root, over SSH) instead of the app's own service user — this can
+# cause (PermissionError writing confirm/cancel/pending
 # markers after a deploy).
 opensmart/containers/run/**/volumes/state/**
 !opensmart/containers/run/**/volumes/state/.gitkeep

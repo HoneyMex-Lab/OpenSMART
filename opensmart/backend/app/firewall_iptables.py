@@ -2,7 +2,7 @@
 (pure render + host-specific validate/live-query/apply-script), dispatched to
 by firewall.py based on a profile's `engine` column.
 
-Integration point, confirmed live on the reference host: this host's `iptables`
+Integration point, confirmed on a real host: the host's `iptables`
 is the iptables-nft compatibility layer (classic syntax, nf_tables kernel
 backend), sharing the nf_tables subsystem with the nftables engine but through
 a completely separate userspace grammar and in-kernel representation — the
@@ -16,7 +16,7 @@ this engine's rules live in three dedicated custom chains —
 exactly one jump rule inserted into the real `INPUT` and `OUTPUT` chains, and
 into Docker's own `DOCKER-USER` chain for `FORWARD` (Docker's documented,
 permanent, safe-for-admins insertion point — confirmed present and empty on
-the reference host; never inserted directly into the real `FORWARD` chain,
+a stock install; never inserted directly into the real `FORWARD` chain,
 which would compete with Docker's own chain ordering there). A profile's
 declared chain "policy" (accept/drop) is realised as an explicit terminal
 rule at the end of our own custom chain, never a change to the real chain's
@@ -26,7 +26,7 @@ declares/populates our three custom chains, so it stays valid and
 self-contained on its own (testable with `iptables-restore --test`) without
 depending on INPUT/OUTPUT/DOCKER-USER's current state.
 
-Deliberate v1 scope limits (see design notes B3):
+Deliberate v1 scope limits:
 IPv4 only (a rule with family='ip6' is rejected at render time — ip6tables is
 a separate binary this engine doesn't drive); protocol='icmpv6' and the two
 icmpv6 reject_with variants are rejected for the same reason. 'tcp+udp'

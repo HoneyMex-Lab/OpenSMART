@@ -12,7 +12,7 @@ _engine_module() below); this module calls into them with already-fetched
 structured data, never the other way around, to avoid a circular import.
 
 A profile's `engine` column fixes it to exactly one engine's ruleset syntax
-for its whole life (see design notes). At most one
+for its whole life. At most one
 engine's artifacts are ever meant to be loaded in the kernel at a time: every
 apply first tears down the *other* engine's artifacts (see
 CHAINS/_ENGINES and each engine module's teardown_fragment()), so switching
@@ -83,8 +83,8 @@ def _engine_module(engine: str):
 
 
 def _engine_capability(module, name: str, engine: str):
-    """Some engine modules don't implement every capability yet (see
-    design notes's phasing) — surface that as a clear
+    """Some engine modules don't implement every capability yet (engines are
+    implemented incrementally) — surface that as a clear
     FirewallError rather than an AttributeError."""
     func = getattr(module, name, None)
     if func is None:

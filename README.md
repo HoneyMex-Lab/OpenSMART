@@ -1,309 +1,171 @@
-# OpenSMART Prototype v0.3
+# OpenSMART v0.3
 
-OpenSMART is a prototype open source security operations framework. It combines a Python/FastAPI backend, SQLite local authentication, Bash operational hooks, and a responsive React/TypeScript frontend.
+OpenSMART is an open-source security operations framework. It unifies network monitoring, intrusion detection, endpoint and vulnerability tooling, VPN access and host firewall management behind a single web console, deploying and orchestrating the underlying tools as containers.
 
-The current implementation is a working v0.3 prototype with local user management, admin configuration, basic security controls, operational status views, Network IDS ingestion, Network Traffic Monitoring, notification settings, and placeholder embedded tool frames for future integrations.
+> **Development approach:** OpenSMART is developed with AI-assisted workflows and techniques. All changes are reviewed by maintainers, and development follows secure, structured practices for agentic coding: scoped changes, security review of sensitive code paths, least-privilege tooling, and no secrets in source.
 
-## Features
+## Highlights
 
-- Responsive React frontend with dark modern layout and collapsible sidebar.
-- English and Spanish UI text selection through runtime platform settings.
-- Local login backed by SQLite users and Argon2 password hashes.
-- Generated first-run `admin` password with a pause so it can be saved before the frontend starts.
-- Admin password reset flow from `opensmart/scripts/run_app.sh reset-admin-password`.
-- HTTP-only session cookie plus CSRF token for mutating API requests.
-- Configurable failed-login lockout by username and client IP.
-- Admin-only Settings pages for Web Interface, OpenSMART Modules, Tools, Notifications, wizard placeholder, and user access.
-- Sidebar links for each OpenSMART module and each internal tool with derived enabled/warning/disabled indicators.
-- Home dashboard with module/tool readiness, host resource panels, configurable demo/feed values, and live Network IDS / Network Traffic panels when configured.
-- Network IDS module with Suricata `eve.json` ingestion, summary tables, alert search/filtering, detail tables, query cancellation, critical alert tracking, acknowledgment actions, and GeoIP-backed attack map support.
-- Network Traffic Monitoring module with shared `eve.json` ingestion, protocol/event summaries, details tables, filtering, query cancellation, and configurable protocol indexing. Zeek JSON configuration is present as a future ingestion option.
-- Separate SQLite runtime databases for application data, Network IDS telemetry, and Network Traffic telemetry.
-- Notifications configuration for outbound webhooks. IDS critical alerts and IDS system events can emit notifications in this release; other notification groups are placeholders.
-- Status pages and API endpoints for host resources, resource history, data retention/info, and schema checks.
-- Audit page showing relevant recent activity, with normal users limited to their own logons.
-- Access page user actions for password changes and enable/disable state with confirmation prompts.
-- Account page action to terminate all other active sessions.
-- Logo uploads for main and footer branding stored in runtime settings.
-- Tools Config page for internal iframe URLs.
-- Bash backend hooks for operational integrations, currently represented by placeholder status scripts.
-- Beta `containers/OpenSMART-Standalone/` bundle for future deployment-builder work.
+- **One console, many tools** — Suricata, Zeek, Arkime, OpenSearch, Wazuh, OpenVPN and WireGuard provisioned and monitored from one UI.
+- **Guided first run** — a setup Wizard configures branding, capture interfaces, modules, tools and management-access allowlists.
+- **Safe host firewall** — nftables and iptables engines with profiles, import/export, lockout analysis and commit-confirm apply (auto-revert unless confirmed).
+- **Hardened by design** — Argon2 passwords, CSRF-protected sessions, login lockout, audit trail, and a restricted Docker socket proxy.
+- **Single front door** — an nginx reverse proxy with HTTPS serves the console and embeds tool UIs from one origin.
 
-## Stack
+## Architecture
 
-- Backend: Python `>=3.11,<3.14` with Python `3.13` recommended, FastAPI, SQLite, Argon2.
-- Backend dependency manager: `uv` by default.
-- Backend scripts: Bash hooks under `opensmart/backend/app/scripts/`.
-- Frontend: React, TypeScript, Vite.
-- Frontend dependency manager: npm.
-
-## Project Structure
-
-```text
-.
-├── opensmart.sh
-├── opensmart/
-│   ├── backend/
-│   │   ├── app/
-│   │   │   ├── routes/
-│   │   │   ├── scripts/
-│   │   │   ├── admin_tools.py
-│   │   │   ├── database.py
-│   │   │   ├── main.py
-│   │   │   ├── security.py
-│   │   │   └── shell.py
-│   │   ├── pyproject.toml
-│   │   ├── requirements.txt
-│   │   └── .env.example
-│   ├── frontend/
-│   │   ├── src/
-│   │   ├── package-lock.json
-│   │   ├── package.json
-│   │   └── vite.config.ts
-│   ├── scripts/
-│   │   ├── run_app.sh
-│   │   ├── dev_backend.sh
-│   │   ├── dev_frontend.sh
-│   │   └── reset_telemetry_db.sh
-│   ├── demo/
-│   └── containers/
-│       └── run/
-│           └── opensmart/
-├── containers/
-│   ├── OpenSMART-Standalone/
-│   └── build/
-│       └── opensmart/
-├── docs/
-├── logs/
-├── scripts/
-└── README.md
+```mermaid
+flowchart LR
+    User([Operator browser]) -->|HTTPS :443| Nginx[nginx front door]
+    Nginx --> App[OpenSMART app<br/>FastAPI + React]
+    Nginx -->|/arkime /wazuh| Tools
+    App --> DB[(SQLite databases)]
+    App -->|docker compose| Proxy[docker-socket-proxy<br/>restricted API allowlist]
+    Proxy --> Docker[(Docker Engine)]
+    Docker --> Tools[Tool containers<br/>Suricata · Zeek · Arkime · OpenSearch<br/>Wazuh · OpenVPN · WireGuard]
+    App -->|one-off host-network containers| Kernel[Host kernel<br/>nftables / iptables]
+    Tools -->|eve.json| App
 ```
 
-- `containers/OpenSMART-Standalone/`: reference Docker Compose bundle for the
-  network-sensor stack, run manually and independently of `opensmart.sh`.
-- `containers/build/`: per-tool Dockerfiles used by `opensmart.sh install`
-  (`base`, `suricata`, `zeek`, `wireguard`, `openvpn`, `opensmart`; official
-  upstream images like OpenSearch/Arkime/nginx have none). Stays at the repo
-  root — these are build-time templates, not a running instance.
-- `opensmart/containers/run/`: one directory per tool with its own
-  `docker-compose.yml` and a bind-mounted `volumes/data/` (`opensearch`,
-  `arkime`, `suricata`, `zeek`, `wireguard`, `openvpn`, `nginx`, `opensmart`).
-  Lives inside `opensmart/` (not the repo root) so the backend's
-  provisioning module (`app/provisioning.py`) can start/stop these sibling
-  containers via `docker compose` with bind-mount paths that resolve
-  correctly against the host — see docs/architecture.md.
+The application container never mounts `docker.sock`; it talks to Docker through a proxy that only allows container, network, image and volume operations. The app itself is published on loopback only — nginx is the sole externally reachable entry point.
 
-## Requirements
+## Modules and Tools
 
-- `uv`
-- Python `>=3.11,<3.14`; Python `3.13` is recommended.
-- Node.js and npm
+| Module | Purpose | Backing components |
+|---|---|---|
+| Network IDS | Alert ingestion, triage, attack map, notifications | Suricata |
+| Network Traffic Monitoring | Protocol and flow visibility | Suricata, Zeek |
+| Access VPN | Create and manage VPN instances and users | OpenVPN, WireGuard |
+| Firewall | Host firewall profiles and rules | nftables, iptables |
+| Threat Detection Alerts, Endpoint, Vulnerability Management | Detection, endpoint and vulnerability views | Wazuh |
+| Honeypot, LXC Manager | Placeholders for future releases | — |
 
-Install `uv` if needed:
+| Tool | Role |
+|---|---|
+| Arkime | Full packet capture and session search |
+| Wazuh | Endpoint security and SIEM |
+| OpenSearch | Search and analytics backend |
+| Proxmox, OPNsense, Graylog, ntop | External tools linked or embedded by URL |
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+## Firewall at a Glance
+
+```mermaid
+flowchart LR
+    Edit[Edit profile rules<br/>saved immediately] --> Validate[Validate syntax<br/>+ lockout analysis]
+    Validate --> Apply[Apply with<br/>confirm window]
+    Apply --> Check{Confirmed<br/>in time?}
+    Check -->|Yes| Keep[Profile becomes active]
+    Check -->|No / revert| Revert[Automatic rollback]
 ```
 
-Install Node.js/npm from your operating system package manager or from `https://nodejs.org/`.
+- Multiple **profiles**, each bound to one engine (nftables or iptables); any profile can be inspected and edited without applying it.
+- **Management rules** for SSH and the web console are highlighted, cannot be disabled, and are edited as allowed networks.
+- Import and export of existing rulesets, reusable aliases, and a firewall log view in the Audit page.
+
+## First-Run Flow
+
+```mermaid
+flowchart LR
+    A[./opensmart.sh install] --> B[Admin password<br/>printed once]
+    B --> C[Login + forced<br/>password change]
+    C --> D[Setup Wizard:<br/>basics · network · modules<br/>· tools · theme · allowlist]
+    D --> E[Containers provisioned,<br/>proxy restarted]
+    E --> F[Console ready]
+```
 
 ## Quick Start
 
-```bash
-./opensmart.sh start --bind 0.0.0.0:8000
-```
-
-`opensmart.sh` is a thin wrapper around `opensmart/scripts/run_app.sh`; you can
-also call that script directly (`./opensmart/scripts/run_app.sh start`). It
-checks for `uv`, `node`, and `npm`, syncs backend dependencies with Python
-`3.13`, installs frontend dependencies when needed, prints a dependency
-summary, and starts both services if no errors occur.
-
-If dependencies are already installed, it reports that they are OK and starts the app.
-
-Open the frontend at:
-
-```text
-http://localhost:5173
-```
-
-The backend listens on:
-
-```text
-http://localhost:8000
-```
-
-## First-Run Admin Account
-
-On first backend startup, the backend creates a local administrator if no admin user exists.
-
-Default username:
-
-```text
-admin
-```
-
-The password is generated randomly and printed once. `run_app.sh` (invoked via `opensmart.sh start`) detects this first-run output and pauses before starting the frontend so you can save the password.
-
-Change the password after first login from `Configuration > Account`.
-
-## Reset Admin Password
-
-To reset the local admin password:
+Requirements: a Debian or Ubuntu Linux host with root access. The installer sets up Docker Engine if missing.
 
 ```bash
-./opensmart.sh reset-admin-password
+./opensmart.sh install                 # build and start OpenSMART in a container
+./opensmart.sh install --bind 0.0.0.0:443   # optionally choose the proxy bind address
 ```
 
-This runs inside the `opensmart` container if one exists (from `./opensmart.sh install`), or directly on the host otherwise — same as `./opensmart/scripts/run_app.sh reset-admin-password`, which you can also call directly. The script asks you to type `RESET`, generates a new password, prints it once, logs action metadata to `logs/opensmart.log`, and exits. Run `./opensmart.sh start` again to start OpenSMART.
+Open `https://<host>/` (self-signed certificate by default) and sign in as `admin` with the generated password printed at the end of installation. You will be asked to change it on first login and then guided through the Wizard.
 
-The generated password is not written to the log.
+### Command reference
 
-Other data-reset and diagnostic commands follow the same pattern —
-`./opensmart.sh reset-data-all`, `reset-data-ids`, `reset-data-network`,
-`reset-all`, and `health` — see `./opensmart.sh --help`.
+| Command | Description |
+|---|---|
+| `install` / `uninstall` | Install or fully remove OpenSMART and its containers |
+| `start` / `stop` / `restart` | Control the OpenSMART container and front-door proxy |
+| `recreate` | Rebuild the image from current source and recreate the container |
+| `status` / `health` | Show container state and run integrity checks |
+| `reset-admin-password` | Generate a new admin password (printed once) |
+| `reset-data-ids` / `reset-data-network` / `reset-data-all` / `reset-all` | Reset telemetry or application data |
 
-## Reset Telemetry Databases
+Run `./opensmart.sh --help` for all options.
 
-To reset Network IDS and Network Traffic telemetry without touching users, settings, audit history, or other application data:
+## Security Model
 
-```bash
-./opensmart/scripts/reset_telemetry_db.sh
+| Area | Practice |
+|---|---|
+| Authentication | Local users, Argon2 hashes, forced first-login password change, configurable password policy |
+| Sessions | HTTP-only cookie plus CSRF token on mutating requests |
+| Abuse protection | Failed-login lockout by username and client IP |
+| Authorization | Server-side role checks (admin / read-only) on every route |
+| Auditing | Security-relevant actions recorded in an audit log |
+| Containers | Docker socket proxy with a narrow allowlist; app published on loopback only |
+| Firewall | Commit-confirm apply, lockout analysis, validated rule fields |
+| Secrets | Generated at install time; none stored in source |
+
+See [docs/security.md](docs/security.md) for details and known limitations.
+
+## Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.13, FastAPI, SQLite, Argon2 (`uv` for dependencies) |
+| Frontend | React, TypeScript, Vite |
+| Operations | Bash installer, Docker Compose, nginx |
+| Sensors | Suricata, Zeek, Arkime, OpenSearch, Wazuh |
+| Access | OpenVPN, WireGuard |
+
+## Repository Layout
+
+```text
+.
+├── opensmart.sh          # installer / lifecycle CLI
+├── opensmart/
+│   ├── backend/          # FastAPI app, routes, shell hooks
+│   ├── frontend/         # React + TypeScript console
+│   ├── scripts/          # run and development helpers
+│   └── containers/run/   # per-tool compose projects (nginx, wazuh, suricata, ...)
+├── containers/
+│   ├── build/            # Dockerfiles used by the installer
+│   └── OpenSMART-Standalone/  # standalone sensor-stack reference bundle
+├── docs/                 # documentation
+└── logs/                 # runtime logs
 ```
 
-This recreates the IDS and Network Traffic SQLite databases used by the ingestion modules.
-
-## Manual Setup
-
-Backend with `uv`:
+## Development
 
 ```bash
 uv sync --project opensmart/backend --python 3.13
-./opensmart/scripts/dev_backend.sh
+./opensmart/scripts/dev_backend.sh        # backend on :8000
+cd opensmart/frontend && npm install && npm run dev   # frontend on :5173
 ```
 
-Frontend in another terminal:
-
-```bash
-cd opensmart/frontend
-npm install
-npm run dev
-```
-
-## Backend Compatibility Setup
-
-`uv` is the recommended backend workflow. `opensmart/backend/requirements.txt` is kept as a compatibility fallback:
-
-```bash
-cd opensmart
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r backend/requirements.txt
-python3 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-## Configuration
-
-Runtime settings are stored in SQLite and editable from `Configuration > WebConsole Config` by admin users.
-
-Current configurable settings include general web console values, language, uploaded logo/favicon data, dashboard demo/feed values, notification webhooks, internal tool URLs, tool enablement/configuration, and OpenSMART module enablement/configuration.
-
-General settings:
-
-- `platform_title`
-- `platform_version`
-- `platform_build`
-- `sensor_name`
-- `platform_language`
-- `developed_by`
-- `failed_login_limit`
-- `lockout_minutes`
-- `tool_base_path`
-- `log_file_path`
-- `worker_threads`
-- dashboard demo/feed settings
-
-Logo settings, managed from `WebConsole Config > Logo Uploads`:
-
-- `logo_url`
-- `favicon_url`
-- `footer_logo_primary`
-- `footer_logo_secondary`
-
-Tool iframe URL settings and tool enablement/config JSON are managed from `Configuration > Tools Config`:
-
-- `tool_url_opnsense`
-- `tool_url_ntop`
-- `tool_url_arkime`
-- `tool_url_proxmox`
-- `tool_url_wazuh`
-- `tool_url_graylog`
-
-OpenSMART module enablement and config JSON are managed from `Settings > OpenSMART Modules`.
-
-Network IDS module configuration includes the local Suricata `eve.json` path, initial ingestion size, analysis page sizes, critical alert tracking, retention options, and optional GeoIP database path for the attack map.
-
-Network Traffic Monitoring configuration includes the source selection, shared `eve.json` or future Zeek path, protocol indexing toggles, excluded event types, and retention options.
-
-Notifications are managed from `Settings > Notifications`:
-
-- IDS webhook URL and validation status.
-- IDS critical alert notification toggle.
-- IDS system event notification toggle.
-- Network and platform notification groups reserved for future event emitters.
-
-Status indicators are derived automatically:
-
-- `disabled`: item is turned off.
-- `warning`: tool is enabled but missing its internal URL.
-- `enabled`: item is enabled and minimally configured.
-
-Environment defaults are documented in `opensmart/backend/.env.example` and `docs/configuration.md`.
-
-Runtime SQLite files are separated by purpose:
-
-- `opensmart/backend/opensmart.db`: users, sessions, settings, audit events, catalog records, and resource snapshots.
-- `opensmart/backend/opensmart_network_ids.db`: Network IDS ingestion state, alerts, artifacts, FTS data, and tracking state.
-- `opensmart/backend/opensmart_network_traffic.db`: Network Traffic ingestion state and network events.
-- `opensmart/backend/opensmart_telemetry.db`: legacy compatibility telemetry database.
-
-## Verification
-
-Backend checks:
-
-```bash
-cd opensmart
-uv run --project backend python -m compileall backend/app
-uv run --project backend python -c "import backend.app.admin_tools; import backend.app.main; print('backend imports ok')"
-```
-
-Shell checks:
-
-```bash
-bash -n opensmart.sh opensmart/scripts/run_app.sh opensmart/scripts/dev_backend.sh opensmart/scripts/dev_frontend.sh
-```
-
-Frontend checks, when Node.js/npm are installed:
-
-```bash
-cd opensmart/frontend
-npm install
-npm run build
-```
+Basic checks: `bash -n opensmart.sh opensmart/scripts/*.sh`, `npm run build` in `opensmart/frontend`, and a backend import/compile check. See [docs/development.md](docs/development.md).
 
 ## Documentation
 
-- `docs/architecture.md`: system structure and runtime flow.
-- `docs/api.md`: backend API reference.
-- `docs/configuration.md`: environment and runtime configuration.
-- `docs/security.md`: security behavior and limitations.
-- `docs/development.md`: local development workflow.
-- `docs/MANIFEST.json`: machine-readable project manifest (stack, layout, entrypoints, API surface, configuration, security posture, deployment status) for tooling and coding agents.
+| Document | Content |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | System structure and runtime flow |
+| [docs/technical-overview.md](docs/technical-overview.md) | Concise technical overview |
+| [docs/user-guide.md](docs/user-guide.md) | Using the console |
+| [docs/modules-reference.md](docs/modules-reference.md) | Module and tool reference |
+| [docs/configuration.md](docs/configuration.md) | Environment and runtime settings |
+| [docs/api.md](docs/api.md) | Backend API reference |
+| [docs/security.md](docs/security.md) | Security behavior and limitations |
+| [docs/development.md](docs/development.md) | Local development workflow |
 
-## Known Prototype Limitations
+## Status
 
-- Several OpenSMART module pages remain placeholder content outside Network IDS and Network Traffic Monitoring.
-- Tool and summary icons are local generated SVG assets under `opensmart/frontend/public/assets/`.
-- Status data is placeholder JSON from `opensmart/backend/app/scripts/module_status.sh`.
-- There are no automated tests yet beyond syntax/import/build checks.
-- Frontend dependency versions currently use broad ranges; keep `opensmart/frontend/package-lock.json` tracked for reproducible frontend installs.
+OpenSMART v0.3 (beta). Honeypot and LXC Manager are placeholders, and automated test coverage is limited to syntax, import and build checks.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).

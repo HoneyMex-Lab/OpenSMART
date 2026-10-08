@@ -7,7 +7,7 @@ export default function AboutPage({ settings }: { settings: Settings }) {
         <p className="eyebrow">About the platform</p>
         <h2>{settings.platform_title}</h2>
         <p className="version-line"><span>Version {settings.platform_version}</span><span>Build {settings.platform_build || 'unknown'}</span></p>
-        <p>OpenSMART is an open source framework prototype for integrating security monitoring, network tooling, assets, and administration in one responsive console.</p>
+        <p>OpenSMART is an open source framework for integrating security monitoring, network tooling, assets, and administration in one responsive console.</p>
       </article>
 
       <article className="card">
