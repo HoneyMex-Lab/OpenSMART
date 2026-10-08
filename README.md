@@ -172,7 +172,7 @@ OpenSMART v0.3 (beta). Honeypot and LXC Manager are placeholders, and automated 
 
 ## Development Approach
 
-OpenSMART is developed with AI-assisted workflows and techniques. All changes are reviewed by maintainers, and development follows secure, structured practices for agentic coding: scoped changes, security review of sensitive code paths, least-privilege tooling, and no secrets in source.
+OpenSMART follows a hybrid development approach that combines traditional software engineering with AI-assisted techniques. Maintainers review every change, and development applies secure, structured practices for agentic coding: scoped changes, security review of sensitive code paths, least-privilege tooling, and no secrets in source.
 
 ## License
 
