@@ -2,8 +2,6 @@
 
 OpenSMART is an open-source security operations framework. It unifies network monitoring, intrusion detection, endpoint and vulnerability tooling, VPN access and host firewall management behind a single web console, deploying and orchestrating the underlying tools as containers.
 
-> **Development approach:** OpenSMART is developed with AI-assisted workflows and techniques. All changes are reviewed by maintainers, and development follows secure, structured practices for agentic coding: scoped changes, security review of sensitive code paths, least-privilege tooling, and no secrets in source.
-
 ## Origin of the Name
 
 **SMART** comes from *Sensor de Monitoreo, Análisis y Recolección de Tráfico* (Traffic Monitoring, Analysis and Collection Sensor), a closed-source project developed at UNAM-CERT between 2008 and 2015. OpenSMART is its spiritual successor and natural evolution: an open-source, centralized framework that makes it easy to install and use multiple network security monitoring tools together. It shares ideas with other security monitoring frameworks, but focuses on simple deployment and a single, unified console.
@@ -171,6 +169,10 @@ Basic checks: `bash -n opensmart.sh opensmart/scripts/*.sh`, `npm run build` in 
 ## Status
 
 OpenSMART v0.3 (beta). Honeypot and LXC Manager are placeholders, and automated test coverage is limited to syntax, import and build checks.
+
+## Development Approach
+
+OpenSMART is developed with AI-assisted workflows and techniques. All changes are reviewed by maintainers, and development follows secure, structured practices for agentic coding: scoped changes, security review of sensitive code paths, least-privilege tooling, and no secrets in source.
 
 ## License
 
